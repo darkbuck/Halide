@@ -21,6 +21,14 @@ using std::string;
 
 using namespace llvm;
 
+enum AddressSpace {
+    Generic = 0,
+    Global = 1,
+    Shared = 3,
+    Constant = 4,
+    Local = 5,
+};
+
 CodeGen_PTX_Dev::CodeGen_PTX_Dev(Target host) : CodeGen_LLVM(host) {
     #if !(WITH_PTX)
     user_error << "ptx not enabled for this build of Halide.\n";
@@ -34,6 +42,20 @@ CodeGen_PTX_Dev::~CodeGen_PTX_Dev() {
     delete context;
 }
 
+namespace {
+struct BufferSize {
+    int arg_idx;
+    size_t size;
+
+    BufferSize() : size(0) {}
+    BufferSize(int arg_idx, size_t size) : arg_idx(arg_idx), size(size) {}
+
+    bool operator < (const BufferSize &r) const {
+        return size < r.size;
+    }
+};
+}
+
 void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
                                  const std::string &name,
                                  const std::vector<GPU_Argument> &args) {
@@ -41,11 +63,48 @@ void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
 
     debug(2) << "In CodeGen_PTX_Dev::add_kernel\n";
 
+    // Figure out which arguments should be passed in as .const.
+    // Such arguments should be:
+    // - not written to,
+    // - loads are block-uniform,
+    // - constant size
+    vector<BufferSize> constants;
+    for (size_t i = 0; i < args.size(); i++) {
+        if (args[i].is_buffer &&
+            CodeGen_GPU_Dev::is_buffer_constant(stmt, args[i].name) &&
+            args[i].size > 0) {
+            constants.push_back(BufferSize(i, args[i].size));
+        }
+    }
+
+    // Sort the constant candidates from smallest to largest. This will put
+    // as many of the constant allocations in .const as possible.
+    // Ideally, we would prioritize constant buffers by how frequently they
+    // are accessed.
+    sort(constants.begin(), constants.end());
+
+    // Stop using constant memory when we exceed 64 KB. This is the maximum size
+    // of constant memory for every currently shipping compute capability (up to 5.2).
+    std::vector<bool> is_constant(args.size(), false);
+    size_t total_constant_size = 0;
+    for (const BufferSize& i : constants) {
+        total_constant_size += i.size;
+        if (total_constant_size <= 65536) {
+            is_constant[i.arg_idx] = true;
+        } else {
+            break;
+        }
+    }
+
     // Now deduce the types of the arguments to our function
     vector<llvm::Type *> arg_types(args.size());
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i].is_buffer) {
-            arg_types[i] = llvm_type_of(UInt(8))->getPointerTo();
+            int addr_space = Global;
+            if (is_constant[i]) {
+                addr_space = Constant;
+            }
+            arg_types[i] = llvm_type_of(UInt(8))->getPointerTo(addr_space);
         } else {
             arg_types[i] = llvm_type_of(args[i].type);
         }
@@ -183,7 +242,7 @@ void CodeGen_PTX_Dev::visit(const Allocate *alloc) {
 
     if (alloc->name == "__shared") {
         // PTX uses zero in address space 3 as the base address for shared memory
-        Value *shared_base = Constant::getNullValue(PointerType::get(i8, 3));
+        Value *shared_base = Constant::getNullValue(PointerType::get(i8, AddressSpace::Shared));
         sym_push(alloc->name + ".host", shared_base);
     } else {
 
