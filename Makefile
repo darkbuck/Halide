@@ -251,6 +251,7 @@ TMP_DIR     = $(BUILD_DIR)/tmp
 SOURCE_FILES = \
   AddImageChecks.cpp \
   AddParameterChecks.cpp \
+  AlignLoads.cpp \
   AllocationBoundsInference.cpp \
   BlockFlattening.cpp \
   BoundaryConditions.cpp \
@@ -371,6 +372,7 @@ BITWRITER_SOURCE_FILES = \
 HEADER_FILES = \
   AddImageChecks.h \
   AddParameterChecks.h \
+  AlignLoads.h \
   AllocationBoundsInference.h \
   Argument.h \
   BlockFlattening.h \

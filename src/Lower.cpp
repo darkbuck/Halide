@@ -7,6 +7,7 @@
 
 #include "AddImageChecks.h"
 #include "AddParameterChecks.h"
+#include "AlignLoads.h"
 #include "AllocationBoundsInference.h"
 #include "Bounds.h"
 #include "BoundsInference.h"
@@ -222,6 +223,11 @@ Stmt lower(const vector<Function> &outputs, const string &pipeline_name, const T
     s = partition_loops(s);
     s = simplify(s);
     debug(2) << "Lowering after partitioning loops:\n" << s << "\n\n";
+
+    debug(1) << "Aligning loads....\n";
+    s = align_loads(s, t);
+    s = simplify(s);
+    debug(2) << "Lowering after aligning loads:\n" << s << "\n\n";
 
     debug(1) << "Injecting early frees...\n";
     s = inject_early_frees(s);
