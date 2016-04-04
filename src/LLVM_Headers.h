@@ -5,8 +5,14 @@
 #include <stddef.h>
 
 // No msvc warnings from llvm headers please
-#ifdef _WIN32
+#ifdef _MSC_VER
 #pragma warning(push, 0)
+#endif
+#ifdef __GNUC__
+#pragma GCC system_header
+#endif
+#ifdef __clang__
+#pragma clang system_header
 #endif
 
 #include <llvm/ExecutionEngine/MCJIT.h>
@@ -81,7 +87,7 @@
 #endif
 
 // No msvc warnings from llvm headers please
-#ifdef _WIN32
+#ifdef _MSC_VER
 #pragma warning(pop)
 #endif
 
@@ -100,6 +106,13 @@ inline llvm::Metadata *value_as_metadata_type(llvm::Value *val) { return llvm::V
 typedef llvm::Value *LLVMMDNodeArgumentType;
 inline llvm::Value *value_as_metadata_type(llvm::Value *val) { return val; }
 #endif
+
+template <typename T>
+typename T::value_type *iterator_to_pointer(T iter) {
+    return &*iter;
+}
+
 }}
+
 
 #endif

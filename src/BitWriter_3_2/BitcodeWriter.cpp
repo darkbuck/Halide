@@ -632,6 +632,12 @@ static void WriteGenericDebugNode(const GenericDebugNode *,
   llvm_unreachable("unimplemented");
 }*/
 
+#if LLVM_VERSION >= 39
+#define BITC_METADATA_STRING bitc::METADATA_STRING_OLD
+#else
+#define BITC_METADATA_STRING bitc::METADATA_STRING
+#endif
+
 static void WriteModuleMetadata(const Module *M,
                                 const llvm_3_2::ValueEnumerator &VE,
                                 BitstreamWriter &Stream) {
@@ -646,7 +652,7 @@ static void WriteModuleMetadata(const Module *M,
   if (VE.hasMDString()) {
     // Abbrev for METADATA_STRING.
     BitCodeAbbrev *Abbv = new BitCodeAbbrev();
-    Abbv->Add(BitCodeAbbrevOp(bitc::METADATA_STRING));
+    Abbv->Add(BitCodeAbbrevOp(BITC_METADATA_STRING));
     Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
     Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 8));
     MDSAbbrev = Stream.EmitAbbrev(Abbv);
@@ -713,7 +719,7 @@ static void WriteModuleMetadata(const Module *M,
     Record.append(MDS->bytes_begin(), MDS->bytes_end());
 
     // Emit the finished record.
-    Stream.EmitRecord(bitc::METADATA_STRING, Record, MDSAbbrev);
+    Stream.EmitRecord(BITC_METADATA_STRING, Record, MDSAbbrev);
     Record.clear();
   }
 
@@ -766,16 +772,15 @@ static void WriteMetadataAttachment(const Function &F,
   // METADATA_ATTACHMENT - [m x [value, [n x [id, mdnode]]]
   SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
 
-  for (Function::const_iterator BB = F.begin(), E = F.end(); BB != E; ++BB)
-    for (BasicBlock::const_iterator I = BB->begin(), E = BB->end();
-         I != E; ++I) {
+  for (auto &BB : F)
+    for (auto &I : BB) {
       MDs.clear();
-      I->getAllMetadataOtherThanDebugLoc(MDs);
+      I.getAllMetadataOtherThanDebugLoc(MDs);
 
       // If no metadata, ignore instruction.
       if (MDs.empty()) continue;
 
-      Record.push_back(VE.getInstructionID(I));
+      Record.push_back(VE.getInstructionID(&I));
 
       for (unsigned i = 0, e = MDs.size(); i != e; ++i) {
         Record.push_back(MDs[i].first);

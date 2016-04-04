@@ -33,6 +33,7 @@ namespace Internal {
 
 const std::map<std::string, Halide::Type> &get_halide_type_enum_map() {
     static const std::map<std::string, Halide::Type> halide_type_enum_map{
+        {"bool", Halide::Bool()},
         {"int8", Halide::Int(8)},
         {"int16", Halide::Int(16)},
         {"int32", Halide::Int(32)},
@@ -153,7 +154,7 @@ int generate_filter_main(int argc, char **argv, std::ostream &cerr) {
         cerr << kUsage;
         return 1;
     }
-    gen->emit_filter(output_dir, function_name, function_name, emit_options);
+    gen->emit_filter(output_dir, function_name, "", emit_options);
     return 0;
 }
 
@@ -303,7 +304,11 @@ void GeneratorBase::emit_filter(const std::string &output_dir,
     Pipeline pipeline = build_pipeline();
 
     std::vector<Halide::Argument> inputs = get_filter_arguments();
-    std::string base_path = output_dir + "/" + (file_base_name.empty() ? function_name : file_base_name);
+    
+    std::vector<std::string> namespaces;
+    std::string simple_name = extract_namespaces(function_name, namespaces);
+
+    std::string base_path = output_dir + "/" + (file_base_name.empty() ? simple_name : file_base_name);
     if (options.emit_o || options.emit_assembly || options.emit_bitcode) {
         Outputs output_files;
         if (options.emit_o) {
@@ -311,7 +316,8 @@ void GeneratorBase::emit_filter(const std::string &output_dir,
             // actually a pnacl bitcode file.
             if (Target(target).arch == Target::PNaCl) {
                 output_files.object_name = base_path + ".bc";
-            } else if (Target(target).os == Target::Windows) {
+            } else if (Target(target).os == Target::Windows &&
+                       !Target(target).has_feature(Target::MinGW)) {
                 // If it's windows, then we're emitting a COFF file
                 output_files.object_name = base_path + ".obj";
             } else {
