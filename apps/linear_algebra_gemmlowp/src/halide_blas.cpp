@@ -29,44 +29,34 @@ extern "C" {
 // gemm //
 //////////
 
-void hblas_igemm(const enum HBLAS_ORDER Order, const enum HBLAS_TRANSPOSE TransA,
-                 const enum HBLAS_TRANSPOSE TransB, const int M, const int N,
-                 const int K, const int alpha, const int *A,
-                 const int lda, const int *B, const int ldb,
-                 const int beta, int *C, const int ldc) {
-    bool tA = false, tB = false;
-    switch (TransA) {
-    case HblasNoTrans:
-        tA = false; break;
-    case HblasConjTrans:
-    case HblasTrans:
-        tA = true; break;
-    };
-
-    switch (TransB) {
-    case HblasNoTrans:
-        tB = false; break;
-    case HblasConjTrans:
-    case HblasTrans:
-        tB = true; break;
-    };
-
+void hblas_igemm(bool transpose_a, bool transpose_b, bool transpose_c,
+                 int M, int N, int K, const uint8_t *A,
+                 int32_t a_offset, int lda, const uint8_t *B,
+                 int32_t b_offset, int ldb, uint8_t *C,
+                 int32_t c_offset, int32_t c_mult_int,
+                 int32_t c_shift, int ldc) {
     buffer_t buff_A, buff_B, buff_C;
-    if (!tA) {
+    if (!transpose_A) {
         init_matrix_buffer(M, K, A, lda, &buff_A);
     } else {
         init_matrix_buffer(K, M, A, lda, &buff_A);
     }
 
-    if (!tB) {
+    if (!transpose_B) {
         init_matrix_buffer(K, N, B, ldb, &buff_B);
     } else {
         init_matrix_buffer(N, K, B, ldb, &buff_B);
     }
 
-    init_matrix_buffer(M, N, C, ldc, &buff_C);
+    if (!transpose_C) {
+        init_matrix_buffer(M, N, C, ldc, &buff_C);
+    } else {
+        init_matrix_buffer(N, M, C, ldc, &buff_C);
+    }
 
-    assert_no_error(halide_igemm(tA, tB, alpha, &buff_A, &buff_B, beta, &buff_C));
+    assert_no_error(halide_igemm(transpose_A, transpose_B, transpose_c, &buff_A,
+                                 a_offset, &buff_B, b_offset, &buff_C, c_offset,
+                                 c_mult_int, c_shift));
 }
 
 

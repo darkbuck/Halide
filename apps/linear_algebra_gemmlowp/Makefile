@@ -39,11 +39,12 @@ KERNELS = \
 	igemm_transA \
 	igemm_transB \
 	igemm_transAB \
+	igemm_transC \
+	igemm_transAC \
+	igemm_transBC \
+	igemm_transABC
 
 BENCHMARKS = \
-	benchmarks/cblas_benchmarks \
-	benchmarks/atlas_benchmarks \
-	benchmarks/openblas_benchmarks \
 	benchmarks/eigen_benchmarks \
 	benchmarks/gemmlowp_benchmarks \
 	benchmarks/halide_benchmarks
@@ -83,16 +84,7 @@ tests/test_halide_blas: tests/test_halide_blas.cpp $(LIBHALIDE_BLAS)
 # Large powers of two are a pathological case for the cache, so avoid
 # them for the benchmarks.
 L3_BENCHMARK_SIZES = 32 64 128 288 544 1056 2080
-L3_BENCHMARKS = igemm_notrans igemm_transA igemm_transB igemm_transAB
-
-cblas_l3_benchmark_%: benchmarks/cblas_benchmarks
-	@$(foreach size,$(L3_BENCHMARK_SIZES),benchmarks/cblas_benchmarks $(@:cblas_l3_benchmark_%=%) $(size);)
-
-atlas_l3_benchmark_%: benchmarks/atlas_benchmarks
-	@$(foreach size,$(L3_BENCHMARK_SIZES),benchmarks/atlas_benchmarks $(@:atlas_l3_benchmark_%=%) $(size);)
-
-openblas_l3_benchmark_%: benchmarks/openblas_benchmarks
-	@$(foreach size,$(L3_BENCHMARK_SIZES),benchmarks/openblas_benchmarks $(@:openblas_l3_benchmark_%=%) $(size);)
+L3_BENCHMARKS = igemm_notrans igemm_transA igemm_transB igemm_transAB igemm_transC igemm_transAC igemm_transBC igemm_transABC
 
 eigen_l3_benchmark_%: benchmarks/eigen_benchmarks
 	@$(foreach size,$(L3_BENCHMARK_SIZES),benchmarks/eigen_benchmarks $(@:eigen_l3_benchmark_%=%) $(size);)
@@ -105,11 +97,8 @@ halide_l3_benchmark_%: benchmarks/halide_benchmarks
 
 l3_benchmarks: \
 	$(L3_BENCHMARKS:%=halide_l3_benchmark_%)
-	#$(L3_BENCHMARKS:%=cblas_l3_benchmark_%) \
+	#$(L3_BENCHMARKS:%=eigen_l3_benchmark_%) \
 	$(L3_BENCHMARKS:%=gemmlowp_l3_benchmark_%) \
-	$(L3_BENCHMARKS:%=atlas_l3_benchmark_%) \
-	$(L3_BENCHMARKS:%=openblas_l3_benchmark_%) \
-	$(L3_BENCHMARKS:%=eigen_l3_benchmark_%) \
 
 run_benchmarks: $(BENCHMARKS)
 	@echo " Package     Subroutine    Size             Runtime     GFLOPS"
@@ -119,18 +108,6 @@ run_benchmarks: $(BENCHMARKS)
 benchmarks.csv: $(BENCHMARKS)
 	make --no-print-directory run_benchmarks > benchmarks.dat
 	awk '{printf("%s,%s,%s,%s,%s\n",$$1,$$2,$$3,$$4,$$5)}' benchmarks.dat > benchmarks.csv
-
-benchmarks/cblas_benchmarks: benchmarks/cblas_benchmarks.cpp benchmarks/clock.h benchmarks/macros.h $(LIBHALIDE_BLAS)
-	$(CXX) $(CXXFLAGS) -o $(@) -I../../include/ -I../support -I$(KERNEL_DIR) $(CBLAS_FLAGS) \
-	$(<) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(CBLAS_LIBS) $(LLVM_LDFLAGS)
-
-benchmarks/atlas_benchmarks: benchmarks/cblas_benchmarks.cpp benchmarks/clock.h benchmarks/macros.h $(LIBHALIDE_BLAS)
-	$(CXX) $(CXXFLAGS) -o $(@) -I../../include/ -I../support -I$(KERNEL_DIR) $(ATLAS_FLAGS) \
-	$(<) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(ATLAS_LIBS) $(LLVM_LDFLAGS)
-
-benchmarks/openblas_benchmarks: benchmarks/cblas_benchmarks.cpp benchmarks/clock.h benchmarks/macros.h $(LIBHALIDE_BLAS)
-	$(CXX) $(CXXFLAGS) -o $(@) -I../../include/ -I../support -I$(KERNEL_DIR) $(OPENBLAS_FLAGS) \
-	$(<) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(OPENBLAS_LIBS) $(LLVM_LDFLAGS)
 
 benchmarks/eigen_benchmarks: benchmarks/eigen_benchmarks.cpp benchmarks/clock.h benchmarks/macros.h $(LIBHALIDE_BLAS)
 	$(CXX) $(CXXFLAGS) -o $(@) -I../../include/ -I../support -I$(KERNEL_DIR) $(EIGEN_INCLUDES) \
@@ -154,16 +131,32 @@ $(KERNEL_DIR)/halide_runtime.o: $(KERNEL_DIR)/blas_l3.generator
 
 $(KERNEL_DIR)/halide_igemm_notrans.o $(KERNEL_DIR)/halide_igemm_notrans.h: $(KERNEL_DIR)/blas_l3.generator
 	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_notrans -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
-	target=$(HL_TARGET_NR) transpose_A=false transpose_B=false
+	target=$(HL_TARGET_NR) transpose_A=false transpose_B=false transpose_C=false
 
 $(KERNEL_DIR)/halide_igemm_transA.o $(KERNEL_DIR)/halide_igemm_transA.h: $(KERNEL_DIR)/blas_l3.generator
 	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transA -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
-	target=$(HL_TARGET_NR) transpose_A=true transpose_B=false
+	target=$(HL_TARGET_NR) transpose_A=true transpose_B=false transpose_C=false
 
 $(KERNEL_DIR)/halide_igemm_transB.o $(KERNEL_DIR)/halide_igemm_transB.h: $(KERNEL_DIR)/blas_l3.generator
 	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transB -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
-	target=$(HL_TARGET_NR) transpose_A=false transpose_B=true
+	target=$(HL_TARGET_NR) transpose_A=false transpose_B=true transpose_C=false
 
 $(KERNEL_DIR)/halide_igemm_transAB.o $(KERNEL_DIR)/halide_igemm_transAB.h: $(KERNEL_DIR)/blas_l3.generator
 	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transAB -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
-	target=$(HL_TARGET_NR) transpose_A=true transpose_B=true
+	target=$(HL_TARGET_NR) transpose_A=true transpose_B=true transpose_C=false
+
+$(KERNEL_DIR)/halide_igemm_transC.o $(KERNEL_DIR)/halide_igemm_notrans.h: $(KERNEL_DIR)/blas_l3.generator
+	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_notrans -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
+	target=$(HL_TARGET_NR) transpose_A=false transpose_B=false transpose_C=true
+
+$(KERNEL_DIR)/halide_igemm_transAC.o $(KERNEL_DIR)/halide_igemm_transA.h: $(KERNEL_DIR)/blas_l3.generator
+	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transA -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
+	target=$(HL_TARGET_NR) transpose_A=true transpose_B=false transpose_C=true
+
+$(KERNEL_DIR)/halide_igemm_transBC.o $(KERNEL_DIR)/halide_igemm_transB.h: $(KERNEL_DIR)/blas_l3.generator
+	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transB -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
+	target=$(HL_TARGET_NR) transpose_A=false transpose_B=true transpose_C=true
+
+$(KERNEL_DIR)/halide_igemm_transABC.o $(KERNEL_DIR)/halide_igemm_transAB.h: $(KERNEL_DIR)/blas_l3.generator
+	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transAB -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
+	target=$(HL_TARGET_NR) transpose_A=true transpose_B=true transpose_C=true

@@ -16,13 +16,17 @@ class GEMMGenerator :
 
     GeneratorParam<bool> transpose_A_ = {"transpose_A", false};
     GeneratorParam<bool> transpose_B_ = {"transpose_B", false};
+    GeneratorParam<bool> transpose_C_ = {"transpose_C", false};
 
     // Standard ordering of parameters in GEMM functions.
-    Param<uint8_t>   a_ = {"a", 1};
-    ImageParam A_in = {type_of<uint8_t>(), 2, "A_in"};
-    ImageParam B_in = {type_of<uint8_t>(), 2, "B_in"};
-    Param<uint8_t>   b_ = {"b", 1};
-    ImageParam C_in = {type_of<uint8_t>(), 2, "C_in"};
+    ImageParam A_ = {type_of<uint8_t>(), 2, "A"};
+    Param<int32_t> a_offset = {"a_offset", 0};
+    ImageParam B_ = {type_of<uint8_t>(), 2, "B"};
+    Param<int32_t> b_offset = {"b_offset", 0};
+    ImageParam C_ = {type_of<uint8_t>(), 2, "C"};
+    Param<int32_t> c_offset = {"c_offset", 0};
+    Param<int32_t> c_mult_int = {"c_mult_int", 0};
+    Param<int32_t> c_shift = {"c_shift", 0};
 
     Var i, j, ii, ji, jii, iii, io, jo, ti, tj, t;
 
@@ -30,9 +34,9 @@ class GEMMGenerator :
         // Matrices are interpreted as column-major by default. The
         // transpose GeneratorParams are used to handle cases where
         // one or both is actually row major.
-        const Expr num_rows = (A_in.width()/32)*32;
-        const Expr num_cols = (B_in.height()/32)*32;
-        const Expr sum_size = (A_in.height()/32)*32;
+        const Expr num_rows = (A_.width()/32)*32;
+        const Expr num_cols = (B_.height()/32)*32;
+        const Expr sum_size = (A_.height()/32)*32;
 
         const int vec = natural_vector_size(Int(32));
         const int s = vec * 2;
@@ -117,7 +121,7 @@ class GEMMGenerator :
         As.compute_root()
             .split(j, jo, ji, s).reorder(i, ji, io, jo)
             .unroll(i).vectorize(ji)
-            .specialize(A_in.width() >= 256 && A_in.height() >= 256).parallel(jo, 4);
+            .specialize(A_.width() >= 256 && A_.height() >= 256).parallel(jo, 4);
 
         Atmp.compute_at(As, io)
             .vectorize(i).unroll(j);
@@ -142,9 +146,9 @@ class GEMMGenerator :
             ABt.compute_at(result, i).unroll(i).vectorize(j);
         }
 
-        A_in.set_min(0, 0).set_min(1, 0);
-        B_in.set_bounds(0, 0, sum_size).set_min(1, 0);
-        C_in.set_bounds(0, 0, num_rows).set_bounds(1, 0, num_cols);
+        A_.set_min(0, 0).set_min(1, 0);
+        B_.set_bounds(0, 0, sum_size).set_min(1, 0);
+        C_.set_bounds(0, 0, num_rows).set_bounds(1, 0, num_cols);
         result.output_buffer().set_bounds(0, 0, num_rows).set_bounds(1, 0, num_cols);
 
         return result;

@@ -9,24 +9,28 @@
 #include "halide_igemm_transB.h"
 #include "halide_igemm_transAB.h"
 
-inline int halide_igemm(bool transA, bool transB, int a, buffer_t *A, buffer_t *B, int b, buffer_t *C) {
-    if (transA && transB) {
-        return halide_igemm_transAB(a, A, B, b, C, C);
+inline int halide_igemm(bool transA, bool transB, bool transC, buffer_t *A,
+                        int32_t a_offset, buffer_t *B, int32_t b_offset, buffer_t *C,
+                        int32_t c_offset, int32_t c_mult_int, int32_t c_shift) {
+    if (transA && transB && transC) {
+        return halide_igemm_transABC(A, a_offset, B, b_offset, C, c_offset, c_mult_int, c_shift);
+    } else if (transA && transB) {
+        return halide_igemm_transAB(A, a_offset, B, b_offset, C, c_offset, c_mult_int, c_shift);
+    } else if (transA && transC) {
+        return halide_igemm_transAC(A, a_offset, B, b_offset, C, c_offset, c_mult_int, c_shift);
+    } else if (transB && transC) {
+        return halide_igemm_transBC(A, a_offset, B, b_offset, C, c_offset, c_mult_int, c_shift);
     } else if (transA) {
-        return halide_igemm_transA(a, A, B, b, C, C);
+        return halide_igemm_transA(A, a_offset, B, b_offset, C, c_offset, c_mult_int, c_shift);
     } else if (transB) {
-        return halide_igemm_transB(a, A, B, b, C, C);
+        return halide_igemm_transB(A, a_offset, B, b_offset, C, c_offset, c_mult_int, c_shift);
+    } else if (transC) {
+        return halide_igemm_transC(A, a_offset, B, b_offset, C, c_offset, c_mult_int, c_shift);
     } else {
-        return halide_igemm_notrans(a, A, B, b, C, C);
+        return halide_igemm_notrans(A, a_offset, B, b_offset, C, c_offset, c_mult_int, c_shift);
     }
     return -1;
 }
-
-enum HBLAS_ORDER {HblasRowMajor=101, HblasColMajor=102};
-enum HBLAS_TRANSPOSE {HblasNoTrans=111, HblasTrans=112, HblasConjTrans=113};
-enum HBLAS_UPLO {HblasUpper=121, HblasLower=122};
-enum HBLAS_DIAG {HblasNonUnit=131, HblasUnit=132};
-enum HBLAS_SIDE {HblasLeft=141, HblasRight=142};
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,14 +42,13 @@ extern "C" {
  * ===========================================================================
  */
 
-/*
- * Routines with standard 4 prefixes (S, D, C, Z)
- */
-void hblas_igemm(const enum HBLAS_ORDER Order, const enum HBLAS_TRANSPOSE TransA,
-                 const enum HBLAS_TRANSPOSE TransB, const int M, const int N,
-                 const int K, const int alpha, const int *A,
-                 const int lda, const int *B, const int ldb,
-                 const int beta, int *C, const int ldc);
+void hblas_igemm(bool transpose_a, bool transpose_b, bool transpose_c,
+                 int M, int N, int K, const uint8_t *A,
+                 int32_t a_offset, int lda, const uint8_t *B,
+                 int32_t b_offset, int ldb, uint8_t *C,
+                 int32_t c_offset, int32_t c_mult_int,
+                 int32_t c_shift, int ldc);
+
 
 #ifdef __cplusplus
 }
