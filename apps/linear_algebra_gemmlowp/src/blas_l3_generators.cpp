@@ -34,13 +34,8 @@ class GEMMGenerator :
         const Expr num_cols = (B_in.height()/32)*32;
         const Expr sum_size = (A_in.height()/32)*32;
 
-        const int vec = natural_vector_size(a_.type());
+        const int vec = natural_vector_size(Int(32));
         const int s = vec * 2;
-
-        Func A_("A"), B_("B"), C_("C");
-        A_(i, j) = cast<int32_t>(A_in(i, j));
-        B_(i, j) = cast<int32_t>(B_in(i, j));
-        C_(i, j) = cast<int32_t>(C_in(i, j));
 
         // If they're both transposed, then reverse the order and transpose the result instead.
         bool transpose_AB = false;
@@ -76,7 +71,7 @@ class GEMMGenerator :
         Var k("k");
         Func prod;
         // Express all the products we need to do a matrix multiply as a 3D Func.
-        prod(k, i, j) = A(i, k) * B(k, j);
+        prod(k, i, j) = cast<int32_t>(A(i, k) * B(k, j));
 
         // Reduce the products along k.
         Func AB("AB");
