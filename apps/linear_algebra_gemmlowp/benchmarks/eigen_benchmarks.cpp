@@ -12,14 +12,14 @@
 #include <iostream>
 #include <string>
 #include <Eigen/Eigen>
+#include "../src/eigen_interface.h"
 #include "clock.h"
 #include "macros.h"
 
 struct Benchmarks {
     typedef uint8_t Scalar;
-    typedef Eigen::Matrix<uint8_t, Eigen::Dynamic, 1> Vector;
-    typedef Eigen::Matrix<uint8_t, Eigen::Dynamic, Eigen::Dynamic> Matrix;
-    typedef Eigen::Matrix<int32_t, Eigen::Dynamic, Eigen::Dynamic> Matrix32i;
+    typedef eigen::EigenVector Vector;
+    typedef eigen::EigenMatrix Matrix;
 
     Benchmarks(std::string n) : name(n) {}
 
@@ -53,27 +53,14 @@ struct Benchmarks {
         }
     }
 
-    inline void gemm(bool transpose_a, bool transpose_b, uint8_t alpha, uint8_t beta,
-                     const Matrix& A, const Matrix& B, Matrix& C) {
-        Matrix32i A_int = A.cast<int32_t>();
-        Matrix32i B_int = B.cast<int32_t>();
-        Matrix32i C_int = C.cast<int32_t>();
-        int32_t alpha_int = (int32_t) alpha;
-        int32_t beta_int = (int32_t) beta;
-        if (transpose_a) {
-            A_int = A_int.transpose();
-        }
-        if (transpose_b) {
-            B_int = B_int.transpose();
-        }
-        C_int = alpha_int * A_int * B_int + beta_int * C_int;
-        C = C_int.cast<uint8_t>();
-    }
-
-    L3Benchmark(gemm_notrans, "i", gemm(false, false, alpha, beta, A, B, C));
-    L3Benchmark(gemm_transA, "i", gemm(true, false, alpha, beta, A, B, C));
-    L3Benchmark(gemm_transB, "i", gemm(false, true, alpha, beta, A, B, C));
-    L3Benchmark(gemm_transAB, "i", gemm(true, true, alpha, beta, A, B, C));
+    L3Benchmark(gemm_notrans, "i", eigen::eigen_igemm(false, false, false, A, a_offset, B,
+                                                      b_offset, C, c_offset, c_mult_int, c_shift));
+    L3Benchmark(gemm_transA, "i", eigen::eigen_igemm(true, false, false, A, a_offset, B,
+                                                      b_offset, C, c_offset, c_mult_int, c_shift));
+    L3Benchmark(gemm_transB, "i", eigen::eigen_igemm(false, true, false, A, a_offset, B,
+                                                      b_offset, C, c_offset, c_mult_int, c_shift));
+    L3Benchmark(gemm_transAB, "i", eigen::eigen_igemm(true, true, false, A, a_offset, B,
+                                                      b_offset, C, c_offset, c_mult_int, c_shift));
 
   private:
     std::string name;

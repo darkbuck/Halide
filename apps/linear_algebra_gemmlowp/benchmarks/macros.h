@@ -14,8 +14,11 @@
 #define L3GFLOPS(N) (3.0 + N) * N * N * 1e-3 / elapsed
 #define L3Benchmark(benchmark, type, code)                              \
     virtual void bench_##benchmark(int N) {                             \
-        Scalar alpha = random_scalar();                                 \
-        Scalar beta = random_scalar();                                  \
+        Scalar a_offset = random_scalar();                              \
+        Scalar b_offset = random_scalar();                              \
+        Scalar c_offset = random_scalar();                              \
+        Scalar c_mult_int = random_scalar();                            \
+        Scalar c_shift = random_scalar();                               \
         Matrix A(random_matrix(N));                                     \
         Matrix B(random_matrix(N));                                     \
         Matrix C(random_matrix(N));                                     \

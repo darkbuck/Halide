@@ -67,17 +67,21 @@ struct Benchmarks {
         }
     }
 
-    L3Benchmark(gemm_notrans, "i", halide_igemm(false, false, alpha, A.raw_buffer(),
-                                                B.raw_buffer(), beta, C.raw_buffer()))
+    L3Benchmark(gemm_notrans, "i", halide_igemm(false, false, false, A.raw_buffer(), a_offset,
+                                                B.raw_buffer(), b_offset, C.raw_buffer(),
+                                                c_offset, c_mult_int, c_shift))
 
-    L3Benchmark(gemm_transA, "i", halide_igemm(true, false, alpha, A.raw_buffer(),
-                                                B.raw_buffer(), beta, C.raw_buffer()))
+    L3Benchmark(gemm_transA, "i", halide_igemm(true, false, false, A.raw_buffer(), a_offset,
+                                                B.raw_buffer(), b_offset, C.raw_buffer(),
+                                                c_offset, c_mult_int, c_shift))
 
-    L3Benchmark(gemm_transB, "i", halide_igemm(false, true, alpha, A.raw_buffer(),
-                                                B.raw_buffer(), beta, C.raw_buffer()))
+    L3Benchmark(gemm_transB, "i", halide_igemm(false, true, false, A.raw_buffer(), a_offset,
+                                                B.raw_buffer(), b_offset, C.raw_buffer(),
+                                                c_offset, c_mult_int, c_shift))
 
-    L3Benchmark(gemm_transAB, "i", halide_igemm(true, true, alpha, A.raw_buffer(),
-                                                B.raw_buffer(), beta, C.raw_buffer()))
+    L3Benchmark(gemm_transAB, "i", halide_igemm(true, true, false, A.raw_buffer(), a_offset,
+                                                B.raw_buffer(), b_offset, C.raw_buffer(),
+                                                c_offset, c_mult_int, c_shift))
 };
 
 int main(int argc, char* argv[]) {

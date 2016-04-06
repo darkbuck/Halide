@@ -54,7 +54,8 @@ class GEMMGenerator :
         Func result("result");
 
         // Swizzle A for better memory order in the inner loop.
-        Func A("A"), B("B"), Btmp("Btmp"), As("As"), Atmp("Atmp");
+        Func A("A"), B("B"), A_shifted("A_shifted"), B_shifted("B_shifted"), Btmp("Btmp");
+        Func As("As"), Atmp("Atmp"), result_tmp("result_tmp");
         Atmp(i, j) = A_(i, j);
 
         if (transpose_A_) {
@@ -72,10 +73,13 @@ class GEMMGenerator :
             B(i, j) = Btmp(i, j);
         }
 
+        A_shifted(i, j) = cast<int16_t>(A(i, j) + a_offset);
+        B_shifted(i, j) = cast<int16_t>(B(i, j) + b_offset);
+
         Var k("k");
         Func prod;
         // Express all the products we need to do a matrix multiply as a 3D Func.
-        prod(k, i, j) = cast<int32_t>(A(i, k) * B(k, j));
+        prod(k, i, j) = cast<int32_t>(A_shifted(i, k) * B_shifted(k, j));
 
         // Reduce the products along k.
         Func AB("AB");
@@ -91,7 +95,12 @@ class GEMMGenerator :
         }
 
         // Do the part that makes it a 'general' matrix multiply.
-        result(i, j) = cast<uint8_t>((a_ * ABt(i, j) + b_ * C_(i, j)));
+        result_tmp(i, j) = ((ABt(i, j) + c_offset) * c_mult_int) >> c_shift;
+        if (transpose_C_) {
+            result(i, j) = cast<uint8_t>(result_tmp(j, i));
+        } else {
+            result(i, j) = cast<uint8_t>(result_tmp(i, j));
+        }
 
         if (transpose_AB) {
             result

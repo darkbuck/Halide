@@ -42,12 +42,12 @@ KERNELS = \
 	igemm_transC \
 	igemm_transAC \
 	igemm_transBC \
-	igemm_transABC
+	igemm_transABC \
 
 BENCHMARKS = \
 	benchmarks/eigen_benchmarks \
-	benchmarks/gemmlowp_benchmarks \
-	benchmarks/halide_benchmarks
+	#benchmarks/gemmlowp_benchmarks \
+	#benchmarks/halide_benchmarks
 
 LIBS = $(filter-out -lrt -lz -lpthread -ldl , $(LLVM_STATIC_LIBS)) \
 	$(LIB_HALIDE)
@@ -79,7 +79,7 @@ src/halide_blas.o: src/halide_blas.cpp src/halide_blas.h $(KERNEL_HEADERS)
 
 tests/test_halide_blas: tests/test_halide_blas.cpp $(LIBHALIDE_BLAS)
 	$(CXX) $(CXXFLAGS) -Wno-unused-variable -o $(@) -I../../include/ -I../support -Isrc -I$(KERNEL_DIR) $(GEMMLOWP_INCLUDES) \
-	$(CBLAS_FLAGS) $(<) $(GEMMLOWP_SRC) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(CBLAS_LIBS) $(LLVM_LDFLAGS)
+	$(EIGEN_INCLUDES) $(<) $(GEMMLOWP_SRC) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(LLVM_LDFLAGS)
 
 # Large powers of two are a pathological case for the cache, so avoid
 # them for the benchmarks.
@@ -109,7 +109,7 @@ benchmarks.csv: $(BENCHMARKS)
 	make --no-print-directory run_benchmarks > benchmarks.dat
 	awk '{printf("%s,%s,%s,%s,%s\n",$$1,$$2,$$3,$$4,$$5)}' benchmarks.dat > benchmarks.csv
 
-benchmarks/eigen_benchmarks: benchmarks/eigen_benchmarks.cpp benchmarks/clock.h benchmarks/macros.h $(LIBHALIDE_BLAS)
+benchmarks/eigen_benchmarks: benchmarks/eigen_benchmarks.cpp benchmarks/clock.h benchmarks/macros.h src/eigen_interface.h $(LIBHALIDE_BLAS)
 	$(CXX) $(CXXFLAGS) -o $(@) -I../../include/ -I../support -I$(KERNEL_DIR) $(EIGEN_INCLUDES) \
 	$(<) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(LLVM_LDFLAGS)
 
@@ -145,18 +145,18 @@ $(KERNEL_DIR)/halide_igemm_transAB.o $(KERNEL_DIR)/halide_igemm_transAB.h: $(KER
 	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transAB -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
 	target=$(HL_TARGET_NR) transpose_A=true transpose_B=true transpose_C=false
 
-$(KERNEL_DIR)/halide_igemm_transC.o $(KERNEL_DIR)/halide_igemm_notrans.h: $(KERNEL_DIR)/blas_l3.generator
-	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_notrans -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
+$(KERNEL_DIR)/halide_igemm_transC.o $(KERNEL_DIR)/halide_igemm_transC.h: $(KERNEL_DIR)/blas_l3.generator
+	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transC -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
 	target=$(HL_TARGET_NR) transpose_A=false transpose_B=false transpose_C=true
 
-$(KERNEL_DIR)/halide_igemm_transAC.o $(KERNEL_DIR)/halide_igemm_transA.h: $(KERNEL_DIR)/blas_l3.generator
-	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transA -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
+$(KERNEL_DIR)/halide_igemm_transAC.o $(KERNEL_DIR)/halide_igemm_transAC.h: $(KERNEL_DIR)/blas_l3.generator
+	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transAC -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
 	target=$(HL_TARGET_NR) transpose_A=true transpose_B=false transpose_C=true
 
-$(KERNEL_DIR)/halide_igemm_transBC.o $(KERNEL_DIR)/halide_igemm_transB.h: $(KERNEL_DIR)/blas_l3.generator
-	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transB -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
+$(KERNEL_DIR)/halide_igemm_transBC.o $(KERNEL_DIR)/halide_igemm_transBC.h: $(KERNEL_DIR)/blas_l3.generator
+	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transBC -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
 	target=$(HL_TARGET_NR) transpose_A=false transpose_B=true transpose_C=true
 
-$(KERNEL_DIR)/halide_igemm_transABC.o $(KERNEL_DIR)/halide_igemm_transAB.h: $(KERNEL_DIR)/blas_l3.generator
-	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transAB -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
+$(KERNEL_DIR)/halide_igemm_transABC.o $(KERNEL_DIR)/halide_igemm_transABC.h: $(KERNEL_DIR)/blas_l3.generator
+	$(LD_PATH_SETUP) $< -g igemm -f halide_igemm_transABC -o $(KERNEL_DIR) -e $(EMIT_OPTIONS) \
 	target=$(HL_TARGET_NR) transpose_A=true transpose_B=true transpose_C=true
