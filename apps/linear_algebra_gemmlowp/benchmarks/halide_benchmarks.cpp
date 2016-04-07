@@ -72,16 +72,32 @@ struct Benchmarks {
                                                 c_offset, c_mult_int, c_shift))
 
     L3Benchmark(gemm_transA, "i", halide_igemm(true, false, false, A.raw_buffer(), a_offset,
-                                                B.raw_buffer(), b_offset, C.raw_buffer(),
-                                                c_offset, c_mult_int, c_shift))
+                                               B.raw_buffer(), b_offset, C.raw_buffer(),
+                                               c_offset, c_mult_int, c_shift))
 
     L3Benchmark(gemm_transB, "i", halide_igemm(false, true, false, A.raw_buffer(), a_offset,
-                                                B.raw_buffer(), b_offset, C.raw_buffer(),
-                                                c_offset, c_mult_int, c_shift))
+                                               B.raw_buffer(), b_offset, C.raw_buffer(),
+                                               c_offset, c_mult_int, c_shift))
 
     L3Benchmark(gemm_transAB, "i", halide_igemm(true, true, false, A.raw_buffer(), a_offset,
                                                 B.raw_buffer(), b_offset, C.raw_buffer(),
                                                 c_offset, c_mult_int, c_shift))
+
+    L3Benchmark(gemm_transC, "i", halide_igemm(false, false, true, A.raw_buffer(), a_offset,
+                                               B.raw_buffer(), b_offset, C.raw_buffer(),
+                                               c_offset, c_mult_int, c_shift))
+
+    L3Benchmark(gemm_transAC, "i", halide_igemm(true, false, true, A.raw_buffer(), a_offset,
+                                                B.raw_buffer(), b_offset, C.raw_buffer(),
+                                                c_offset, c_mult_int, c_shift))
+
+    L3Benchmark(gemm_transBC, "i", halide_igemm(false, true, true, A.raw_buffer(), a_offset,
+                                                B.raw_buffer(), b_offset, C.raw_buffer(),
+                                                c_offset, c_mult_int, c_shift))
+
+    L3Benchmark(gemm_transABC, "i", halide_igemm(true, true, true, A.raw_buffer(), a_offset,
+                                                 B.raw_buffer(), b_offset, C.raw_buffer(),
+                                                 c_offset, c_mult_int, c_shift))
 };
 
 int main(int argc, char* argv[]) {

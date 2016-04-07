@@ -73,36 +73,19 @@ struct BLASTest {
         return buff;
     }
 
-    bool compareuint8_ts(uint8_t x, uint8_t y, uint8_t epsilon = 4 * std::numeric_limits<uint8_t>::epsilon()) {
+    bool compare_scalar(uint8_t x, uint8_t y) {
         if (x == y) {
             return true;
         } else {
-            const uint8_t min_normal = std::numeric_limits<uint8_t>::min();
-
-            uint8_t ax = std::abs(x);
-            uint8_t ay = std::abs(y);
-            uint8_t diff = std::abs(x - y);
-
-            bool equal = false;
-            if (x == 0.0 || y == 0.0 || diff < min_normal) {
-                equal = diff < (epsilon * min_normal);
-            } else {
-                equal = diff / (ax + ay) < epsilon;
-            }
-
-            if (!equal) {
-                std::cerr << "FAIL! expected = " << x << ", actual = " << y << "\n";
-            }
-
-            return equal;
+            std::cerr << "FAIL! expected = " << x << ", actual = " << y << "\n";
+            return false;
         }
     }
 
-    bool compareVectors(int N, const Vector &x, const Vector &y,
-                        uint8_t epsilon = 16 * std::numeric_limits<uint8_t>::epsilon()) {
+    bool compareVectors(int N, const Vector &x, const Vector &y) {
         bool equal = true;
         for (int i = 0; i < N; ++i) {
-            if (!compareuint8_ts(x[i], y[i], epsilon)) {
+            if (!compare_scalar(x[i], y[i])) {
                 std::cerr << "Vectors differ at index: " << i << "\n";
                 equal = false;
                 break;
@@ -111,8 +94,7 @@ struct BLASTest {
         return equal;
     }
 
-    bool compareMatrices(int N, const Matrix &A, const Matrix &B,
-                         uint8_t epsilon = 16 * std::numeric_limits<uint8_t>::epsilon()) {
+    bool compareMatrices(int N, const Matrix &A, const Matrix &B) {
         printf("Matrix A\n");
         for (int i = 0; i < N*N; ++i) {
             if (i == N) {
@@ -131,7 +113,7 @@ struct BLASTest {
 
         bool equal = true;
         for (int i = 0; i < N*N; ++i) {
-            if (!compareuint8_ts(A[i], B[i], epsilon)) {
+            if (!compare_scalar(A[i], B[i])) {
                 std::cerr << "Matrices differ at coords: (" << i%N << ", " << i/N << ")\n";
                 equal = false;
                 break;
@@ -145,6 +127,10 @@ struct BLASTest {
         RUN_TEST(igemm_transA);
         RUN_TEST(igemm_transB);
         RUN_TEST(igemm_transAB);
+        RUN_TEST(igemm_transC);
+        RUN_TEST(igemm_transAC);
+        RUN_TEST(igemm_transBC);
+        RUN_TEST(igemm_transABC);
     }
 
     L3_TEST(igemm_notrans,
@@ -159,6 +145,18 @@ struct BLASTest {
     L3_TEST(igemm_transAB,
             eigen::eigen_igemm(true, true, false, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N),
             hblas_igemm(true, true, false, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N));
+    L3_TEST(igemm_transC,
+            eigen::eigen_igemm(false, false, true, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N),
+            hblas_igemm(false, false, true, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N));
+    L3_TEST(igemm_transAC,
+            eigen::eigen_igemm(true, false, true, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N),
+            hblas_igemm(true, false, true, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N));
+    L3_TEST(igemm_transBC,
+            eigen::eigen_igemm(false, true, true, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N),
+            hblas_igemm(false, true, true, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N));
+    L3_TEST(igemm_transABC,
+            eigen::eigen_igemm(true, true, true, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N),
+            hblas_igemm(true, true, true, N, N, N, A, a_offset, N, B, b_offset, N, C, c_offset, c_mult_int, c_shift, N));
 };
 
 int main(int argc, char *argv[]) {

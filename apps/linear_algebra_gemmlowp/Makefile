@@ -1,5 +1,7 @@
 include ../support/Makefile.inc
 
+CXX = clang-omp++
+
 CXXFLAGS += -O3 -fopenmp -Wall -std=c++11 -march=native -mfma -mavx
 HL_TARGET ?= host
 LIBHALIDE_BLAS = src/libhalide_blas.a

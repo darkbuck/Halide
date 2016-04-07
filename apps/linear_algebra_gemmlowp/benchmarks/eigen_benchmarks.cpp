@@ -61,6 +61,14 @@ struct Benchmarks {
                                                       b_offset, C, c_offset, c_mult_int, c_shift));
     L3Benchmark(gemm_transAB, "i", eigen::eigen_igemm(true, true, false, A, a_offset, B,
                                                       b_offset, C, c_offset, c_mult_int, c_shift));
+    L3Benchmark(gemm_transC, "i", eigen::eigen_igemm(false, false, true, A, a_offset, B,
+                                                     b_offset, C, c_offset, c_mult_int, c_shift));
+    L3Benchmark(gemm_transAC, "i", eigen::eigen_igemm(true, false, true, A, a_offset, B,
+                                                      b_offset, C, c_offset, c_mult_int, c_shift));
+    L3Benchmark(gemm_transBC, "i", eigen::eigen_igemm(false, true, true, A, a_offset, B,
+                                                      b_offset, C, c_offset, c_mult_int, c_shift));
+    L3Benchmark(gemm_transABC, "i", eigen::eigen_igemm(true, true, true, A, a_offset, B,
+                                                       b_offset, C, c_offset, c_mult_int, c_shift));
 
   private:
     std::string name;

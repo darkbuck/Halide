@@ -51,7 +51,7 @@ inline int eigen_igemm(bool transpose_A, bool transpose_B, bool transpose_C,
     C_offset.setIdentity(C_int.rows(), C_int.cols());
     C_offset *= c_offset;
 
-    C_int = (A_int + A_offset) * (B_int * B_offset) + C_offset;
+    C_int = (A_int + A_offset) * (B_int + B_offset) + C_offset;
     C_int *= c_mult_int;
 
     for (int y = 0; y < C_int.cols(); ++y) {
