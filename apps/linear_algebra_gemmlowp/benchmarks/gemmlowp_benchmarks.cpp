@@ -59,6 +59,14 @@ struct Benchmarks {
             bench_gemm_transB(size);
         } else if (benchmark == "gemm_transAB") {
             bench_gemm_transAB(size);
+        } else if (benchmark == "gemm_transC") {
+            bench_gemm_transC(size);
+        } else if (benchmark == "gemm_transAC") {
+            bench_gemm_transAC(size);
+        } else if (benchmark == "gemm_transBC") {
+            bench_gemm_transBC(size);
+        } else if (benchmark == "gemm_transABC") {
+            bench_gemm_transABC(size);
         }
     }
 

@@ -96,9 +96,9 @@ halide_l3_benchmark_%: benchmarks/halide_benchmarks
 	@$(foreach size,$(L3_BENCHMARK_SIZES),benchmarks/halide_benchmarks $(@:halide_l3_benchmark_%=%) $(size);)
 
 l3_benchmarks: \
-	#$(L3_BENCHMARKS:%=halide_l3_benchmark_%) \
-	#$(L3_BENCHMARKS:%=eigen_l3_benchmark_%)
-	$(L3_BENCHMARKS:%=gemmlowp_l3_benchmark_%)
+	$(L3_BENCHMARKS:%=gemmlowp_l3_benchmark_%) \
+	$(L3_BENCHMARKS:%=halide_l3_benchmark_%) \
+	$(L3_BENCHMARKS:%=eigen_l3_benchmark_%)
 
 run_benchmarks: $(BENCHMARKS)
 	@echo " Package     Subroutine    Size             Runtime     GFLOPS"
