@@ -1,10 +1,15 @@
-const int rhs_offset = -75;
-const int result_offset = -91;
-const int result_offset = 74980;
-const int result_mult_int = 123;
-const int result_shift = 20;
+#ifndef BENCHMARK_DATA_H
+#define BENCHMARK_DATA_H
 
-const int benchmark_sizes[] = {
+namespace benchmark_data {
+
+const int a_offset = -75;
+const int b_offset = -91;
+const int c_offset = 74980;
+const int c_mult_int = 123;
+const int c_shift = 20;
+
+const int benchmark_gemm_sizes[] = {
     10, 10, 10,
     20, 20, 20,
     30, 30, 30,
@@ -44,3 +49,7 @@ const int googlenet_gemm_sizes[] = {
 const int small_model_gemm_sizes[] = {
     29232, 16, 25, 7308, 6, 400, 203, 3002, 216,
 };
+
+} // namespace benchmark_data
+
+#endif  // BENCHMARK_DATA_H
