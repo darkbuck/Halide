@@ -54,7 +54,7 @@ class GEMMGenerator :
         Func result("result");
 
         // Swizzle A for better memory order in the inner loop.
-        Func A("A"), B("B"), A_shifted("A_shifted"), B_shifted("B_shifted"), Btmp("Btmp");
+        Func A("A"), B("B"), A_upcast("A_upcast"), B_upcast("B_upcast"), Btmp("Btmp");
         Func As("As"), Atmp("Atmp"), result_tmp("result_tmp");
         Atmp(i, j) = A_(i, j);
 
@@ -73,13 +73,13 @@ class GEMMGenerator :
             B(i, j) = Btmp(i, j);
         }
 
-        A_shifted(i, j) = cast<int16_t>(A(i, j) + a_offset);
-        B_shifted(i, j) = cast<int16_t>(B(i, j) + b_offset);
+        A_upcast(i, j) = cast<int32_t>(A(i, j));
+        B_upcast(i, j) = cast<int32_t>(B(i, j));
 
         Var k("k");
         Func prod;
         // Express all the products we need to do a matrix multiply as a 3D Func.
-        prod(k, i, j) = cast<int32_t>(A_shifted(i, k) * B_shifted(k, j));
+        prod(k, i, j) = (A_upcast(i, k) + a_offset) * (B_upcast(k, j) + b_offset);
 
         // Reduce the products along k.
         Func AB("AB");

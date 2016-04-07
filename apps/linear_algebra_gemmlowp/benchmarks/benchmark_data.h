@@ -1,7 +1,7 @@
 #ifndef BENCHMARK_DATA_H
 #define BENCHMARK_DATA_H
 
-namespace benchmark_data {
+namespace benchmark {
 
 const int a_offset = -75;
 const int b_offset = -91;
@@ -50,6 +50,6 @@ const int small_model_gemm_sizes[] = {
     29232, 16, 25, 7308, 6, 400, 203, 3002, 216,
 };
 
-} // namespace benchmark_data
+} // namespace benchmark
 
 #endif  // BENCHMARK_DATA_H

@@ -1,7 +1,5 @@
 include ../support/Makefile.inc
 
-CXX = clang-omp++
-
 CXXFLAGS += -O3 -fopenmp -Wall -std=c++11 -march=native -mfma -mavx
 HL_TARGET ?= host
 LIBHALIDE_BLAS = src/libhalide_blas.a
@@ -48,8 +46,8 @@ KERNELS = \
 
 BENCHMARKS = \
 	benchmarks/eigen_benchmarks \
-	#benchmarks/gemmlowp_benchmarks \
-	#benchmarks/halide_benchmarks
+	benchmarks/gemmlowp_benchmarks \
+	benchmarks/halide_benchmarks
 
 LIBS = $(filter-out -lrt -lz -lpthread -ldl , $(LLVM_STATIC_LIBS)) \
 	$(LIB_HALIDE)
@@ -98,9 +96,9 @@ halide_l3_benchmark_%: benchmarks/halide_benchmarks
 	@$(foreach size,$(L3_BENCHMARK_SIZES),benchmarks/halide_benchmarks $(@:halide_l3_benchmark_%=%) $(size);)
 
 l3_benchmarks: \
-	$(L3_BENCHMARKS:%=halide_l3_benchmark_%)
-	#$(L3_BENCHMARKS:%=eigen_l3_benchmark_%) \
-	$(L3_BENCHMARKS:%=gemmlowp_l3_benchmark_%) \
+	#$(L3_BENCHMARKS:%=halide_l3_benchmark_%) \
+	#$(L3_BENCHMARKS:%=eigen_l3_benchmark_%)
+	$(L3_BENCHMARKS:%=gemmlowp_l3_benchmark_%)
 
 run_benchmarks: $(BENCHMARKS)
 	@echo " Package     Subroutine    Size             Runtime     GFLOPS"

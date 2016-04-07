@@ -19,8 +19,22 @@ namespace {
   }                                                                 \
 
 EigenMatrix convert_to_eigen_matrix(const int M, const int N, const uint8_t *A, const int lda) {
-    Eigen::Map<const EigenMatrix> matrix(A, M, N);
+    EigenMatrix matrix(M, N);
+    for (int j = 0; j < N; ++j) {
+        for (int i = 0; i < M; ++i) {
+            matrix(i, j) = A[i + lda*j];
+        }
+    }
     return matrix;
+}
+
+template<typename MatrixType>
+inline void add_scalar(MatrixType& m, int scalar) {
+    for (int j = 0; j < m.cols(); ++j) {
+        for (int i = 0; i < m.rows(); ++i) {
+            m(i, j) += scalar;
+        }
+    }
 }
 
 } // namespace anonymous
@@ -29,43 +43,40 @@ inline int eigen_igemm(bool transpose_A, bool transpose_B, bool transpose_C,
                        const EigenMatrix &A, int32_t a_offset, const EigenMatrix &B,
                        int32_t b_offset, EigenMatrix &C, int32_t c_offset,
                        int32_t c_mult_int, int32_t c_shift) {
-    EigenMatrix32i A_int = A.cast<int32_t>();
-    EigenMatrix32i B_int = B.cast<int32_t>();
-    EigenMatrix32i C_int = C.cast<int32_t>();
+    EigenMatrix32i A_int, B_int;
     if (transpose_A) {
-        A_int.transposeInPlace();
+        A_int = A.transpose().cast<int32_t>();
+    } else {
+        A_int = A.cast<int32_t>();
     }
     if (transpose_B) {
-        B_int.transposeInPlace();
+        B_int = B.transpose().cast<int32_t>();
+    } else {
+        B_int = B.cast<int32_t>();
     }
 
-    EigenMatrix32i A_offset;
-    A_offset.setIdentity(A_int.rows(), A_int.cols());
-    A_offset *= a_offset;
+    add_scalar(A_int, a_offset);
+    add_scalar(B_int, b_offset);
 
-    EigenMatrix32i B_offset;
-    B_offset.setIdentity(B_int.rows(), B_int.cols());
-    B_offset *= b_offset;
-
-    EigenMatrix32i C_offset;
-    C_offset.setIdentity(C_int.rows(), C_int.cols());
-    C_offset *= c_offset;
-
-    C_int = (A_int + A_offset) * (B_int + B_offset) + C_offset;
+    EigenMatrix32i C_int = (A_int * B_int);
+    add_scalar(C_int, c_offset);
     C_int *= c_mult_int;
 
-    for (int y = 0; y < C_int.cols(); ++y) {
-        for (int x = 0; x < C_int.rows(); ++x) {
-            C_int(x, y) = C_int(x, y) >> c_shift;
+    for (int j = 0; j < C_int.cols(); ++j) {
+        for (int i = 0; i < C_int.rows(); ++i) {
+            C_int(i, j) = C_int(i, j) >> c_shift;
         }
     }
 
-    C = C_int.cast<uint8_t>();
-
     if (transpose_C) {
-        C.transposeInPlace();
+        C = C_int.transpose().cast<uint8_t>();
+    } else {
+        C = C_int.cast<uint8_t>();
     }
 
+    /*std::cout << "\nA_int: \n" << A_int << "\n";
+    std::cout << "\nB_int: \n" << B_int << "\n";
+    std::cout << "\nC_int: \n" << C_int << "\n";*/
     return 0;
 }
 

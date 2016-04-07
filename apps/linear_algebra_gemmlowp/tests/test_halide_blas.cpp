@@ -14,33 +14,33 @@
         std::cout << "PASSED\n";                                           \
     }                                                                      \
 
-#define L3_TEST(method, eigen_code, hblas_code)   \
-    bool test_##method(int N) {                   \
-        uint8_t a_offset = random_uint8_t();      \
-        uint8_t b_offset = random_uint8_t();      \
-        uint8_t c_offset = random_uint8_t();      \
-        uint8_t c_mult_int = random_uint8_t();    \
-        uint8_t c_shift = random_uint8_t();       \
-        Matrix eA(random_matrix(N));              \
-        Matrix eB(random_matrix(N));              \
-        Matrix eC(random_matrix(N));              \
-        Matrix aA(eA), aB(eB), aC(eC);            \
-                                                  \
-        {                                         \
-            uint8_t *A = &(eA[0]);                \
-            uint8_t *B = &(eB[0]);                \
-            uint8_t *C = &(eC[0]);                \
-            eigen_code;                           \
-        }                                         \
-                                                  \
-        {                                         \
-            uint8_t *A = &(aA[0]);                \
-            uint8_t *B = &(aB[0]);                \
-            uint8_t *C = &(aC[0]);                \
-            hblas_code;                           \
-        }                                         \
-                                                  \
-        return compareMatrices(N, eC, aC);        \
+#define L3_TEST(method, eigen_code, hblas_code)     \
+    bool test_##method(int N) {                     \
+        uint8_t a_offset = random_uint8_t();        \
+        uint8_t b_offset = random_uint8_t();        \
+        uint8_t c_offset = random_uint8_t();        \
+        uint8_t c_mult_int = random_uint8_t();      \
+        uint8_t c_shift = random_uint8_t();         \
+        Matrix eA(identity_matrix(N));              \
+        Matrix eB(identity_matrix(N));              \
+        Matrix eC(identity_matrix(N));              \
+        Matrix aA(eA), aB(eB), aC(eC);              \
+                                                    \
+        {                                           \
+            uint8_t *A = &(eA[0]);                  \
+            uint8_t *B = &(eB[0]);                  \
+            uint8_t *C = &(eC[0]);                  \
+            eigen_code;                             \
+        }                                           \
+                                                    \
+        {                                           \
+            uint8_t *A = &(aA[0]);                  \
+            uint8_t *B = &(aB[0]);                  \
+            uint8_t *C = &(aC[0]);                  \
+            hblas_code;                             \
+        }                                           \
+                                                    \
+        return compareMatrices(N, eC, aC);          \
     }
 
 struct BLASTest {
@@ -73,11 +73,41 @@ struct BLASTest {
         return buff;
     }
 
+    Matrix identity_matrix(int N) {
+        Matrix buff(N * N);
+        for (int i=0; i<N*N; ++i) {
+            if (i/N == i%N) {
+                buff[i] = 1;
+            }
+        }
+        return buff;
+    }
+
+    Matrix alternate_matrix(int N) {
+        Matrix buff(N * N);
+        for (int i=0; i<N*N; ++i) {
+            if ((i/N) % 2 == 0) {
+                buff[i] = 1;
+            } else {
+                buff[i] = 0;
+            }
+        }
+        return buff;
+    }
+
+    Matrix all_one_matrix(int N) {
+        Matrix buff(N * N);
+        for (int i=0; i<N*N; ++i) {
+            buff[i] = 1;
+        }
+        return buff;
+    }
+
     bool compare_scalar(uint8_t x, uint8_t y) {
         if (x == y) {
             return true;
         } else {
-            std::cerr << "FAIL! expected = " << x << ", actual = " << y << "\n";
+            printf("FAIL! expected = %d, actual = %d\n", x, y);
             return false;
         }
     }
@@ -95,27 +125,30 @@ struct BLASTest {
     }
 
     bool compareMatrices(int N, const Matrix &A, const Matrix &B) {
-        printf("Matrix A\n");
-        for (int i = 0; i < N*N; ++i) {
-            if (i == N) {
-                printf("\n");
-            }
-            printf("%d  ", A[i]);
-        }
-
-        printf("\nMatrix B\n");
-        for (int i = 0; i < N*N; ++i) {
-            if (i == N) {
-                printf("\n");
-            }
-            printf("%d  ", B[i]);
-        }
-
         bool equal = true;
         for (int i = 0; i < N*N; ++i) {
             if (!compare_scalar(A[i], B[i])) {
                 std::cerr << "Matrices differ at coords: (" << i%N << ", " << i/N << ")\n";
                 equal = false;
+
+                printf("Matrix A");
+                for (int i = 0; i < N; ++i) {
+                    printf("\n");
+                    for (int j = 0; j < N; ++j) {
+                        printf("%5d", A[i+j*N]);
+                    }
+                }
+                printf("\n");
+
+                printf("\nMatrix B");
+                for (int i = 0; i < N; ++i) {
+                    printf("\n");
+                    for (int j = 0; j < N; ++j) {
+                        printf("%5d", B[i+j*N]);
+                    }
+                }
+                printf("\n");
+
                 break;
             }
         }
