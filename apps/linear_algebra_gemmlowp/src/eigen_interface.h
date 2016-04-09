@@ -74,9 +74,6 @@ inline int eigen_igemm(bool transpose_A, bool transpose_B, bool transpose_C,
         C = C_int.cast<uint8_t>();
     }
 
-    /*std::cout << "\nA_int: \n" << A_int << "\n";
-    std::cout << "\nB_int: \n" << B_int << "\n";
-    std::cout << "\nC_int: \n" << C_int << "\n";*/
     return 0;
 }
 

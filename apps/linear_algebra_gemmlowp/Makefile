@@ -59,6 +59,9 @@ all: $(BENCHMARKS)
 test: tests/test_halide_blas
 	tests/test_halide_blas
 
+benchmark: benchmarks/benchmark
+	benchmarks/benchmark
+
 clean:
 	rm -rf $(KERNEL_DIR)
 	rm -rf src/*.o
@@ -78,6 +81,10 @@ src/halide_blas.o: src/halide_blas.cpp src/halide_blas.h $(KERNEL_HEADERS)
 
 
 tests/test_halide_blas: tests/test_halide_blas.cpp $(LIBHALIDE_BLAS)
+	$(CXX) $(CXXFLAGS) -Wno-unused-variable -o $(@) -I../../include/ -I../support -Isrc -I$(KERNEL_DIR) $(GEMMLOWP_INCLUDES) \
+	$(EIGEN_INCLUDES) $(<) $(GEMMLOWP_SRC) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(LLVM_LDFLAGS)
+
+benchmarks/benchmark: benchmarks/benchmark.cpp $(LIBHALIDE_BLAS)
 	$(CXX) $(CXXFLAGS) -Wno-unused-variable -o $(@) -I../../include/ -I../support -Isrc -I$(KERNEL_DIR) $(GEMMLOWP_INCLUDES) \
 	$(EIGEN_INCLUDES) $(<) $(GEMMLOWP_SRC) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(LLVM_LDFLAGS)
 

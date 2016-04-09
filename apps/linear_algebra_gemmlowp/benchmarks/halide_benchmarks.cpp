@@ -37,22 +37,32 @@ struct Benchmarks {
         return uniform_dist(rand_eng);
     }
 
-    Vector random_vector(int N) {
-        Vector buff(Halide::type_of<uint8_t>(), N);
-        Scalar *x = (Scalar*)buff.host_ptr();
-        for (int i=0; i<N; ++i) {
-            x[i] = random_scalar();
+    // Assume column-major order
+    Matrix random_matrix(int M, int N) {
+        Matrix buff(Halide::type_of<uint8_t>(), M, N);
+        Scalar *A = (Scalar*)buff.host_ptr();
+        for (int i=0; i<M*N; ++i) {
+            A[i] = random_scalar();
         }
         return buff;
     }
 
-    Matrix random_matrix(int N) {
-        Matrix buff(Halide::type_of<uint8_t>(), N, N);
+    Matrix random_matrix(int M, int N) {
+        return random_matrix(N, N);
+    }
+
+    // Assume column-major order
+    Matrix zero_matrix(int M, int N) {
+        Matrix buff(Halide::type_of<uint8_t>(), M, N);
         Scalar *A = (Scalar*)buff.host_ptr();
         for (int i=0; i<N*N; ++i) {
-            A[i] = random_scalar();
+            A[i] = 0;
         }
         return buff;
+    }
+
+    Matrix zero_matrix(int N) {
+        return zero_matrix(N, N);
     }
 
     void run(std::string benchmark, int size) {

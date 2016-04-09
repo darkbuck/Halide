@@ -29,16 +29,24 @@ struct Benchmarks {
         return x[0];
     }
 
-    Vector random_vector(int N) {
-        Vector x(N);
-        x.setRandom();
-        return x;
+    Matrix random_matrix(int M, int N) {
+        Matrix A(M, N);
+        A.setRandom();
+        return A;
     }
 
     Matrix random_matrix(int N) {
-        Matrix A(N, N);
-        A.setRandom();
+        return random_matrix(N, N);
+    }
+
+    Matrix zero_matrix(int M, int N) {
+        Matrix A(M, N);
+        A.fill(0);
         return A;
+    }
+
+    Matrix zero_matrix(int N) {
+        return zero_matrix(N, N);
     }
 
     void run(std::string benchmark, int size) {

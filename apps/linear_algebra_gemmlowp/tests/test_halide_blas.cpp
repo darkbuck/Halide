@@ -57,14 +57,6 @@ struct BLASTest {
         return uniform_dist(rand_eng);
     }
 
-    Vector random_vector(int N) {
-        Vector buff(N);
-        for (int i=0; i<N; ++i) {
-            buff[i] = random_uint8_t();
-        }
-        return buff;
-    }
-
     Matrix random_matrix(int N) {
         Matrix buff(N * N);
         for (int i=0; i<N*N; ++i) {
@@ -110,18 +102,6 @@ struct BLASTest {
             printf("FAIL! expected = %d, actual = %d\n", x, y);
             return false;
         }
-    }
-
-    bool compareVectors(int N, const Vector &x, const Vector &y) {
-        bool equal = true;
-        for (int i = 0; i < N; ++i) {
-            if (!compare_scalar(x[i], y[i])) {
-                std::cerr << "Vectors differ at index: " << i << "\n";
-                equal = false;
-                break;
-            }
-        }
-        return equal;
     }
 
     bool compareMatrices(int N, const Matrix &A, const Matrix &B) {

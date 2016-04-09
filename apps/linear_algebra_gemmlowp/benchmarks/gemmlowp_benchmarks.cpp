@@ -32,20 +32,29 @@ struct Benchmarks {
         return uniform_dist(rand_eng);
     }
 
-    Vector random_vector(int N) {
-        Vector buff(N);
-        for (int i=0; i<N; ++i) {
+    // Assume column major order
+    Matrix random_matrix(int M, int N) {
+        Matrix buff(M * N);
+        for (int i=0; i<M*N; ++i) {
             buff[i] = random_scalar();
         }
         return buff;
     }
 
     Matrix random_matrix(int N) {
-        Matrix buff(N * N);
-        for (int i=0; i<N*N; ++i) {
-            buff[i] = random_scalar();
+        return random_matrix(N, N);
+    }
+
+    Matrix zero_matrix(int M, int N) {
+        Matrix buff(M * N);
+        for (int i=0; i<M*N; ++i) {
+            buff[i] = 0;
         }
         return buff;
+    }
+
+    Matrix zero_matrix(int N) {
+        return zero_matrix(N, N);
     }
 
     Benchmarks(std::string n) : name(n) {}
@@ -133,6 +142,8 @@ int main(int argc, char* argv[]) {
 
     subroutine = subroutine.substr(1);
     if (type == 'i') {
+        // Set the max number of threads to use by gemmlowp to 24
+        gemmlowp::eight_bit_int_gemm::SetMaxNumThreads(24);
         Benchmarks("gemmlowp").run(subroutine, size);
     }
 
