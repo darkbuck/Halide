@@ -45,6 +45,7 @@ class GEMMGenerator :
         bool transpose_AB = false;
         if ((bool)transpose_A_ && (bool)transpose_B_) {
             std::swap(A_, B_);
+            std::swap(a_offset, b_offset);
             transpose_A_.set(false);
             transpose_B_.set(false);
             transpose_AB = true;
@@ -55,7 +56,7 @@ class GEMMGenerator :
 
         // Swizzle A for better memory order in the inner loop.
         Func A("A"), B("B"), A_upcast("A_upcast"), B_upcast("B_upcast"), Btmp("Btmp");
-        Func As("As"), Atmp("Atmp"), result_tmp("result_tmp");
+        Func As("As"), Atmp("Atmp"), result_tmp1("result_tmp1"), result_tmp2("result_tmp2");
         Atmp(i, j) = A_(i, j);
 
         if (transpose_A_) {
@@ -95,11 +96,14 @@ class GEMMGenerator :
         }
 
         // Do the part that makes it a 'general' matrix multiply.
-        result_tmp(i, j) = ((ABt(i, j) + c_offset) * c_mult_int) >> c_shift;
+        result_tmp1(i, j) = (ABt(i, j) + c_offset) * c_mult_int;
+        Expr rounding_term = 1 << (c_shift - 1);
+        result_tmp2(i, j) = select(c_shift < 1, result_tmp1(i, j), result_tmp1(i, j) + rounding_term) >> c_shift;
+
         if (transpose_C_) {
-            result(i, j) = cast<uint8_t>(result_tmp(j, i));
+            result(i, j) = cast<uint8_t>(clamp(result_tmp2(j, i), 0, 255));
         } else {
-            result(i, j) = cast<uint8_t>(result_tmp(i, j));
+            result(i, j) = cast<uint8_t>(clamp(result_tmp2(i, j), 0, 255));
         }
 
         if (transpose_AB) {

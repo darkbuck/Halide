@@ -62,9 +62,16 @@ inline int eigen_igemm(bool transpose_A, bool transpose_B, bool transpose_C,
     add_scalar(C_int, c_offset);
     C_int *= c_mult_int;
 
+    int32_t rounding_term = (c_shift < 1) ? 0 : (1 << (c_shift - 1));
     for (int j = 0; j < C_int.cols(); ++j) {
         for (int i = 0; i < C_int.rows(); ++i) {
-            C_int(i, j) = C_int(i, j) >> c_shift;
+            C_int(i, j) = (C_int(i, j) + rounding_term) >> c_shift;
+            if (C_int(i, j) > 255) {
+                C_int(i, j) = 255;
+            }
+            if (C_int(i, j) < 0) {
+                C_int(i, j) = 0;
+            }
         }
     }
 

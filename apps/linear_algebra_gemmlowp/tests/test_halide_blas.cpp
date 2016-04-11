@@ -16,14 +16,14 @@
 
 #define L3_TEST(method, eigen_code, hblas_code)     \
     bool test_##method(int N) {                     \
-        uint8_t a_offset = random_uint8_t();        \
-        uint8_t b_offset = random_uint8_t();        \
-        uint8_t c_offset = random_uint8_t();        \
-        uint8_t c_mult_int = random_uint8_t();      \
-        uint8_t c_shift = random_uint8_t();         \
-        Matrix eA(identity_matrix(N));              \
-        Matrix eB(identity_matrix(N));              \
-        Matrix eC(identity_matrix(N));              \
+        int32_t a_offset = random_int32_t();        \
+        int32_t b_offset = random_int32_t();        \
+        int32_t c_offset = random_int32_t();        \
+        int32_t c_mult_int = random_int32_t();      \
+        int32_t c_shift = random_int32_t();         \
+        Matrix eA(random_matrix(N));                \
+        Matrix eB(random_matrix(N));                \
+        Matrix eC(random_matrix(N));                \
         Matrix aA(eA), aB(eB), aC(eC);              \
                                                     \
         {                                           \
@@ -51,6 +51,11 @@ struct BLASTest {
     std::default_random_engine rand_eng;
 
     BLASTest() : rand_eng(rand_dev()) {}
+
+    int32_t random_int32_t() {
+        std::uniform_int_distribution<int32_t> uniform_dist(-10, 10);
+        return uniform_dist(rand_eng);
+    }
 
     uint8_t random_uint8_t() {
         std::uniform_int_distribution<uint8_t> uniform_dist(1, 10);
