@@ -28,9 +28,9 @@ class GEMMGenerator :
     Param<int32_t> c_mult_int = {"c_mult_int", 0};
     Param<int32_t> c_shift = {"c_shift", 0};
 
-    Var i, j, ii, ji, jii, iii, io, jo, ti, tj, t;
-
     Func build() {
+        Var i("i"), j("j"), ii("ii"), ji("ji"), io("io"), jo("jo"), t("t");
+
         // Matrices are interpreted as column-major by default. The
         // transpose GeneratorParams are used to handle cases where
         // one or both is actually row major.
@@ -163,6 +163,8 @@ class GEMMGenerator :
         B_.set_bounds(0, 0, sum_size).set_min(1, 0);
         C_.set_bounds(0, 0, num_rows).set_bounds(1, 0, num_cols);
         result.output_buffer().set_bounds(0, 0, num_rows).set_bounds(1, 0, num_cols);
+
+        //result.print_loop_nest();
 
         return result;
     }

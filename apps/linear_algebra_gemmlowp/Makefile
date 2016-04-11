@@ -86,7 +86,7 @@ tests/test_halide_blas: tests/test_halide_blas.cpp $(LIBHALIDE_BLAS)
 
 benchmarks/benchmark: benchmarks/benchmark.cpp $(LIBHALIDE_BLAS)
 	$(CXX) $(CXXFLAGS) -Wno-unused-variable -o $(@) -I../../include/ -I../support -Isrc -I$(KERNEL_DIR) $(GEMMLOWP_INCLUDES) \
-	$(EIGEN_INCLUDES) $(<) $(GEMMLOWP_SRC) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(LLVM_LDFLAGS)
+	$(<) $(GEMMLOWP_SRC) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(LLVM_LDFLAGS)
 
 # Large powers of two are a pathological case for the cache, so avoid
 # them for the benchmarks.
