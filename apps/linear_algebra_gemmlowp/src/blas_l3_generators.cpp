@@ -77,22 +77,43 @@ class GEMMGenerator :
         A_upcast(i, j) = cast<int32_t>(A(i, j));
         B_upcast(i, j) = cast<int32_t>(B(i, j));
 
+        // Compute term2 = a_offset * P * B (where P is identity matrix with dim equal to A)
+        // P * B is equal to row vector where each element is the sum of the corresponding columns
+        Func term2("term2");
+        RDom r2(0, num_cols);
+        term2(j) += a_offset * B(r2, j);
+
+        // Compute term3 = b_offset * A * Q (where Q is identity matrix with dim equal to B)
+        // A * Q is equal to column vector where each element is the sum of the corresponding rows
+        Func term3("term3");
+        RDom r3(0, num_rows);
+        term3(i) += b_offset * A(i, r3);
+
+        // Compute term4 = a_offset * b_offset * P * Q.
+        // Each element in P * Q is equal to the depth of the matrix (column size of A or row size of
+        // B)
+        Expr term4 = a_offset * b_offset * sum_size;
+
+        // Compute A*B
         Var k("k");
         Func prod;
         // Express all the products we need to do a matrix multiply as a 3D Func.
-        prod(k, i, j) = (A_upcast(i, k) + a_offset) * (B_upcast(k, j) + b_offset);
+        prod(k, i, j) = (A_upcast(i, k)* B_upcast(k, j));
 
         // Reduce the products along k.
         Func AB("AB");
         RDom rv(0, sum_size);
         AB(i, j) += prod(rv, i, j);
 
+        Func all_terms("all_terms");
+        all_terms(i, j) = AB(i, j) + term2(j) + term3(i) + term4;
+
         Func ABt("ABt");
         if (transpose_AB) {
-            // Transpose A*B if necessary.
-            ABt(i, j) = AB(j, i);
+            // Transpose if necessary.
+            ABt(i, j) = all_terms(j, i);
         } else {
-            ABt(i, j) = AB(i, j);
+            ABt(i, j) = all_terms(i, j);
         }
 
         // Do the part that makes it a 'general' matrix multiply.

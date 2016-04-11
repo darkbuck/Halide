@@ -1,5 +1,7 @@
 include ../support/Makefile.inc
 
+CXX = clang-omp++
+
 CXXFLAGS += -O3 -fopenmp -Wall -std=c++11 -march=native -mfma -mavx
 HL_TARGET ?= host
 LIBHALIDE_BLAS = src/libhalide_blas.a
@@ -45,7 +47,6 @@ KERNELS = \
 	igemm_transABC \
 
 BENCHMARKS = \
-	benchmarks/eigen_benchmarks \
 	benchmarks/gemmlowp_benchmarks \
 	benchmarks/halide_benchmarks
 
@@ -93,9 +94,6 @@ benchmarks/benchmark: benchmarks/benchmark.cpp $(LIBHALIDE_BLAS)
 L3_BENCHMARK_SIZES = 32 64 128 288 544 1056 2080
 L3_BENCHMARKS = igemm_notrans igemm_transA igemm_transB igemm_transAB igemm_transC igemm_transAC igemm_transBC igemm_transABC
 
-eigen_l3_benchmark_%: benchmarks/eigen_benchmarks
-	@$(foreach size,$(L3_BENCHMARK_SIZES),benchmarks/eigen_benchmarks $(@:eigen_l3_benchmark_%=%) $(size);)
-
 gemmlowp_l3_benchmark_%: benchmarks/gemmlowp_benchmarks
 	@$(foreach size,$(L3_BENCHMARK_SIZES),benchmarks/gemmlowp_benchmarks $(@:gemmlowp_l3_benchmark_%=%) $(size);)
 
@@ -105,7 +103,6 @@ halide_l3_benchmark_%: benchmarks/halide_benchmarks
 l3_benchmarks: \
 	$(L3_BENCHMARKS:%=gemmlowp_l3_benchmark_%) \
 	$(L3_BENCHMARKS:%=halide_l3_benchmark_%) \
-	$(L3_BENCHMARKS:%=eigen_l3_benchmark_%)
 
 run_benchmarks: $(BENCHMARKS)
 	@echo " Package     Subroutine    Size             Runtime     GFLOPS"
@@ -115,10 +112,6 @@ run_benchmarks: $(BENCHMARKS)
 benchmarks.csv: $(BENCHMARKS)
 	make --no-print-directory run_benchmarks > benchmarks.dat
 	awk '{printf("%s,%s,%s,%s,%s\n",$$1,$$2,$$3,$$4,$$5)}' benchmarks.dat > benchmarks.csv
-
-benchmarks/eigen_benchmarks: benchmarks/eigen_benchmarks.cpp benchmarks/clock.h benchmarks/macros.h src/eigen_interface.h $(LIBHALIDE_BLAS)
-	$(CXX) $(CXXFLAGS) -o $(@) -I../../include/ -I../support -I$(KERNEL_DIR) $(EIGEN_INCLUDES) \
-	$(<) $(LIBHALIDE_BLAS) $(LIB_HALIDE) $(LLVM_LDFLAGS)
 
 benchmarks/gemmlowp_benchmarks: benchmarks/gemmlowp_benchmarks.cpp benchmarks/clock.h benchmarks/macros.h $(LIBHALIDE_BLAS)
 	$(CXX) $(CXXFLAGS) -o $(@) -I../../include/ -I../support -I$(KERNEL_DIR) $(GEMMLOWP_INCLUDES) \
