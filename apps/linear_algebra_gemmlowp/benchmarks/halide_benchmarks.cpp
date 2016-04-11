@@ -47,7 +47,7 @@ struct Benchmarks {
         return buff;
     }
 
-    Matrix random_matrix(int M, int N) {
+    Matrix random_matrix(int N) {
         return random_matrix(N, N);
     }
 
