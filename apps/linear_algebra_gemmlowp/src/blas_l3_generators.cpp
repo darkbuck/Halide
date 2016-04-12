@@ -81,13 +81,21 @@ class GEMMGenerator :
         // P * B is equal to row vector where each element is the sum of the corresponding columns
         Func term2("term2");
         RDom r2(0, num_cols);
-        term2(j) += a_offset * B(r2, j);
+        if (transpose_B_) {
+            term2(j) += a_offset * B_(j, r2);
+        } else {
+            term2(j) += a_offset * B_(r2, j);
+        }
 
         // Compute term3 = b_offset * A * Q (where Q is identity matrix with dim equal to B)
         // A * Q is equal to column vector where each element is the sum of the corresponding rows
         Func term3("term3");
         RDom r3(0, num_rows);
-        term3(i) += b_offset * A(i, r3);
+        if (transpose_A_) {
+            term3(i) += b_offset * A_(r3, i);
+        } else {
+            term3(i) += b_offset * A_(i, r3);
+        }
 
         // Compute term4 = a_offset * b_offset * P * Q.
         // Each element in P * Q is equal to the depth of the matrix (column size of A or row size of
@@ -151,6 +159,22 @@ class GEMMGenerator :
         result.rename(tj[0], t);
 
         result.bound(i, 0, num_rows).bound(j, 0, num_cols);
+
+        term2.compute_root()
+            .split(j, jo, ji, s)
+            .vectorize(ji)
+            .update()
+            .split(j, jo, ji, s)
+            .reorder(ji, jo, r2).unroll(jo, 2).vectorize(ji);
+        term2.bound(j, 0, num_cols);
+
+        term3.compute_root()
+            .split(i, io, ii, s)
+            .vectorize(ii)
+            .update()
+            .split(i, io, ii, s)
+            .reorder(ii, io, r3).unroll(io, 2).vectorize(ii);
+        term3.bound(i, 0, num_rows);
 
         As.compute_root()
             .split(j, jo, ji, s).reorder(i, ji, io, jo)
