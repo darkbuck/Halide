@@ -5,7 +5,10 @@
 #include "curved.h"
 #include "halide_image.h"
 #include "halide_image_io.h"
+#include "halide_image_info.h"
 #include "halide_malloc_trace.h"
+
+#include "HalideRuntimeHexagonHost.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -62,12 +65,27 @@ int main(int argc, char **argv) {
 
     double best;
 
+    input.set_host_dirty();
+    output.set_host_dirty();
+    matrix_3200.set_host_dirty();
+    matrix_7000.set_host_dirty();
+
+    input.copy_to_device(halide_hexagon_device_interface());
+    output.copy_to_device(halide_hexagon_device_interface());
+    matrix_3200.copy_to_device(halide_hexagon_device_interface());
+    matrix_7000.copy_to_device(halide_hexagon_device_interface());
+
+    fprintf(stderr, "Running benchmark\n");
+
     best = benchmark(timing_iterations, 1, [&]() {
         curved(color_temp, gamma, contrast, blackLevel, whiteLevel,
                input, matrix_3200, matrix_7000,
                output);
     });
     fprintf(stderr, "Halide:\t%gus\n", best * 1e6);
+
+    output.copy_to_host();
+
     fprintf(stderr, "output: %s\n", argv[6]);
     save_image(output, argv[6]);
     fprintf(stderr, "        %d %d\n", output.width(), output.height());
@@ -77,8 +95,8 @@ int main(int argc, char **argv) {
         FCam::demosaic(input, output_c, color_temp, contrast, true, blackLevel, whiteLevel, gamma);
     });
     fprintf(stderr, "C++:\t%gus\n", best * 1e6);
-    fprintf(stderr, "output_c: fcam_c.png\n");
-    save_image(output_c, "fcam_c.png");
+    fprintf(stderr, "output_c: fcam_c.ppm\n");
+    save_image(output_c, "fcam_c.ppm");
     fprintf(stderr, "        %d %d\n", output_c.width(), output_c.height());
 
     Image<uint8_t> output_asm(output.width(), output.height(), output.channels());
@@ -86,8 +104,8 @@ int main(int argc, char **argv) {
         FCam::demosaic_ARM(input, output_asm, color_temp, contrast, true, blackLevel, whiteLevel, gamma);
     });
     fprintf(stderr, "ASM:\t%gus\n", best * 1e6);
-    fprintf(stderr, "output_asm: fcam_arm.png\n");
-    save_image(output_asm, "fcam_arm.png");
+    fprintf(stderr, "output_asm: fcam_arm.ppm\n");
+    save_image(output_asm, "fcam_arm.ppm");
     fprintf(stderr, "        %d %d\n", output_asm.width(), output_asm.height());
 
     // Timings on N900 as of SIGGRAPH 2012 camera ready are (best of 10)

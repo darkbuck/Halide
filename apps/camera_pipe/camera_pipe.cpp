@@ -33,7 +33,20 @@ Func interleave_x(Func a, Func b) {
 
 Func interleave_y(Func a, Func b) {
     Func out;
+#if 1
+// #1) Error: Hexagon pipeline failed.
+// ABORT
     out(x, y) = select((y%2)==0, a(x, y/2), b(x, y/2));
+// ABORT:
+//    out(x, y) = max(a(x, y/2), b(x, y/2));
+// ABORT:
+//    out(x, y) = max(a(x, y), b(x, y/2));
+// ABORT:
+//    out(x, y) = max(a(x, y/2), b(x, y));
+#else
+// #2) this workaround produces either assert or wrong answer (see deinterleave)
+    out(x, y) = max(a(x, y), b(x, y));
+#endif
     return out;
 }
 
@@ -41,10 +54,19 @@ Func deinterleave(Func raw) {
     // Deinterleave the color channels
     Func deinterleaved;
 
+#if 1
+// ABORT:
+// #2a) after interleave_y workaround is enabled, error changes to:
+// Error: Input buffer input is accessed at 3855, which is beyond the max (1967) in dimension 1
     deinterleaved(x, y, c) = select(c == 0, raw(2*x, 2*y),
                                     c == 1, raw(2*x+1, 2*y),
                                     c == 2, raw(2*x, 2*y+1),
                                             raw(2*x+1, 2*y+1));
+#else
+// #2b) in addition to interleave_y workaround
+// WA:
+    deinterleaved(x, y, c) = raw(x,y);
+#endif
     return deinterleaved;
 }
 
@@ -329,6 +351,7 @@ Func process(Func raw, Type result_type,
         const int tile_height = 64;
         const int vector_size = target.has_feature(Target::HVX_128) ? 128 : 64;
         const int vector_size_16 = vector_size/2;
+#if 1
         denoised.compute_at(processed, tx)
             .align_storage(x, vector_size_16)
             .vectorize(x, vector_size_16);
@@ -337,6 +360,11 @@ Func process(Func raw, Type result_type,
             .vectorize(x, vector_size_16)
             .reorder(c, x, y)
             .unroll(c);
+#else
+// doesn't fix ABORT
+        denoised.compute_root();
+        deinterleaved.compute_root();
+#endif
         corrected.compute_at(processed, tx)
             .vectorize(x, vector_size_16)
             .reorder(c, x, y)
@@ -435,8 +463,7 @@ int main(int argc, char **argv) {
 
     std::vector<Argument> args = {color_temp, gamma, contrast, blackLevel, whiteLevel,
                                   input, matrix_3200, matrix_7000};
-    // TODO: it would be more efficient to call compile_to() a single time with the right arguments
-    processed.compile_to_static_library("curved", args, target);
+    processed.compile_to_file("curved", args, target);
     processed.compile_to_assembly("curved.s", args, target);
 
     return 0;
