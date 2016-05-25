@@ -1,0 +1,71 @@
+#include "Halide.h"
+#include <stdint.h>
+
+using namespace Halide;
+
+Target target;
+
+Var x, y, tx("tx"), ty("ty"), c("c");
+Func processed("processed");
+
+Func process(Func raw, Type result_type,
+             ImageParam matrix_3200, ImageParam matrix_7000, Param<float> color_temp,
+             Param<float> gamma, Param<float> contrast, Param<int> blackLevel, Param<int> whiteLevel) {
+
+    Var xi, yi;
+
+    // Convert 10-bit Bayer image directly to 8-bit grayscale w/o processing
+    processed(x, y, c) = cast<uint8_t>(clamp(raw(x, y) >> 2, 0, 255));
+
+    // Schedule
+    Expr out_width = processed.output_buffer().width();
+    Expr out_height = processed.output_buffer().height();
+
+    processed.bound(c, 0, 3); // bound color loop 0-3, properly
+    processed.compute_root()
+            .hexagon();
+
+    return processed;
+}
+
+int main(int argc, char **argv) {
+    // The camera pipe is specialized on the 2592x1968 images that
+    // come in, so we'll just use an image instead of a uniform image.
+    ImageParam input(UInt(16), 2);
+    ImageParam matrix_3200(Float(32), 2, "m3200"), matrix_7000(Float(32), 2, "m7000");
+    Param<float> color_temp("color_temp"); //, 3200.0f);
+    Param<float> gamma("gamma"); //, 1.8f);
+    Param<float> contrast("contrast"); //, 10.0f);
+    Param<int> blackLevel("blackLevel"); //, 25);
+    Param<int> whiteLevel("whiteLevel"); //, 1023);
+
+    // shift things inwards to give us enough padding on the
+    // boundaries so that we don't need to check bounds. We're going
+    // to make a 2560x1920 output image, just like the FCam pipe, so
+    // shift by 16, 12. We also convert it to be signed, so we can deal
+    // with values that fall below 0 during processing.
+    Func shifted;
+    shifted(x, y) = cast<int16_t>(input(x+16, y+12));
+
+    // Parameterized output type, because LLVM PTX (GPU) backend does not
+    // currently allow 8-bit computations
+    int bit_width = atoi(argv[1]);
+    Type result_type = UInt(bit_width);
+
+    // Pick a target
+    target = get_target_from_environment();
+
+    // Build the pipeline
+    Func processed = process(shifted, result_type, matrix_3200, matrix_7000,
+                             color_temp, gamma, contrast, blackLevel, whiteLevel);
+
+    // Assert our input is aligned, which helps Hexagon generate better code.
+//    input.set_host_alignment(128);
+
+    std::vector<Argument> args = {color_temp, gamma, contrast, blackLevel, whiteLevel,
+                                  input, matrix_3200, matrix_7000};
+    processed.compile_to_file("curved", args, target);
+    processed.compile_to_assembly("curved.s", args, target);
+
+    return 0;
+}
