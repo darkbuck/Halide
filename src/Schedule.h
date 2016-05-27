@@ -145,6 +145,14 @@ struct Dim {
 struct Bound {
     std::string var;
     Expr min, extent;
+
+    /** This lets you use a Bound as a key in a map of the form
+     * map<Bound, Foo, Bound::Compare> */
+    struct Compare {
+        bool operator()(const Bound &a, const Bound &b) const {
+            return a.var < b.var;
+        }
+    };
 };
 
 struct ScheduleContents;
@@ -217,10 +225,11 @@ public:
     std::vector<Dim> &dims();
     // @}
 
-    /** Any reduction domain associated with this schedule. */
+    /** RVars (name + min/extent) of reduction domain associated with this
+     * schedule if there is any. */
     // @{
-    const ReductionDomain &reduction_domain() const;
-    void set_reduction_domain(const ReductionDomain &d);
+    const std::vector<Bound> &rvar_bounds() const;
+    std::vector<Bound> &rvar_bounds();
     // @}
 
     /** The list and order of dimensions used to store this

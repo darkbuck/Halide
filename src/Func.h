@@ -723,7 +723,7 @@ public:
 
     /** Get the reduction domain for an update definition, if there is
      * one. */
-    EXPORT RDom reduction_domain(int idx = 0) const;
+    //EXPORT RDom reduction_domain(int idx = 0) const;
 
     /** Does this function have at least one update definition? */
     EXPORT bool has_update_definition() const;

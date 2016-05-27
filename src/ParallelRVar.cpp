@@ -93,7 +93,7 @@ bool can_parallelize_rvar(const string &v,
                           const Definition &r) {
     const vector<Expr> &values = r.values();
     const vector<Expr> &args = r.args();
-    const ReductionDomain &domain = r.domain();
+    const vector<Bound> &rvar_bounds = r.schedule().rvar_bounds();
 
     FindLoads find(f);
     for (size_t i = 0; i < values.size(); i++) {
@@ -133,22 +133,20 @@ bool can_parallelize_rvar(const string &v,
 
     // Make a scope representing the bounds of the reduction domain
     Scope<Interval> bounds;
-    if (domain.defined()) {
-        for (size_t i = 0; i < domain.domain().size(); i++) {
-            const ReductionVariable &rv = domain.domain()[i];
-            Interval in = Interval(rv.min, simplify(rv.min + rv.extent - 1));
-            bounds.push(rv.var, in);
-            bounds.push(renamer.get_new_name(rv.var), in);
-        }
-        // Add the reduction domain's predicate
-        Expr pred = simplify(domain.predicate());
-        if (!equal(const_true(), pred)) {
-            Expr this_pred = pred;
-            Expr other_pred = renamer.mutate(pred);
-            debug(3) << "......this thread predicate: " << this_pred << "\n";
-            debug(3) << "......other thread predicate: " << other_pred << "\n";
-            hazard = hazard && this_pred && other_pred;
-        }
+    for (const auto &rv : rvar_bounds) {
+        Interval in = Interval(rv.min, simplify(rv.min + rv.extent - 1));
+        bounds.push(rv.var, in);
+        bounds.push(renamer.get_new_name(rv.var), in);
+    }
+
+    // Add the definition's predicate if there is any
+    Expr pred = simplify(r.predicate());
+    if (pred.defined() || !equal(const_true(), pred)) {
+        Expr this_pred = pred;
+        Expr other_pred = renamer.mutate(pred);
+        debug(3) << "......this thread predicate: " << this_pred << "\n";
+        debug(3) << "......other thread predicate: " << other_pred << "\n";
+        hazard = hazard && this_pred && other_pred;
     }
 
     debug(3) << "Attempting to falsify: " << hazard << "\n";

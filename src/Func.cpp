@@ -118,14 +118,14 @@ Tuple Func::update_values(int idx) const {
 /** Get the reduction domain for the update definition. Returns an
  * undefined RDom if there's no update definition, or if the
  * update definition has no domain. */
-RDom Func::reduction_domain(int idx) const {
+/*RDom Func::reduction_domain(int idx) const {
     user_assert(has_update_definition())
         << "Can't call Func::update_args() on Func \"" << name() << "\" as it has no update definition. "
         << "Use Func::has_update_definition() to check for the existence of an update definition.\n";
     user_assert(idx < num_update_definitions())
         << "Update definition index out of bounds.\n";
     return func.update(idx).domain();
-}
+}*/
 
 bool Func::defined() const {
     return func.has_pure_definition() || func.has_extern_definition();
