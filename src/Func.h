@@ -721,9 +721,9 @@ public:
      * functions that return a single value. */
     EXPORT Tuple update_values(int idx = 0) const;
 
-    /** Get the reduction domain for an update definition, if there is
+    /** Get the RVars of the reduction domain for an update definition, if there is
      * one. */
-    //EXPORT RDom reduction_domain(int idx = 0) const;
+    EXPORT std::vector<RVar> rvars(int idx = 0) const;
 
     /** Does this function have at least one update definition? */
     EXPORT bool has_update_definition() const;

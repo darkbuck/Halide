@@ -115,17 +115,23 @@ Tuple Func::update_values(int idx) const {
     return Tuple(func.update(idx).values());
 }
 
-/** Get the reduction domain for the update definition. Returns an
- * undefined RDom if there's no update definition, or if the
- * update definition has no domain. */
-/*RDom Func::reduction_domain(int idx) const {
+/** Get the RVars of the reduction domain for the update definition. Returns an
+ * empty vector if there's no update definition, or if the update definition has
+ * no domain. Note that the RVars returned are floating RVars, i.e. they don't
+ * actually have pointer to the reduction domain. */
+vector<RVar> Func::rvars(int idx) const {
     user_assert(has_update_definition())
         << "Can't call Func::update_args() on Func \"" << name() << "\" as it has no update definition. "
         << "Use Func::has_update_definition() to check for the existence of an update definition.\n";
     user_assert(idx < num_update_definitions())
         << "Update definition index out of bounds.\n";
-    return func.update(idx).domain();
-}*/
+    const std::vector<Bound> rvar_bounds = func.schedule().rvar_bounds();
+    std::vector<RVar> rvs(rvar_bounds.size());
+    for (size_t i = 0; i < rvar_bounds.size(); i++) {
+        rvs[i] = RVar(rvar_bounds[i].var);
+    }
+    return rvs;
+}
 
 bool Func::defined() const {
     return func.has_pure_definition() || func.has_extern_definition();
