@@ -42,6 +42,10 @@ struct VarOrRVar {
     const bool is_rvar;
 };
 
+namespace Internal {
+struct Split;
+}
+
 /** A single definition of a Func. May be a pure or update definition. */
 class Stage {
     Internal::Definition definition;
@@ -50,7 +54,16 @@ class Stage {
 
     void set_dim_type(VarOrRVar var, Internal::ForType t);
     void set_dim_device_api(VarOrRVar var, DeviceAPI device_api);
-    void split(const std::string &old, const std::string &outer, const std::string &inner, Expr factor, bool exact, TailStrategy tail);
+    void split(const std::string &old, const std::string &outer, const std::string &inner,
+               Expr factor, bool exact, TailStrategy tail, bool assert_on=true, bool use_old_name=true);
+    void fuse(const std::string &inner, const std::string &outer,
+              const std::string &fused, bool assert_on=true, bool use_old_name=true);
+    void rename(const std::string &old_var, const std::string &new_var,
+                bool exact, bool assert_on=true, bool use_old_name=true);
+
+    /** Apply the schedule in 'split' to this Stage. */
+    void apply(const Internal::Split &s);
+
 public:
     Stage(Internal::Definition d, const std::string &n, const std::vector<Var> &args)
             : definition(d), stage_name(n), dim_vars(args) {
@@ -83,8 +96,8 @@ public:
 
     /** Given a function's update definition with dimensions {rvars, vars},
      * split the update into an itermediate Func with dimensions
-     * {rvars - rvars_kept.first, vars_rename, vars} and a new update definition with
-     * dimensions {rvars_kept.second, vars}.
+     * {rvars - preserved.first, preserved.second, vars} and a new update
+     * definition with dimensions {preserved.first, vars}.
      * If called on a init/pure definition, this will throw an error. */
     EXPORT Func rfactor(std::vector<std::pair<RVar, Var>> preserved);
 
