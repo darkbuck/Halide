@@ -1,7 +1,6 @@
 #include "IR.h"
 #include "IRMutator.h"
 #include "Schedule.h"
-#include "Reduction.h"
 
 namespace Halide {
 namespace Internal {
@@ -18,7 +17,7 @@ struct ScheduleContents {
     mutable RefCount ref_count;
 
     LoopLevel store_level, compute_level;
-    std::vector<Bound> rvar_bounds;
+    std::vector<ReductionVariable> rvars;
     std::vector<Split> splits;
     std::vector<Dim> dims;
     std::vector<StorageDim> storage_dims;
@@ -32,7 +31,7 @@ struct ScheduleContents {
 
     // Pass an IRMutator through to all Exprs referenced in the ScheduleContents
     void mutate(IRMutator *mutator) {
-        for (Bound &r : rvar_bounds) {
+        for (ReductionVariable &r : rvars) {
             if (r.min.defined()) {
                 r.min = mutator->mutate(r.min);
             }
@@ -76,7 +75,7 @@ Schedule Schedule::deep_copy(
     Schedule copy;
     copy.contents->store_level = contents->store_level;
     copy.contents->compute_level = contents->compute_level;
-    copy.contents->rvar_bounds = contents->rvar_bounds;
+    copy.contents->rvars = contents->rvars;
     copy.contents->splits = contents->splits;
     copy.contents->dims = contents->dims;
     copy.contents->storage_dims = contents->storage_dims;
@@ -149,12 +148,12 @@ const std::vector<Bound> &Schedule::bounds() const {
     return contents->bounds;
 }
 
-std::vector<Bound> &Schedule::rvar_bounds() {
-    return contents->rvar_bounds;
+std::vector<ReductionVariable> &Schedule::rvars() {
+    return contents->rvars;
 }
 
-const std::vector<Bound> &Schedule::rvar_bounds() const {
-    return contents->rvar_bounds;
+const std::vector<ReductionVariable> &Schedule::rvars() const {
+    return contents->rvars;
 }
 
 const std::map<std::string, IntrusivePtr<Internal::FunctionContents>> &Schedule::wrappers() const {

@@ -206,6 +206,7 @@ set(HEADER_FILES
   AddParameterChecks.h
   AllocationBoundsInference.h
   Argument.h
+  Associativity.h
   BoundaryConditions.h
   Bounds.h
   BoundsInference.h
@@ -242,6 +243,7 @@ set(HEADER_FILES
   Expr.h
   ExprUsesVar.h
   Extern.h
+  FactorRVars.h
   FastIntegerDivide.h
   FindCalls.h
   Float16.h
@@ -357,6 +359,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   AddImageChecks.cpp
   AddParameterChecks.cpp
   AllocationBoundsInference.cpp
+  Associativity.cpp
   BoundaryConditions.cpp
   Bounds.cpp
   BoundsInference.cpp
@@ -392,6 +395,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   EarlyFree.cpp
   EliminateBoolVectors.cpp
   Error.cpp
+  FactorRVars.cpp
   FastIntegerDivide.cpp
   FindCalls.cpp
   Float16.cpp

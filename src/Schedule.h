@@ -59,6 +59,7 @@ enum class TailStrategy {
 namespace Internal {
 
 class IRMutator;
+struct ReductionVariable;
 
 /** A reference to a site in a Halide statement at the top of the
  * body of a particular for loop. Evaluating a region of a halide
@@ -140,19 +141,12 @@ struct Dim {
     ForType for_type;
     DeviceAPI device_api;
     bool pure;
+    bool is_rvar;
 };
 
 struct Bound {
     std::string var;
     Expr min, extent;
-
-    /** This lets you use a Bound as a key in a map of the form
-     * map<Bound, Foo, Bound::Compare> */
-    struct Compare {
-        bool operator()(const Bound &a, const Bound &b) const {
-            return a.var < b.var;
-        }
-    };
 };
 
 struct ScheduleContents;
@@ -225,11 +219,10 @@ public:
     std::vector<Dim> &dims();
     // @}
 
-    /** RVars (name + min/extent) of reduction domain associated with this
-     * schedule if there is any. */
+    /** RVars of reduction domain associated with this schedule if there is any. */
     // @{
-    const std::vector<Bound> &rvar_bounds() const;
-    std::vector<Bound> &rvar_bounds();
+    const std::vector<ReductionVariable> &rvars() const;
+    std::vector<ReductionVariable> &rvars();
     // @}
 
     /** The list and order of dimensions used to store this

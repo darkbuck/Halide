@@ -252,6 +252,7 @@ SOURCE_FILES = \
   AddImageChecks.cpp \
   AddParameterChecks.cpp \
   AllocationBoundsInference.cpp \
+  Associativity.cpp \
   BoundaryConditions.cpp \
   Bounds.cpp \
   BoundsInference.cpp \
@@ -286,6 +287,7 @@ SOURCE_FILES = \
   EarlyFree.cpp \
   EliminateBoolVectors.cpp \
   Error.cpp \
+  FactorRVars.cpp \
   FastIntegerDivide.cpp \
   FindCalls.cpp \
   Float16.cpp \
@@ -378,6 +380,7 @@ HEADER_FILES = \
   AddParameterChecks.h \
   AllocationBoundsInference.h \
   Argument.h \
+  Associativity.h \
   BoundaryConditions.h \
   Bounds.h \
   BoundsInference.h \
@@ -414,6 +417,7 @@ HEADER_FILES = \
   Expr.h \
   ExprUsesVar.h \
   Extern.h \
+  FactorRVars.h \
   FastIntegerDivide.h \
   FindCalls.h \
   Float16.h \

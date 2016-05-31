@@ -93,7 +93,7 @@ bool can_parallelize_rvar(const string &v,
                           const Definition &r) {
     const vector<Expr> &values = r.values();
     const vector<Expr> &args = r.args();
-    const vector<Bound> &rvar_bounds = r.schedule().rvar_bounds();
+    const vector<ReductionVariable> &rvars = r.schedule().rvars();
 
     FindLoads find(f);
     for (size_t i = 0; i < values.size(); i++) {
@@ -133,7 +133,7 @@ bool can_parallelize_rvar(const string &v,
 
     // Make a scope representing the bounds of the reduction domain
     Scope<Interval> bounds;
-    for (const auto &rv : rvar_bounds) {
+    for (const auto &rv : rvars) {
         Interval in = Interval(rv.min, simplify(rv.min + rv.extent - 1));
         bounds.push(rv.var, in);
         bounds.push(renamer.get_new_name(rv.var), in);

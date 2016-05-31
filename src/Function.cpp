@@ -314,7 +314,7 @@ void deep_copy_function_contents_helper(const IntrusivePtr<FunctionContents> &sr
     // Copy the pure definition
     dst->init_def = src->init_def.deep_copy(copied_map);
     internal_assert(dst->init_def.is_init());
-    internal_assert(dst->init_def.schedule().rvar_bounds().empty())
+    internal_assert(dst->init_def.schedule().rvars().empty())
         << "Init definition shouldn't have reduction domain\n";
 
     for (const Definition &def : src->updates) {
@@ -439,7 +439,7 @@ void Function::define(const vector<string> &args, vector<Expr> values) {
     }
 
     for (size_t i = 0; i < args.size(); i++) {
-        Dim d = {args[i], ForType::Serial, DeviceAPI::None, true};
+        Dim d = {args[i], ForType::Serial, DeviceAPI::None, true, false};
         contents->init_def.schedule().dims().push_back(d);
         StorageDim sd = {args[i]};
         contents->init_def.schedule().storage_dims().push_back(sd);
@@ -447,7 +447,7 @@ void Function::define(const vector<string> &args, vector<Expr> values) {
 
     // Add the dummy outermost dim
     {
-        Dim d = {Var::outermost().name(), ForType::Serial, DeviceAPI::None, true};
+        Dim d = {Var::outermost().name(), ForType::Serial, DeviceAPI::None, true, false};
         contents->init_def.schedule().dims().push_back(d);
     }
 
@@ -636,10 +636,9 @@ void Function::define_update(const vector<Expr> &_args, vector<Expr> values) {
 
             bool pure = can_parallelize_rvar(v, name(), r);
 
-            Bound bound = {v, rvar.min, rvar.extent};
-            r.schedule().rvar_bounds().push_back(bound);
+            r.schedule().rvars().push_back(rvar);
 
-            Dim d = {v, ForType::Serial, DeviceAPI::None, pure};
+            Dim d = {v, ForType::Serial, DeviceAPI::None, pure, true};
             r.schedule().dims().push_back(d);
         }
     }
@@ -647,14 +646,14 @@ void Function::define_update(const vector<Expr> &_args, vector<Expr> values) {
     // Then add the pure args outside of that
     for (size_t i = 0; i < pure_args.size(); i++) {
         if (!pure_args[i].empty()) {
-            Dim d = {pure_args[i], ForType::Serial, DeviceAPI::None, true};
+            Dim d = {pure_args[i], ForType::Serial, DeviceAPI::None, true, false};
             r.schedule().dims().push_back(d);
         }
     }
 
     // Then the dummy outermost dim
     {
-        Dim d = {Var::outermost().name(), ForType::Serial, DeviceAPI::None, true};
+        Dim d = {Var::outermost().name(), ForType::Serial, DeviceAPI::None, true, false};
         r.schedule().dims().push_back(d);
     }
 

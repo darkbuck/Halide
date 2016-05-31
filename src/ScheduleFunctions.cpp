@@ -79,7 +79,7 @@ Stmt build_provide_loop_nest_helper(string func_name,
         known_size_dims[i.var] = i.extent;
     }
     // Then use any reduction domain.
-    for (const Bound &i : s.rvar_bounds()) {
+    for (const ReductionVariable &i : s.rvars()) {
         known_size_dims[i.var] = i.extent;
     }
 
@@ -366,8 +366,8 @@ Stmt build_provide_loop_nest_helper(string func_name,
 
     // Define the loop mins and extents for the reduction domain (if there is any)
     // in terms of the mins and maxs produced by bounds inference
-    for (const Bound &b : s.rvar_bounds()) {
-        string p = prefix + b.var;
+    for (const ReductionVariable &rv : s.rvars()) {
+        string p = prefix + rv.var;
         Expr rmin = Variable::make(Int(32), p + ".min");
         Expr rmax = Variable::make(Int(32), p + ".max");
         stmt = LetStmt::make(p + ".loop_min", rmin, stmt);

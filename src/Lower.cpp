@@ -16,6 +16,7 @@
 #include "DeepCopy.h"
 #include "Deinterleave.h"
 #include "EarlyFree.h"
+#include "FactorRVars.h"
 #include "FindCalls.h"
 #include "Function.h"
 #include "FuseGPUThreadLoops.h"
@@ -72,6 +73,9 @@ Stmt lower(vector<Function> outputs, const string &pipeline_name, const Target &
 
     // Create a deep-copy of the entire graph of Funcs.
     std::tie(outputs, env) = deep_copy(outputs, env);
+
+    // Apply the 'rfactor' directives
+    //factor_rvars(env);
 
     // Substitute in wrapper Funcs
     env = wrap_func_calls(env);

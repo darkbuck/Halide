@@ -6,6 +6,7 @@
 #include "Inline.h"
 #include "Simplify.h"
 #include "IREquality.h"
+#include "Reduction.h"
 
 namespace Halide {
 namespace Internal {
@@ -125,14 +126,14 @@ public:
         vector<int> consumers;
         map<pair<string, int>, Box> bounds;
         vector<CondValue> exprs;
-        set<Bound, Bound::Compare> rvar_bounds;
+        set<ReductionVariable, ReductionVariable::Compare> rvars;
         string stage_prefix;
 
         // Computed expressions on the left and right-hand sides.
         // Note that a function definition might have different LHS or reduction domain
         // (if it's an update def) or RHS per specialization. All specializations
         // of an init definition should have the same LHS.
-        // This also pushes all the reduction domains it encounters into the 'rvar_bounds'
+        // This also pushes all the reduction domains it encounters into the 'rvars'
         // set for later use.
         vector<vector<CondValue>> compute_exprs_helper(const Definition& def, bool is_update) {
             vector<vector<CondValue>> result(2); // <args, values>
@@ -140,8 +141,8 @@ public:
             // Default case (no specialization)
             vector<Expr> predicates = def.split_predicate();
 
-            for (Bound b : def.schedule().rvar_bounds()) {
-                rvar_bounds.insert(b);
+            for (const ReductionVariable &rv : def.schedule().rvars()) {
+                rvars.insert(rv);
             }
 
             vector<vector<Expr>> vecs(2);
@@ -221,7 +222,7 @@ public:
         }
 
         // Computed expressions on the left and right-hand sides. This also
-        // pushes all reduction domains it encounters into the 'rvar_bounds' set
+        // pushes all reduction domains it encounters into the 'rvars' set
         // for later use.
         void compute_exprs() {
             bool is_update = (stage != 0);
@@ -440,7 +441,7 @@ public:
             }
 
             if (stage > 0) {
-                for (const Bound &rvar : rvar_bounds) {
+                for (const ReductionVariable &rvar : rvars) {
                     string arg = name + ".s" + std::to_string(stage) + "." + rvar.var;
                     s = LetStmt::make(arg + ".min", rvar.min, s);
                     s = LetStmt::make(arg + ".max", rvar.extent + rvar.min - 1, s);
@@ -555,9 +556,9 @@ public:
                                      Variable::make(Int(32), arg + ".max")));
             }
             if (stage > 0) {
-                for (const Bound &rvar : rvar_bounds) {
-                    string arg = name + ".s" + std::to_string(stage) + "." + rvar.var;
-                    result.push(rvar.var, Interval(Variable::make(Int(32), arg + ".min"),
+                for (const ReductionVariable &rv : rvars) {
+                    string arg = name + ".s" + std::to_string(stage) + "." + rv.var;
+                    result.push(rv.var, Interval(Variable::make(Int(32), arg + ".min"),
                                                    Variable::make(Int(32), arg + ".max")));
                 }
             }
@@ -885,8 +886,8 @@ public:
             // And the current bounds on its reduction variables.
             if (producing >= 0 && stages[producing].stage > 0) {
                 const Stage &s = stages[producing];
-                for (const Bound &rvar : s.rvar_bounds) {
-                    string var = s.stage_prefix + rvar.var;
+                for (const ReductionVariable &rv : s.rvars) {
+                    string var = s.stage_prefix + rv.var;
                     Interval in = bounds_of_inner_var(var, body);
                     if (in.min.defined() && in.max.defined()) {
                         body = LetStmt::make(var + ".min", in.min, body);

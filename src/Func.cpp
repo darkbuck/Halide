@@ -12,6 +12,7 @@
 #include "Util.h"
 #include "IROperator.h"
 #include "IRPrinter.h"
+#include "IRMutator.h"
 #include "Function.h"
 #include "Argument.h"
 #include "Lower.h"
@@ -24,6 +25,8 @@
 #include "LLVM_Headers.h"
 #include "Outputs.h"
 #include "LLVM_Output.h"
+#include "Substitute.h"
+#include "ExprUsesVar.h"
 
 namespace Halide {
 
@@ -125,10 +128,10 @@ vector<RVar> Func::rvars(int idx) const {
         << "Use Func::has_update_definition() to check for the existence of an update definition.\n";
     user_assert(idx < num_update_definitions())
         << "Update definition index out of bounds.\n";
-    const std::vector<Bound> rvar_bounds = func.schedule().rvar_bounds();
-    std::vector<RVar> rvs(rvar_bounds.size());
-    for (size_t i = 0; i < rvar_bounds.size(); i++) {
-        rvs[i] = RVar(rvar_bounds[i].var);
+    const std::vector<ReductionVariable> rvars = func.schedule().rvars();
+    std::vector<RVar> rvs(rvars.size());
+    for (size_t i = 0; i < rvars.size(); i++) {
+        rvs[i] = RVar(rvars[i].var);
     }
     return rvs;
 }
@@ -333,6 +336,324 @@ std::string Stage::dump_argument_list() const {
     return oss.str();
 }
 
+namespace {
+
+class SubstituteSelfReference : public IRMutator {
+    using IRMutator::visit;
+
+    const string func;
+    const Function substitute;
+    const vector<Var> new_args;
+
+    void visit(const Call *c) {
+        IRMutator::visit(c);
+        c = expr.as<Call>();
+        internal_assert(c);
+
+        if ((c->call_type == Call::Halide) && (func == c->name)) {
+            internal_assert(!c->func.defined())
+                << "func should not have been defined for a self-reference\n";
+            debug(4) << "...Replace call to Func \"" << c->name << "\" with "
+                     << "\"" << substitute.name() << "\"\n";
+            vector<Expr> args;
+            args.insert(args.end(), new_args.begin(), new_args.end());
+            args.insert(args.end(), c->args.begin(), c->args.end());
+            expr = Call::make(substitute, args, c->value_index);
+        }
+    }
+public:
+    SubstituteSelfReference(const string &func, const Function &substitute,
+                            const vector<Var> &new_args)
+            : func(func), substitute(substitute), new_args(new_args) {
+        internal_assert(substitute.get_contents().defined());
+    }
+};
+
+/** Substitute all self-reference calls to 'func' with 'substitute' which
+ * args (LHS) is 'new_args' plus the old args (LHS) in that order.
+ * Expect this method to be called on the value (RHS) of an update definition. */
+Expr substitute_self_reference(Expr val, const string &func, const Function &substitute,
+                               const vector<Var> &new_args) {
+    SubstituteSelfReference subs(func, substitute, new_args);
+    val = subs.mutate(val);
+    return val;
+}
+
+} // anonymous namespace
+
+Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
+    user_assert(!definition.is_init()) << "rfactor() must be called on an update definition\n";
+
+    vector<Expr> &args = definition.args();
+    vector<Expr> &values = definition.values();
+    vector<ReductionVariable> &rvars = definition.schedule().rvars();
+    vector<Dim> &dims = definition.schedule().dims();
+    Scope<string> rvars_lifted;
+
+    string func_name;
+    {
+        vector<std::string> tmp = split_string(stage_name, ".update(");
+        internal_assert(!tmp.empty() && !tmp[0].empty());
+        func_name = tmp[0];
+    }
+
+    for (const pair<RVar, Var> &i : preserved) {
+        const RVar &rv = i.first;
+        const Var &v = i.second;
+        {
+            // Check that the RVar are in the dims list
+            const auto iter = std::find_if(
+                dims.begin(), dims.end(), [&rv](const Dim& dim) { return var_name_match(dim.var, rv.name()); });
+            user_assert((iter != dims.end()) && (*iter).is_rvar)
+                << "In schedule for " << stage_name
+                << ", can't perform rfactor() on " << rv.name()
+                << " since it is not in the reduction domain\n"
+                << dump_argument_list();
+        }
+        {
+            // Check that the new pure Vars we used to rename the RVar aren't already in the dims list
+            const auto &iter = std::find_if(
+                dims.begin(), dims.end(), [&v](const Dim& dim) { return var_name_match(dim.var, v.name()); });
+            user_assert(iter == dims.end())
+                << "In schedule for " << stage_name
+                << ", can't rename the rvars " << rv.name() << " into " << v.name()
+                << ", since it is already used in this Func's schedule elsewhere.\n"
+                << dump_argument_list();
+        }
+    }
+
+    // Sort the rvars kept and its rename based on the dims list order to avoid
+    // changing the loop order
+    std::sort(preserved.begin(), preserved.end(),
+        [&](const pair<RVar, Var> &lhs, const pair<RVar, Var> &rhs){
+            const auto iter_lhs = std::find_if(
+                dims.begin(), dims.end(), [&lhs](const Dim& dim) { return var_name_match(dim.var, lhs.first.name()); });
+            const auto iter_rhs = std::find_if(
+                dims.begin(), dims.end(), [&rhs](const Dim& dim) { return var_name_match(dim.var, rhs.first.name()); });
+            return iter_lhs < iter_rhs;
+        }
+    );
+
+    vector<RVar> rvars_kept(preserved.size()); // The list of RVars to keep in the final Func
+    vector<Var> vars_rename(preserved.size()); // List of pure Vars to replace the RVars in the intermediate Func
+    for (size_t i = 0; i < preserved.size(); ++i) {
+        const auto &val = preserved[i];
+        rvars_kept[i] = val.first;
+        vars_rename[i] = val.second;
+    }
+
+    // Init definition of the intermediate Func.
+    // We add new pure vars in the inner loop which replace the original
+    // rvars 'rvars_kept' in the Func's definition.
+    vector<Var> init_args;
+    init_args.insert(init_args.end(), vars_rename.begin(), vars_rename.end());
+    init_args.insert(init_args.end(), dim_vars.begin(), dim_vars.end());
+
+    // TODO(psuriana): should replace this with the identity
+    vector<Expr> init_vals(values.size(), 0);
+
+    Func intm(func_name + "_intm");
+    intm(init_args) = Tuple(init_vals);
+
+    for (const auto &d : rvars_kept) {
+        debug(0) << "RVAR KEPT: " << d.name() << "\n";
+    }
+
+    // Remove any rvars not in 'rvars_kept' from the dims list.
+    // Those removed reduction dims are to be lifted to the intermediate Func.
+    {
+        vector<Dim> temp;
+        for (const Dim &dim : dims) {
+            debug(0) << dim.var << " is_rvar? " << dim.is_rvar << "\n";
+            if (dim.is_rvar) {
+                const auto &iter = std::find_if(
+                    rvars_kept.begin(), rvars_kept.end(), [&dim](const RVar& v) { return dim.var == v.name(); });
+                if (iter != rvars_kept.end()) {
+                    temp.push_back(dim);
+                } else {
+                    rvars_lifted.push(dim.var, dim.var);
+                }
+            }
+        }
+        for (const auto& d: temp) {
+            debug(0) << "TEMP VAR: " << d.var << "\n";
+        }
+        dims.swap(temp);
+    }
+    // Add the new pure dims we just added to the dim list
+    for (const Var &v : dim_vars) {
+        Dim d = {v.name(), ForType::Serial, DeviceAPI::None, true, false};
+        dims.push_back(d);
+    }
+    dims.push_back({Var::outermost().name(), ForType::Serial, DeviceAPI::None, true, false});
+
+    // Remove any rvars not in 'rvars_kept' from the 'rvars'.
+    // Those removed reduction dims are to be lifted to the intermediate Func.
+    vector<ReductionVariable> intm_rvars;
+    {
+        vector<ReductionVariable> temp;
+        for (const auto &rv : rvars) {
+            const auto &iter = std::find_if(
+                rvars_kept.begin(), rvars_kept.end(), [&rv](const RVar& rvar) { return var_name_match(rv.var, rvar.name()); });
+            if (iter == rvars_kept.end()) {
+                intm_rvars.push_back(rv);
+            } else {
+                temp.push_back(rv);
+            }
+        }
+        rvars.swap(temp);
+    }
+    RDom intm_rdom(intm_rvars);
+    RDom f_rdom(rvars);
+
+    // Update definition args of the intermediate Func
+    vector<Expr> update_args(args.size() + vars_rename.size());
+    // We need to substitute the old reference to the RVars with the new RVars/Vars
+    map<string, Expr> substitution_map;
+    for (size_t i = 0; i < intm_rvars.size(); ++i) {
+        substitution_map[intm_rvars[i].var] = intm_rdom[i];
+    }
+    for (size_t i = 0; i < vars_rename.size(); i++) {
+        update_args[i] = vars_rename[i];
+        substitution_map[rvars_kept[i].name()] = update_args[i];
+    }
+    for (size_t i = 0; i < args.size(); i++) {
+        // Substitute old RVars with the new RVars/Vars
+        Expr arg = substitute(substitution_map, args[i]);
+        update_args[i + vars_rename.size()] = arg;
+    }
+
+    // Compute the predicates for the intermediate Func and the new update definition.
+    debug(0) << "PREDICATE INIT: " << definition.predicate() << "\n";
+    const vector<Expr> predicates = definition.split_predicate();
+    for (const Expr &pred : predicates) {
+        debug(0) << "PREDICATE: " << pred << "\n";
+        Expr subs_pred = substitute(substitution_map, pred);
+        intm_rdom.where(subs_pred);
+        if (!expr_uses_vars(pred, rvars_lifted)) {
+            f_rdom.where(pred);
+        }
+    }
+    definition.predicate() = f_rdom.domain().predicate();
+
+    {
+        debug(0) << "\nLIFTED_RDOM:\n" << intm_rdom << "\n\n";
+        debug(0) << "NEW DEF RDOM:\n" << f_rdom << "\n\n";
+    }
+
+    {
+        debug(0) << "\n*********ORIGINAL DIMS: \n";
+        for (const auto &dim : dims) {
+            debug(0) << "DIM: " << dim.var << "\n";
+        }
+
+        debug(0) << "\n*********PURE ARGS: \n";
+        for (const auto &arg : dim_vars) {
+            debug(0) << "PURE ARG: " << arg.name() << "\n";
+        }
+
+        debug(0) << "\n*********ORIGINAL ARGS: \n";
+        for (const auto &arg : args) {
+            debug(0) << "ARGS: " << arg << "\n";
+        }
+
+        debug(0) << "\n*********ORIGINAL VALS: \n";
+        for (const auto &val : values) {
+            debug(0) << "VALS: " << val << "\n";
+        }
+
+        debug(0) << "\n*********INIT ARGS: \n";
+        for (const auto &arg : init_args) {
+            debug(0) << "ARGS: " << arg.name() << "\n";
+        }
+        debug(0) << "\n*********INIT VALS: \n";
+        for (const auto &val : init_vals) {
+            debug(0) << "VALS: " << val << "\n";
+        }
+        debug(0) << "\n*********UPDATE ARGS: \n";
+        for (const auto &arg : update_args) {
+            debug(0) << "ARGS: " << arg << "\n";
+        }
+    }
+
+    // The update values the intermediate Func should compute
+    vector<Expr> update_vals(values.size());
+    for (size_t i = 0; i < update_vals.size(); i++) {
+        // Substitute old RVars with the new RVars/Vars
+        Expr val = substitute(substitution_map, values[i]);
+        // Need to update the self-reference to the new Func
+        val = substitute_self_reference(val, func_name, intm.function(), vars_rename);
+        update_vals[i] = val;
+    }
+    intm(update_args) = Tuple(update_vals);
+
+    //TODO(psuriana): Copy the Split list to the intermediate Func
+
+    // Define the new update definition which refers to the intermediate Func instead
+    vector<Expr> f_store_args(dim_vars.size());
+    for (size_t i = 0; i < f_store_args.size(); ++i) {
+        f_store_args[i] = dim_vars[i];
+    }
+
+    vector<Expr> f_load_args;
+    for (int i = 0; i < f_rdom.dimensions(); ++i) {
+        f_load_args.push_back(f_rdom[i]);
+    }
+    f_load_args.insert(f_load_args.end(), dim_vars.begin(), dim_vars.end());
+
+    vector<Expr> f_values(values.size());
+    if (values.size() > 1) {
+        for (size_t i = 0; i < f_values.size(); ++i) {
+            Expr prev_val = Call::make(intm.output_types()[i], func_name, f_store_args, Call::CallType::Halide, nullptr, i);
+            f_values[i] = prev_val + intm(f_load_args)[i];
+        }
+    } else {
+        Expr prev_val = Call::make(intm.output_types()[0], func_name, f_store_args, Call::CallType::Halide);
+        f_values[0] = prev_val + intm(f_load_args);
+    }
+
+    // Update the definition
+    args.swap(f_store_args);
+    values.swap(f_values);
+
+    {
+        debug(0) << "\n*********UPDATE VALS: \n";
+        for (const auto &val : intm.function().update(0).values()) {
+            debug(0) << "VALS: " << val << "\n";
+        }
+        debug(0) << "*********\n\n";
+
+        debug(0) << "\n*********F_STORE ARGS: \n";
+        for (const auto &arg : args) {
+            debug(0) << "ARGS: " << arg << "\n";
+        }
+        debug(0) << "\n*********F_LOAD ARGS: \n";
+        for (const auto &arg : f_load_args) {
+            debug(0) << "ARGS: " << arg << "\n";
+        }
+
+        debug(0) << "\n*********F_VALS: \n";
+        for (const auto &val : values) {
+            debug(0) << "VALS: " << val << "\n";
+        }
+    }
+
+    {
+        debug(0) << "\n*********intermediate INIT DIM: \n";
+        for (const auto &dim : intm.function().schedule().dims()) {
+            debug(0) << "DIM: " << dim.var << "\n";
+        }
+        debug(0) << "\n*********intermediate UPDATE DIM: \n";
+        for (const auto &dim : intm.function().update_schedule(0).dims()) {
+            debug(0) << "DIM: " << dim.var << "\n";
+        }
+        debug(0) << "\n*********NEW FINAL UPDATE DIM: \n";
+        for (const auto &dim : dims) {
+            debug(0) << "DIM: " << dim.var << "\n";
+        }
+    }
+    return intm;
+}
 
 void Stage::split(const string &old, const string &outer, const string &inner, Expr factor, bool exact, TailStrategy tail) {
     vector<Dim> &dims = definition.schedule().dims();
@@ -482,12 +803,12 @@ Stage Stage::specialize(Expr condition) {
     const vector<Specialization> &specializations = definition.specializations();
     for (size_t i = 0; i < specializations.size(); i++) {
         if (equal(condition, specializations[i].condition)) {
-            return Stage(specializations[i].definition, stage_name);
+            return Stage(specializations[i].definition, stage_name, dim_vars);
         }
     }
     const Specialization &s = definition.add_specialization(condition);
 
-    return Stage(s.definition, stage_name);
+    return Stage(s.definition, stage_name, dim_vars);
 }
 
 Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
@@ -978,24 +1299,24 @@ Func Func::in() {
 
 Func &Func::split(VarOrRVar old, VarOrRVar outer, VarOrRVar inner, Expr factor, TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name()).split(old, outer, inner, factor, tail);
+    Stage(func.definition(), name(), args()).split(old, outer, inner, factor, tail);
     return *this;
 }
 
 Func &Func::fuse(VarOrRVar inner, VarOrRVar outer, VarOrRVar fused) {
     invalidate_cache();
-    Stage(func.definition(), name()).fuse(inner, outer, fused);
+    Stage(func.definition(), name(), args()).fuse(inner, outer, fused);
     return *this;
 }
 
 Func &Func::rename(VarOrRVar old_name, VarOrRVar new_name) {
     invalidate_cache();
-    Stage(func.definition(), name()).rename(old_name, new_name);
+    Stage(func.definition(), name(), args()).rename(old_name, new_name);
     return *this;
 }
 
 Func &Func::allow_race_conditions() {
-    Stage(func.definition(), name()).allow_race_conditions();
+    Stage(func.definition(), name(), args()).allow_race_conditions();
     return *this;
 }
 
@@ -1007,48 +1328,48 @@ Func &Func::memoize() {
 
 Stage Func::specialize(Expr c) {
     invalidate_cache();
-    return Stage(func.definition(), name()).specialize(c);
+    return Stage(func.definition(), name(), args()).specialize(c);
 }
 
 Func &Func::serial(VarOrRVar var) {
     invalidate_cache();
-    Stage(func.definition(), name()).serial(var);
+    Stage(func.definition(), name(), args()).serial(var);
     return *this;
 }
 
 Func &Func::parallel(VarOrRVar var) {
     invalidate_cache();
-    Stage(func.definition(), name()).parallel(var);
+    Stage(func.definition(), name(), args()).parallel(var);
     return *this;
 }
 
 Func &Func::vectorize(VarOrRVar var) {
     invalidate_cache();
-    Stage(func.definition(), name()).vectorize(var);
+    Stage(func.definition(), name(), args()).vectorize(var);
     return *this;
 }
 
 Func &Func::unroll(VarOrRVar var) {
     invalidate_cache();
-    Stage(func.definition(), name()).unroll(var);
+    Stage(func.definition(), name(), args()).unroll(var);
     return *this;
 }
 
 Func &Func::parallel(VarOrRVar var, Expr factor, TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name()).parallel(var, factor, tail);
+    Stage(func.definition(), name(), args()).parallel(var, factor, tail);
     return *this;
 }
 
 Func &Func::vectorize(VarOrRVar var, int factor, TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name()).vectorize(var, factor, tail);
+    Stage(func.definition(), name(), args()).vectorize(var, factor, tail);
     return *this;
 }
 
 Func &Func::unroll(VarOrRVar var, int factor, TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name()).unroll(var, factor, tail);
+    Stage(func.definition(), name(), args()).unroll(var, factor, tail);
     return *this;
 }
 
@@ -1081,7 +1402,7 @@ Func &Func::tile(VarOrRVar x, VarOrRVar y,
                  Expr xfactor, Expr yfactor,
                  TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name()).tile(x, y, xo, yo, xi, yi, xfactor, yfactor, tail);
+    Stage(func.definition(), name(), args()).tile(x, y, xo, yo, xi, yi, xfactor, yfactor, tail);
     return *this;
 }
 
@@ -1090,79 +1411,79 @@ Func &Func::tile(VarOrRVar x, VarOrRVar y,
                  Expr xfactor, Expr yfactor,
                  TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name()).tile(x, y, xi, yi, xfactor, yfactor, tail);
+    Stage(func.definition(), name(), args()).tile(x, y, xi, yi, xfactor, yfactor, tail);
     return *this;
 }
 
 Func &Func::reorder(const std::vector<VarOrRVar> &vars) {
     invalidate_cache();
-    Stage(func.definition(), name()).reorder(vars);
+    Stage(func.definition(), name(), args()).reorder(vars);
     return *this;
 }
 
 Func &Func::gpu_threads(VarOrRVar tx, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_threads(tx, device_api);
+    Stage(func.definition(), name(), args()).gpu_threads(tx, device_api);
     return *this;
 }
 
 Func &Func::gpu_threads(VarOrRVar tx, VarOrRVar ty, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_threads(tx, ty, device_api);
+    Stage(func.definition(), name(), args()).gpu_threads(tx, ty, device_api);
     return *this;
 }
 
 Func &Func::gpu_threads(VarOrRVar tx, VarOrRVar ty, VarOrRVar tz, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_threads(tx, ty, tz, device_api);
+    Stage(func.definition(), name(), args()).gpu_threads(tx, ty, tz, device_api);
     return *this;
 }
 
 Func &Func::gpu_blocks(VarOrRVar bx, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_blocks(bx, device_api);
+    Stage(func.definition(), name(), args()).gpu_blocks(bx, device_api);
     return *this;
 }
 
 Func &Func::gpu_blocks(VarOrRVar bx, VarOrRVar by, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_blocks(bx, by, device_api);
+    Stage(func.definition(), name(), args()).gpu_blocks(bx, by, device_api);
     return *this;
 }
 
 Func &Func::gpu_blocks(VarOrRVar bx, VarOrRVar by, VarOrRVar bz, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_blocks(bx, by, bz, device_api);
+    Stage(func.definition(), name(), args()).gpu_blocks(bx, by, bz, device_api);
     return *this;
 }
 
 Func &Func::gpu_single_thread(DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_single_thread(device_api);
+    Stage(func.definition(), name(), args()).gpu_single_thread(device_api);
     return *this;
 }
 
 Func &Func::gpu(VarOrRVar bx, VarOrRVar tx, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu(bx, tx, device_api);
+    Stage(func.definition(), name(), args()).gpu(bx, tx, device_api);
     return *this;
 }
 
 Func &Func::gpu(VarOrRVar bx, VarOrRVar by, VarOrRVar tx, VarOrRVar ty, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu(bx, by, tx, ty, device_api);
+    Stage(func.definition(), name(), args()).gpu(bx, by, tx, ty, device_api);
     return *this;
 }
 
 Func &Func::gpu(VarOrRVar bx, VarOrRVar by, VarOrRVar bz, VarOrRVar tx, VarOrRVar ty, VarOrRVar tz, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu(bx, by, bz, tx, ty, tz, device_api);
+    Stage(func.definition(), name(), args()).gpu(bx, by, bz, tx, ty, tz, device_api);
     return *this;
 }
 
 Func &Func::gpu_tile(VarOrRVar x, int x_size, TailStrategy tail, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_tile(x, x_size, tail, device_api);
+    Stage(func.definition(), name(), args()).gpu_tile(x, x_size, tail, device_api);
     return *this;
 }
 
@@ -1171,7 +1492,7 @@ Func &Func::gpu_tile(VarOrRVar x, VarOrRVar y,
                      TailStrategy tail,
                      DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_tile(x, y, x_size, y_size, tail, device_api);
+    Stage(func.definition(), name(), args()).gpu_tile(x, y, x_size, y_size, tail, device_api);
     return *this;
 }
 
@@ -1180,7 +1501,7 @@ Func &Func::gpu_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
                      TailStrategy tail,
                      DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name()).gpu_tile(x, y, z, x_size, y_size, z_size, tail, device_api);
+    Stage(func.definition(), name(), args()).gpu_tile(x, y, z, x_size, y_size, z_size, tail, device_api);
     return *this;
 }
 
@@ -1193,7 +1514,7 @@ Func &Func::shader(Var x, Var y, Var c, DeviceAPI device_api) {
 
     // TODO: Set appropriate constraints if this is the output buffer?
 
-    Stage(func.definition(), name()).gpu_blocks(x, y, device_api);
+    Stage(func.definition(), name(), args()).gpu_blocks(x, y, device_api);
 
     bool constant_bounds = false;
     Schedule &sched = func.schedule();
@@ -1358,11 +1679,12 @@ Stage Func::update(int idx) {
       name() << "\".\n";
     invalidate_cache();
     return Stage(func.update(idx),
-                 name() + ".update(" + std::to_string(idx) + ")");
+                 name() + ".update(" + std::to_string(idx) + ")",
+                 args());
 }
 
 Func::operator Stage() const {
-    return Stage(func.definition(), name());
+    return Stage(func.definition(), name(), args());
 }
 
 FuncRefVar::FuncRefVar(Internal::Function f, const vector<Var> &a, int placeholder_pos) : func(f) {
@@ -1450,7 +1772,7 @@ Stage FuncRefVar::operator=(const Tuple &e) {
     vector<string> a = args_with_implicit_vars(e.as_vector());
     func.define(a, e.as_vector());
 
-    return Stage(func.definition(), func.name());
+    return Stage(func.definition(), func.name(), func.args());
 }
 
 Stage FuncRefVar::operator=(const FuncRefVar &e) {
@@ -1601,7 +1923,8 @@ Stage FuncRefExpr::operator=(const Tuple &e) {
 
     size_t update_stage = func.updates().size() - 1;
     return Stage(func.update(update_stage),
-                 func.name() + ".update(" + std::to_string(update_stage) + ")");
+                 func.name() + ".update(" + std::to_string(update_stage) + ")",
+                 func.args());
 }
 
 Stage FuncRefExpr::operator=(const FuncRefExpr &e) {
