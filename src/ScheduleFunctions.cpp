@@ -338,6 +338,8 @@ Stmt build_provide_loop_nest_helper(string func_name,
             stmt = LetStmt::make(prefix + split.old_var + ".loop_extent", fused_extent, stmt);
         } else {
             // rename
+            debug(0) << prefix + split.outer + ".loop_min" << ": " << old_var_min << "\n";
+            debug(0) << "***OLD VAR: " << split.old_var << "\n";
             stmt = LetStmt::make(prefix + split.outer + ".loop_min", old_var_min, stmt);
             stmt = LetStmt::make(prefix + split.outer + ".loop_max", old_var_max, stmt);
             stmt = LetStmt::make(prefix + split.outer + ".loop_extent", old_var_extent, stmt);

@@ -27,6 +27,7 @@
 #include "LLVM_Output.h"
 #include "Substitute.h"
 #include "ExprUsesVar.h"
+#include "Simplify.h"
 
 namespace Halide {
 
@@ -381,21 +382,37 @@ Expr substitute_self_reference(Expr val, const string &func, const Function &sub
 
 void apply_split(const Split &s, vector<ReductionVariable> &rvars) {
     internal_assert(s.is_split());
-    const auto &iter = std::find_if(
-        rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.old_name, rv.name()); });
-    if(iter != rvars.end()) {
+    const auto iter = std::find_if(
+        rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
+    if (iter != rvars.end()) {
+        debug(0) << "  Splitting RVar " << iter->var << " into " << s.old_var << "\n";
+        Expr old_extent = iter->extent;
+        iter->var = s.inner;
+        iter->min = 0;
+        iter->extent = s.factor;
 
+        ReductionVariable outer = {s.outer, 0, simplify((old_extent - 1 + s.factor)/s.factor)};
+        rvars.insert(iter + 1, outer);
     }
 }
 
 void apply_fuse(const Split &s, vector<ReductionVariable> &rvars) {
     internal_assert(s.is_fuse());
-
+    const auto iter = std::find_if(
+        rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
+    if (iter != rvars.end()) {
+        debug(0) << "  Fusing RVar " << s.outer << " and " << s.inner << " into " << s.old_var << "\n";
+    }
 }
 
 void apply_rename(const Split &s, vector<ReductionVariable> &rvars) {
     internal_assert(s.is_rename());
-
+    const auto iter = std::find_if(
+        rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
+    if (iter != rvars.end()) {
+        debug(0) << "  Renaming RVar " << iter->var << " into " << s.outer << "\n";
+        iter->var = s.outer;
+    }
 }
 
 void apply_split_directive(const Split &s, vector<ReductionVariable> &rvars) {
@@ -413,6 +430,7 @@ void apply_split_directive(const Split &s, vector<ReductionVariable> &rvars) {
 Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     user_assert(!definition.is_init()) << "rfactor() must be called on an update definition\n";
 
+    vector<Split> &splits = definition.schedule().splits();
     vector<Expr> &args = definition.args();
     vector<Expr> &values = definition.values();
     vector<ReductionVariable> &rvars = definition.schedule().rvars();
@@ -515,21 +533,35 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     // Remove any rvars not in 'rvars_kept' from the reduction dims 'rvars'.
     // Those removed reduction dims are to be lifted to the intermediate Func.
     vector<ReductionVariable> intm_rvars;
+    for (const auto &rv : rvars) {
+        const auto &iter = std::find_if(
+            rvars_kept.begin(), rvars_kept.end(), [&rv](const RVar& rvar) { return var_name_match(rv.var, rvar.name()); });
+        if (iter == rvars_kept.end()) {
+            intm_rvars.push_back(rv);
+        }
+    }
+    RDom intm_rdom(intm_rvars);
+
+    for (const Split &s : splits) {
+        apply_split_directive(s, rvars);
+    }
     {
         vector<ReductionVariable> temp;
         for (const auto &rv : rvars) {
             const auto &iter = std::find_if(
                 rvars_kept.begin(), rvars_kept.end(), [&rv](const RVar& rvar) { return var_name_match(rv.var, rvar.name()); });
-            if (iter == rvars_kept.end()) {
-                intm_rvars.push_back(rv);
-            } else {
+            if (iter != rvars_kept.end()) {
                 temp.push_back(rv);
             }
         }
         rvars.swap(temp);
     }
-    RDom intm_rdom(intm_rvars);
     RDom f_rdom(rvars);
+
+    {
+        debug(0) << "\nINTM RDOM: \n" << intm_rdom << "\n";
+        debug(0) << "\nNEW RDOM: \n" << f_rdom << "\n";
+    }
 
     // Update definition args of the intermediate Func
     vector<Expr> update_args(args.size() + vars_rename.size());
@@ -573,7 +605,6 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     // Determine the dims and schedule of the update definition of the
     // intermediate function.
-    vector<Split> &splits = definition.schedule().splits();
     for (const Split &s : splits) {
         intm.update(0).apply(s);
     }
@@ -852,7 +883,7 @@ void Stage::rename(const string &old_var, const string &new_var, bool exact, boo
 
     // Replace the old dimension with the new dimensions in the dims list
     bool found = false;
-    string old_name;
+    string old_name = old_var;
     vector<Dim> &dims = schedule.dims();
     for (size_t i = 0; (!found) && i < dims.size(); i++) {
         if (var_name_match(dims[i].var, old_var, assert_on)) {
@@ -873,6 +904,8 @@ void Stage::rename(const string &old_var, const string &new_var, bool exact, boo
             << dump_argument_list();
 
     }
+
+    debug(0) << "***rename " << old_name << " to " << new_name << "\n";
 
     // If possible, rewrite the split or rename that defines it.
     found = false;
