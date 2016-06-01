@@ -222,8 +222,8 @@ Stmt build_provide_loop_nest_helper(string func_name,
                 outer_dim != known_size_dims.end()) {
                 known_size_dims[split.old_var] = inner_dim->second*outer_dim->second;
             }
-
         } else {
+            // rename or purify
             stmt = substitute(prefix + split.old_var, outer, stmt);
             stmt = LetStmt::make(prefix + split.old_var, outer, stmt);
         }
@@ -313,7 +313,8 @@ Stmt build_provide_loop_nest_helper(string func_name,
     }
 
     // Define the bounds on the split dimensions using the bounds
-    // on the function args
+    // on the function args. If it is a purify, we should use the bounds
+    // from the dims instead.
     for (size_t i = splits.size(); i > 0; i--) {
         const Split &split = splits[i-1];
         Expr old_var_extent = Variable::make(Int(32), prefix + split.old_var + ".loop_extent");
@@ -336,14 +337,12 @@ Stmt build_provide_loop_nest_helper(string func_name,
             stmt = LetStmt::make(prefix + split.old_var + ".loop_min", 0, stmt);
             stmt = LetStmt::make(prefix + split.old_var + ".loop_max", fused_extent - 1, stmt);
             stmt = LetStmt::make(prefix + split.old_var + ".loop_extent", fused_extent, stmt);
-        } else {
-            // rename
-            debug(0) << prefix + split.outer + ".loop_min" << ": " << old_var_min << "\n";
-            debug(0) << "***OLD VAR: " << split.old_var << "\n";
+        } else if (split.is_rename()) {
             stmt = LetStmt::make(prefix + split.outer + ".loop_min", old_var_min, stmt);
             stmt = LetStmt::make(prefix + split.outer + ".loop_max", old_var_max, stmt);
             stmt = LetStmt::make(prefix + split.outer + ".loop_extent", old_var_extent, stmt);
         }
+        // Do nothing for purify
     }
 
     // Define the bounds on the outermost dummy dimension.

@@ -55,14 +55,7 @@ class Stage {
     void set_dim_type(VarOrRVar var, Internal::ForType t);
     void set_dim_device_api(VarOrRVar var, DeviceAPI device_api);
     void split(const std::string &old, const std::string &outer, const std::string &inner,
-               Expr factor, bool exact, TailStrategy tail, bool assert_on=true, bool use_old_name=true);
-    void fuse(const std::string &inner, const std::string &outer,
-              const std::string &fused, bool assert_on=true, bool use_old_name=true);
-    void rename(const std::string &old_var, const std::string &new_var,
-                bool exact, bool assert_on=true, bool use_old_name=true);
-
-    /** Apply the schedule in 'split' to this Stage. */
-    void apply(const Internal::Split &s);
+               Expr factor, bool exact, TailStrategy tail);
 
 public:
     Stage(Internal::Definition d, const std::string &n, const std::vector<Var> &args)
@@ -135,6 +128,7 @@ public:
         return reorder(collected_args);
     }
 
+    EXPORT Stage &purify(VarOrRVar old_name, VarOrRVar new_name);
     EXPORT Stage &rename(VarOrRVar old_name, VarOrRVar new_name);
     EXPORT Stage specialize(Expr condition);
 

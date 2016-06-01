@@ -119,13 +119,17 @@ struct Split {
                 // tail strategy to be GuardWithIf.
     TailStrategy tail;
 
-    enum SplitType {SplitVar = 0, RenameVar, FuseVars};
+    enum SplitType {SplitVar = 0, RenameVar, FuseVars, PurifyRVar};
 
     // If split_type is Rename, then this is just a renaming of the
     // old_var to the outer and not a split. The inner var should
     // be ignored, and factor should be one. Renames are kept in
     // the same list as splits so that ordering between them is
     // respected.
+
+    // If split type is Purify, this replaces the old_var RVar to
+    // the outer Var. The inner var should be ignored, and factor
+    // should be one.
 
     // If split_type is Fuse, then this does the opposite of a
     // split, it joins the outer and inner into the old_var.
@@ -134,6 +138,7 @@ struct Split {
     bool is_rename() const {return split_type == RenameVar;}
     bool is_split() const {return split_type == SplitVar;}
     bool is_fuse() const {return split_type == FuseVars;}
+    bool is_purify() const {return split_type == PurifyRVar;}
 };
 
 struct Dim {
@@ -247,6 +252,7 @@ public:
      * the pipeline with the wrapper. See \ref Func::in for more details. */
     // @{
     const std::map<std::string, IntrusivePtr<Internal::FunctionContents>> &wrappers() const;
+    std::map<std::string, IntrusivePtr<Internal::FunctionContents>> &wrappers();
     EXPORT void add_wrapper(const std::string &f,
                             const IntrusivePtr<Internal::FunctionContents> &wrapper);
     // @}

@@ -252,9 +252,9 @@ int Func::add_implicit_vars(vector<Expr> &args) const {
 
 namespace {
 bool var_name_match(string candidate, string var, bool assert_on=true) {
-    internal_assert(!assert_on || var.find('.') == string::npos)
+    /*internal_assert(!assert_on || var.find('.') == string::npos)
         << "var_name_match expects unqualified names for the second argument. "
-        << "Name passed: " << var << "\n";
+        << "Name passed: " << var << "\n";*/
     if (candidate == var) return true;
     return Internal::ends_with(candidate, "." + var);
 }
@@ -385,7 +385,7 @@ void apply_split(const Split &s, vector<ReductionVariable> &rvars) {
     const auto iter = std::find_if(
         rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
     if (iter != rvars.end()) {
-        debug(0) << "  Splitting RVar " << iter->var << " into " << s.old_var << "\n";
+        debug(4) << "  Splitting " << iter->var << " into " << s.outer << " and " << s.inner << "\n";
         Expr old_extent = iter->extent;
         iter->var = s.inner;
         iter->min = 0;
@@ -398,10 +398,28 @@ void apply_split(const Split &s, vector<ReductionVariable> &rvars) {
 
 void apply_fuse(const Split &s, vector<ReductionVariable> &rvars) {
     internal_assert(s.is_fuse());
+    const auto iter_outer = std::find_if(
+        rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.outer, rv.var); });
+    const auto iter_inner = std::find_if(
+        rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.inner, rv.var); });
+
+    if ((iter_outer != rvars.end()) && (iter_inner != rvars.end())) {
+        debug(4) << "  Fusing " << s.outer << " and " << s.inner << " into " << s.old_var << "\n";
+        Expr extent = iter_outer->extent * iter_inner->extent;
+        iter_outer->var = s.old_var;
+        iter_outer->min = 0;
+        iter_outer->extent = extent;
+        rvars.erase(iter_inner);
+    }
+}
+
+void apply_purify(const Split &s, vector<ReductionVariable> &rvars) {
+    internal_assert(s.is_purify());
     const auto iter = std::find_if(
         rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
     if (iter != rvars.end()) {
-        debug(0) << "  Fusing RVar " << s.outer << " and " << s.inner << " into " << s.old_var << "\n";
+        debug(4) << "  Purify RVar " << iter->var << " into Var " << s.outer << "\n";
+        iter->var = s.outer;
     }
 }
 
@@ -410,7 +428,7 @@ void apply_rename(const Split &s, vector<ReductionVariable> &rvars) {
     const auto iter = std::find_if(
         rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
     if (iter != rvars.end()) {
-        debug(0) << "  Renaming RVar " << iter->var << " into " << s.outer << "\n";
+        debug(4) << "  Renaming " << iter->var << " into " << s.outer << "\n";
         iter->var = s.outer;
     }
 }
@@ -420,6 +438,8 @@ void apply_split_directive(const Split &s, vector<ReductionVariable> &rvars) {
         apply_split(s, rvars);
     } else if (s.is_fuse()) {
         apply_fuse(s, rvars);
+    } else if (s.is_purify()) {
+        apply_purify(s, rvars);
     } else {
         apply_rename(s, rvars);
     }
@@ -435,7 +455,15 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     vector<Expr> &values = definition.values();
     vector<ReductionVariable> &rvars = definition.schedule().rvars();
     vector<Dim> &dims = definition.schedule().dims();
+    vector<Dim> old_dims = dims;
     Scope<string> rvars_lifted;
+
+    if (0) {
+        debug(0) << "\n\n*********ORIGINAL DIM: \n";
+        for (const auto &dim : dims) {
+            debug(0) << "DIM: " << dim.var << "\n";
+        }
+    }
 
     string func_name;
     {
@@ -469,17 +497,51 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         }
     }
 
-    // Sort the rvars kept and its rename based on the dims list order to avoid
-    // changing the loop order
+    // Remove any rvars not in 'rvars_kept' from the reduction dims 'rvars'.
+    // Those removed reduction dims are to be lifted to the intermediate Func.
+    vector<ReductionVariable> intm_rvars;
+    for (const auto &rv : rvars) {
+        const auto &iter = std::find_if(
+            preserved.begin(), preserved.end(), [&rv](const pair<RVar, Var>& pair) { return var_name_match(rv.var, pair.first.name()); });
+        if (iter == preserved.end()) {
+            intm_rvars.push_back(rv);
+        }
+    }
+    RDom intm_rdom(intm_rvars);
+
+    for (const Split &s : splits) {
+        apply_split_directive(s, rvars);
+    }
+    // Sort the rvars kept and its rename based on the RDom, so that we can have
+    // a consistent order for the intermediate and new update definition
     std::sort(preserved.begin(), preserved.end(),
         [&](const pair<RVar, Var> &lhs, const pair<RVar, Var> &rhs){
             const auto iter_lhs = std::find_if(
-                dims.begin(), dims.end(), [&lhs](const Dim& dim) { return var_name_match(dim.var, lhs.first.name()); });
+                rvars.begin(), rvars.end(), [&lhs](const ReductionVariable& rv) { return var_name_match(rv.var, lhs.first.name()); });
             const auto iter_rhs = std::find_if(
-                dims.begin(), dims.end(), [&rhs](const Dim& dim) { return var_name_match(dim.var, rhs.first.name()); });
+                rvars.begin(), rvars.end(), [&rhs](const ReductionVariable& rv) { return var_name_match(rv.var, rhs.first.name()); });
             return iter_lhs < iter_rhs;
         }
     );
+
+    {
+        vector<ReductionVariable> temp;
+        for (const auto &rv : rvars) {
+            const auto &iter = std::find_if(
+                preserved.begin(), preserved.end(), [&rv](const pair<RVar, Var>& pair) { return var_name_match(rv.var, pair.first.name()); });
+            if (iter != preserved.end()) {
+                temp.push_back(rv);
+            }
+        }
+        rvars.swap(temp);
+    }
+    RDom f_rdom(rvars);
+
+    if (0) {
+        debug(0) << "\nINTM RDOM: \n" << intm_rdom << "\n";
+        debug(0) << "\nNEW RDOM: \n" << f_rdom << "\n";
+    }
+
 
     vector<RVar> rvars_kept(preserved.size()); // The list of RVars to keep in the final Func
     vector<Var> vars_rename(preserved.size()); // List of pure Vars to replace the RVars in the intermediate Func
@@ -530,43 +592,10 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     dims.push_back({Var::outermost().name(), ForType::Serial, DeviceAPI::None, true, false});
 
 
-    // Remove any rvars not in 'rvars_kept' from the reduction dims 'rvars'.
-    // Those removed reduction dims are to be lifted to the intermediate Func.
-    vector<ReductionVariable> intm_rvars;
-    for (const auto &rv : rvars) {
-        const auto &iter = std::find_if(
-            rvars_kept.begin(), rvars_kept.end(), [&rv](const RVar& rvar) { return var_name_match(rv.var, rvar.name()); });
-        if (iter == rvars_kept.end()) {
-            intm_rvars.push_back(rv);
-        }
-    }
-    RDom intm_rdom(intm_rvars);
-
-    for (const Split &s : splits) {
-        apply_split_directive(s, rvars);
-    }
-    {
-        vector<ReductionVariable> temp;
-        for (const auto &rv : rvars) {
-            const auto &iter = std::find_if(
-                rvars_kept.begin(), rvars_kept.end(), [&rv](const RVar& rvar) { return var_name_match(rv.var, rvar.name()); });
-            if (iter != rvars_kept.end()) {
-                temp.push_back(rv);
-            }
-        }
-        rvars.swap(temp);
-    }
-    RDom f_rdom(rvars);
-
-    {
-        debug(0) << "\nINTM RDOM: \n" << intm_rdom << "\n";
-        debug(0) << "\nNEW RDOM: \n" << f_rdom << "\n";
-    }
-
     // Update definition args of the intermediate Func
     vector<Expr> update_args(args.size() + vars_rename.size());
 
-    // We need to substitute the old reference to the RVars with the new RVars/Vars
+    // We need to substitute the old reference to the RVars with the new RVars
     map<string, Expr> substitution_map;
     for (size_t i = 0; i < intm_rvars.size(); ++i) {
         substitution_map[intm_rvars[i].var] = intm_rdom[i];
@@ -576,7 +605,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         substitution_map[rvars_kept[i].name()] = update_args[i];
     }
     for (size_t i = 0; i < args.size(); i++) {
-        // Substitute old RVars with the new RVars/Vars
+        // Substitute old RVars with the new RVars
         Expr arg = substitute(substitution_map, args[i]);
         update_args[i + vars_rename.size()] = arg;
     }
@@ -595,7 +624,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     // The update values the intermediate Func should compute
     vector<Expr> update_vals(values.size());
     for (size_t i = 0; i < update_vals.size(); i++) {
-        // Substitute old RVars with the new RVars/Vars
+        // Substitute old RVars with the new RVars
         Expr val = substitute(substitution_map, values[i]);
         // Need to update the self-reference to the new Func
         val = substitute_self_reference(val, func_name, intm.function(), vars_rename);
@@ -603,20 +632,33 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     }
     intm(update_args) = Tuple(update_vals);
 
-    // Determine the dims and schedule of the update definition of the
-    // intermediate function.
-    for (const Split &s : splits) {
-        intm.update(0).apply(s);
-    }
-    splits.clear(); // Clear the splits list since we've copied it to the intermediate Func.
-    for (size_t i = 0; i < rvars_kept.size(); ++i) {
-        // Replace the old RVar with a Var
-        intm.update(0).rename(rvars_kept[i].name(), vars_rename[i].name(),
-                              false, false, false);
+    if (0) {
+        debug(0) << "\n*********ORIGINAL intermediate UPDATE DIM: \n";
+        for (const auto &dim : intm.function().update_schedule(0).dims()) {
+            debug(0) << "DIM: " << dim.var << "\n";
+        }
+        debug(0) << "\n*********ORIGINAL intermediate UPDATE ARGS: \n";
+        for (const auto &arg : intm.function().update(0).args()) {
+            debug(0) << "ARG: " << arg << "\n";
+        }
+        debug(0) << "\n*********ORIGINAL intermediate UPDATE VALS: \n";
+        for (const auto &val : intm.function().update(0).values()) {
+            debug(0) << "VAL: " << val << "\n";
+        }
     }
 
-    {
-        debug(0) << "\n*********intermediate INIT DIM: \n";
+    // Determine the dims and schedule of the update definition of the
+    // intermediate function.
+    intm.function().update(0).schedule().dims() = old_dims;
+    intm.function().update(0).schedule().splits().swap(splits);
+
+    for (size_t i = 0; i < rvars_kept.size(); ++i) {
+        // Replace the old RVar with a Var
+        intm.update(0).purify(rvars_kept[i], vars_rename[i]);
+    }
+
+    if (0) {
+        debug(0) << "\n\n*********intermediate INIT DIM: \n";
         for (const auto &dim : intm.function().schedule().dims()) {
             debug(0) << "DIM: " << dim.var << "\n";
         }
@@ -657,14 +699,14 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     f_load_args.insert(f_load_args.end(), dim_vars.begin(), dim_vars.end());
     internal_assert(f_load_args.size() == init_args.size());
 
-    {
+    if (0) {
         debug(0) << "\n*********NEW FINAL DIM: \n";
         for (const auto &dim : dims) {
             debug(0) << "DIM: " << dim.var << "\n";
         }
 
         debug(0) << "\n*********F_STORE ARGS: \n";
-        for (const auto &arg : args) {
+        for (const auto &arg : f_store_args) {
             debug(0) << "ARGS: " << arg << "\n";
         }
         debug(0) << "\n*********F_LOAD ARGS: \n";
@@ -688,7 +730,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     args.swap(f_store_args);
     values.swap(f_values);
 
-    {
+    if (0) {
         debug(0) << "\n*********F_VALS: \n";
         for (const auto &val : values) {
             debug(0) << "VALS: " << val << "\n";
@@ -698,26 +740,15 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     return intm;
 }
 
-void Stage::apply(const Split &s) {
-    if (s.is_split()) {
-        split(s.old_var, s.outer, s.inner, s.factor, s.exact, s.tail, false, false);
-    } else if (s.is_fuse()) {
-        fuse(s.inner, s.outer, s.old_var, false, false);
-    } else {
-        rename(s.old_var, s.outer, s.exact, false, false);
-    }
-}
-
-void Stage::split(const string &old, const string &outer, const string &inner, Expr factor,
-                  bool exact, TailStrategy tail, bool assert_on, bool use_old_name) {
-    debug(0) << "In schedule for " << stage_name << ", split " << old << " into " << outer << " and " << inner << " with factor of " << factor << "\n";
+void Stage::split(const string &old, const string &outer, const string &inner, Expr factor, bool exact, TailStrategy tail) {
+    debug(4) << "In schedule for " << stage_name << ", split " << old << " into " << outer << " and " << inner << " with factor of " << factor << "\n";
     vector<Dim> &dims = definition.schedule().dims();
 
     // Check that the new names aren't already in the dims list.
     for (size_t i = 0; i < dims.size(); i++) {
         string new_names[2] = {inner, outer};
         for (int j = 0; j < 2; j++) {
-            if (var_name_match(dims[i].var, new_names[j], assert_on) && new_names[j] != old) {
+            if (var_name_match(dims[i].var, new_names[j]) && new_names[j] != old) {
                 user_error << "In schedule for " << stage_name
                            << ", can't create var " << new_names[j]
                            << " using a split or tile, because " << new_names[j]
@@ -731,16 +762,11 @@ void Stage::split(const string &old, const string &outer, const string &inner, E
     string inner_name, outer_name, old_name;
 
     for (size_t i = 0; (!found) && i < dims.size(); i++) {
-        if (var_name_match(dims[i].var, old, assert_on)) {
+        if (var_name_match(dims[i].var, old)) {
             found = true;
             old_name = dims[i].var;
-            if (use_old_name) {
-                inner_name = old_name + "." + inner;
-                outer_name = old_name + "." + outer;
-            } else {
-                inner_name = inner;
-                outer_name = outer;
-            }
+            inner_name = old_name + "." + inner;
+            outer_name = old_name + "." + outer;
             dims.insert(dims.begin() + i, dims[i]);
             dims[i].var = inner_name;
             dims[i+1].var = outer_name;
@@ -748,7 +774,7 @@ void Stage::split(const string &old, const string &outer, const string &inner, E
         }
     }
 
-    if (assert_on && !found) {
+    if (!found) {
         user_error << "In schedule for " << stage_name
                    << ", could not find split dimension: "
                    << old
@@ -773,54 +799,6 @@ Stage &Stage::split(VarOrRVar old, VarOrRVar outer, VarOrRVar inner, Expr factor
     return *this;
 }
 
-void Stage::fuse(const string &inner, const string &outer, const string &fused, bool assert_on, bool use_old_name) {
-    debug(0) << "In schedule for " << stage_name << ", fuse " << outer << " and " << inner << " into " << fused << "\n";
-
-    // Replace the old dimensions with the new dimension in the dims list
-    bool found_outer = false, found_inner = false;
-    string inner_name, outer_name, fused_name;
-    vector<Dim> &dims = definition.schedule().dims();
-
-    bool outer_pure = false;
-    for (size_t i = 0; (!found_outer) && i < dims.size(); i++) {
-        if (var_name_match(dims[i].var, outer, assert_on)) {
-            found_outer = true;
-            outer_name = dims[i].var;
-            outer_pure = dims[i].pure;
-            dims.erase(dims.begin() + i);
-        }
-    }
-    if (!found_outer) {
-        user_error << "In schedule for " << stage_name
-                   << ", could not find outer fuse dimension: "
-                   << outer
-                   << "\n"
-                   << dump_argument_list();
-    }
-
-    for (size_t i = 0; (!found_inner) && i < dims.size(); i++) {
-        if (var_name_match(dims[i].var, inner, assert_on)) {
-            found_inner = true;
-            inner_name = dims[i].var;
-            fused_name = use_old_name ? inner_name + "." + fused : fused;
-            dims[i].var = fused_name;
-            dims[i].pure &= outer_pure;
-        }
-    }
-
-    if (assert_on && !found_inner) {
-        user_error << "In schedule for " << stage_name
-                   << ", could not find inner fuse dimension: "
-                   << inner
-                   << "\n"
-                   << dump_argument_list();
-    }
-
-    // Add the fuse to the splits list
-    Split split = {fused_name, outer_name, inner_name, Expr(), true, TailStrategy::Auto, Split::FuseVars};
-    definition.schedule().splits().push_back(split);
-}
-
 Stage &Stage::fuse(VarOrRVar inner, VarOrRVar outer, VarOrRVar fused) {
     if (inner.is_rvar) {
         user_assert(outer.is_rvar) << "Can't fuse RVar " << inner.name()
@@ -833,7 +811,53 @@ Stage &Stage::fuse(VarOrRVar inner, VarOrRVar outer, VarOrRVar fused) {
         user_assert(!fused.is_rvar) << "Can't fuse Var " << inner.name()
                                     << "into RVar " << fused.name() << "\n";
     }
-    fuse(inner.name(), outer.name(), fused.name());
+
+    debug(4) << "In schedule for " << stage_name << ", fuse " << outer.name()
+             << " and " << inner.name() << " into " << fused.name() << "\n";
+
+    // Replace the old dimensions with the new dimension in the dims list
+    bool found_outer = false, found_inner = false;
+    string inner_name, outer_name, fused_name;
+    vector<Dim> &dims = definition.schedule().dims();
+
+    bool outer_pure = false;
+    for (size_t i = 0; (!found_outer) && i < dims.size(); i++) {
+        if (var_name_match(dims[i].var, outer.name())) {
+            found_outer = true;
+            outer_name = dims[i].var;
+            outer_pure = dims[i].pure;
+            dims.erase(dims.begin() + i);
+        }
+    }
+    if (!found_outer) {
+        user_error << "In schedule for " << stage_name
+                   << ", could not find outer fuse dimension: "
+                   << outer.name()
+                   << "\n"
+                   << dump_argument_list();
+    }
+
+    for (size_t i = 0; (!found_inner) && i < dims.size(); i++) {
+        if (var_name_match(dims[i].var, inner.name())) {
+            found_inner = true;
+            inner_name = dims[i].var;
+            fused_name = inner_name + "." + fused.name();
+            dims[i].var = fused_name;
+            dims[i].pure &= outer_pure;
+        }
+    }
+
+    if (!found_inner) {
+        user_error << "In schedule for " << stage_name
+                   << ", could not find inner fuse dimension: "
+                   << inner.name()
+                   << "\n"
+                   << dump_argument_list();
+    }
+
+    // Add the fuse to the splits list
+    Split split = {fused_name, outer_name, inner_name, Expr(), true, TailStrategy::Auto, Split::FuseVars};
+    definition.schedule().splits().push_back(split);
     return *this;
 }
 
@@ -876,36 +900,87 @@ Stage Stage::specialize(Expr condition) {
     return Stage(s.definition, stage_name, dim_vars);
 }
 
-void Stage::rename(const string &old_var, const string &new_var, bool exact, bool assert_on, bool use_old_name) {
-    debug(0) << "In schedule for " << stage_name << ", rename " << old_var << " to " << new_var << "\n";
+Stage &Stage::purify(VarOrRVar old_var, VarOrRVar new_var) {
+    user_assert(old_var.is_rvar && !new_var.is_rvar)
+        << "In schedule for " << stage_name
+        << ", can't rename " << (old_var.is_rvar ? "RVar " : "Var ") << old_var.name()
+        << " to " << (new_var.is_rvar ? "RVar " : "Var ") << new_var.name()
+        << "; purify must take a RVar as old_Var and a Var as new_var\n";
+
+    debug(4) << "In schedule for " << stage_name << ", purify RVar "
+             << old_var.name() << " to Var " << new_var.name() << "\n";
 
     Schedule &schedule = definition.schedule();
 
     // Replace the old dimension with the new dimensions in the dims list
     bool found = false;
-    string old_name = old_var;
+    string old_name, new_name = new_var.name();
     vector<Dim> &dims = schedule.dims();
+
     for (size_t i = 0; (!found) && i < dims.size(); i++) {
-        if (var_name_match(dims[i].var, old_var, assert_on)) {
+        if (var_name_match(dims[i].var, old_var.name(), false)) {
             found = true;
             old_name = dims[i].var;
-            dims[i].var += "." + new_var;
+            dims[i].var = new_name;
         }
     }
 
-    string new_name = use_old_name ? old_name + "." + new_var : new_var;
-
-    if (assert_on && !found) {
+    if (!found) {
         user_error
             << "In schedule for " << stage_name
             << ", could not find rename dimension: "
-            << old_var
+            << old_var.name()
+            << "\n"
+            << dump_argument_list();
+    }
+
+    Split split = {old_name, new_name, "", 1, false, TailStrategy::Auto, Split::PurifyRVar};
+    definition.schedule().splits().push_back(split);
+    return *this;
+}
+
+Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
+    if (old_var.is_rvar) {
+        user_assert(new_var.is_rvar)
+            << "In schedule for " << stage_name
+            << ", can't rename RVar " << old_var.name()
+            << " to Var " << new_var.name() << "\n";
+    } else {
+        user_assert(!new_var.is_rvar)
+            << "In schedule for " << stage_name
+            << ", can't rename Var " << old_var.name()
+            << " to RVar " << new_var.name() << "\n";
+    }
+
+    debug(4) << "In schedule for " << stage_name << ", rename " << old_var.name()
+             << " to " << new_var.name() << "\n";
+
+    Schedule &schedule = definition.schedule();
+
+    // Replace the old dimension with the new dimensions in the dims list
+    bool found = false;
+    string old_name;
+    vector<Dim> &dims = schedule.dims();
+    for (size_t i = 0; (!found) && i < dims.size(); i++) {
+        if (var_name_match(dims[i].var, old_var.name())) {
+            found = true;
+            old_name = dims[i].var;
+            dims[i].var += "." + new_var.name();
+        }
+    }
+
+    string new_name = old_name + "." + new_var.name();
+
+    if (!found) {
+        user_error
+            << "In schedule for " << stage_name
+            << ", could not find rename dimension: "
+            << old_var.name()
             << "\n"
             << dump_argument_list();
 
     }
 
-    debug(0) << "***rename " << old_name << " to " << new_name << "\n";
 
     // If possible, rewrite the split or rename that defines it.
     found = false;
@@ -948,25 +1023,9 @@ void Stage::rename(const string &old_var, const string &new_var, bool exact, boo
     }
 
     if (!found) {
-        Split split = {old_name, new_name, "", 1, exact, TailStrategy::Auto, Split::RenameVar};
+        Split split = {old_name, new_name, "", 1, old_var.is_rvar, TailStrategy::Auto, Split::RenameVar};
         definition.schedule().splits().push_back(split);
     }
-}
-
-Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
-    if (old_var.is_rvar) {
-        user_assert(new_var.is_rvar)
-            << "In schedule for " << stage_name
-            << ", can't rename RVar " << old_var.name()
-            << " to Var " << new_var.name() << "\n";
-    } else {
-        user_assert(!new_var.is_rvar)
-            << "In schedule for " << stage_name
-            << ", can't rename Var " << old_var.name()
-            << " to RVar " << new_var.name() << "\n";
-    }
-
-    rename(old_var.name(), new_var.name(), old_var.is_rvar);
 
     return *this;
 }

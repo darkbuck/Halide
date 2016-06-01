@@ -156,6 +156,10 @@ const std::vector<ReductionVariable> &Schedule::rvars() const {
     return contents->rvars;
 }
 
+std::map<std::string, IntrusivePtr<Internal::FunctionContents>> &Schedule::wrappers() {
+    return contents->wrappers;
+}
+
 const std::map<std::string, IntrusivePtr<Internal::FunctionContents>> &Schedule::wrappers() const {
     return contents->wrappers;
 }
