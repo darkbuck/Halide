@@ -287,7 +287,6 @@ SOURCE_FILES = \
   EarlyFree.cpp \
   EliminateBoolVectors.cpp \
   Error.cpp \
-  FactorRVars.cpp \
   FastIntegerDivide.cpp \
   FindCalls.cpp \
   Float16.cpp \
@@ -417,7 +416,6 @@ HEADER_FILES = \
   Expr.h \
   ExprUsesVar.h \
   Extern.h \
-  FactorRVars.h \
   FastIntegerDivide.h \
   FindCalls.h \
   Float16.h \
