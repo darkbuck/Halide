@@ -25,7 +25,6 @@ private:
     void visit(const ProducerConsumer *op) {
         string old_producer = producer;
         producer = op->name;
-        //debug(0) << "*******FOUND producer: " << producer << "\n";
         calls[producer]; // Make sure each producer is allocated a slot
         op->produce.accept(this);
         producer = old_producer;
@@ -33,7 +32,6 @@ private:
         if (op->update.defined()) {
             // Just lump all the update stages together
             producer = op->name + ".update(" + std::to_string(0) + ")";
-            //debug(0) << "*******FOUND producer: " << producer << "\n";
             calls[producer]; // Make sure each producer is allocated a slot
             op->update.accept(this);
             producer = old_producer;
@@ -48,7 +46,6 @@ private:
             assert(calls.count(producer) > 0);
             vector<string> &callees = calls[producer];
             if(std::find(callees.begin(), callees.end(), op->name) == callees.end()) {
-                //debug(0) << "******producer: " << producer << ", consumer: " << op->name << "\n";
                 callees.push_back(op->name);
             }
         }
@@ -116,7 +113,7 @@ int simple_rfactor_test(bool compile_module) {
 
     g(x, y) = 1;
     RDom r(10, 20, 30, 40);
-    g(r.x , r.y) += f(r.x, r.y);
+    g(r.x, r.y) += f(r.x, r.y);
 
     Var u("u");
     Func intm = g.update(0).rfactor({{r.y, u}});
@@ -247,7 +244,8 @@ int reorder_fuse_wrapper_rfactor_test(bool compile_module) {
     } else {
         Image<int> im = g.realize(20, 20, 20);
         auto func = [](int x, int y, int z) {
-            return ((5 <= x && x <= 14) && (5 <= y && y <= 14) && (5 <= z && z <= 14)) ? x + y + z + 1 : 1;
+            return ((5 <= x && x <= 14) && (5 <= y && y <= 14) &&
+                    (5 <= z && z <= 14)) ? x + y + z + 1 : 1;
         };
         if (check_image(im, func)) {
             return -1;
@@ -340,7 +338,7 @@ int simple_rfactor_with_specialize_test(bool compile_module) {
 
     g(x, y) = 1;
     RDom r(10, 20, 30, 40);
-    g(r.x , r.y) += f(r.x, r.y);
+    g(r.x, r.y) += f(r.x, r.y);
 
     Param<int> p;
     Var u("u");
@@ -430,7 +428,8 @@ int rdom_with_predicate_rfactor_test(bool compile_module) {
     } else {
         Image<int> im = g.realize(20, 20, 20);
         auto func = [](int x, int y, int z) {
-            return (5 <= x && x <= 14) && (5 <= y && y <= 14) && (0 <= z && z <= 19) && (x < y) && (x + 2*y <= z) ? x + y + z + 1 : 1;
+            return (5 <= x && x <= 14) && (5 <= y && y <= 14) &&
+                   (0 <= z && z <= 19) && (x < y) && (x + 2*y <= z) ? x + y + z + 1 : 1;
         };
         if (check_image(im, func)) {
             return -1;
@@ -492,7 +491,8 @@ int histogram_rfactor_test(bool compile_module) {
         Image<int32_t> histogram = g.realize(10); // buckets 10-20 only
         for (int i = 10; i < 20; i++) {
             if (histogram(i-10) != reference_hist[i]) {
-                printf("Error: bucket %d is %d instead of %d\n", i, histogram(i), reference_hist[i]);
+                printf("Error: bucket %d is %d instead of %d\n",
+                        i, histogram(i), reference_hist[i]);
                 return -1;
             }
         }
@@ -562,6 +562,246 @@ int parallel_dot_product_rfactor_test(bool compile_module) {
         if (ref(0) != im(0)) {
             printf("result = %d instead of %d\n", im(0), ref(0));
             return -1;
+        }
+    }
+    return 0;
+}
+
+int tuple_rfactor_test(bool compile_module) {
+    Func f("f"), g("g");
+    Var x("x"), y("y");
+
+    f(x, y) = Tuple(x + y, x - y);
+    f.compute_root();
+
+    RDom r(10, 20, 30, 40);
+
+    Func ref("ref");
+    ref(x, y) = Tuple(1, 3);
+    ref(x, y) = Tuple(ref(x , y)[0] + f(r.x, r.y)[0], ref(x , y)[1] + f(r.x, r.y)[1]);
+    Realization ref_rn = ref.realize(80, 80);
+
+    g(x, y) = Tuple(1, 3);
+    g(x , y) = Tuple(g(x , y)[0] + f(r.x, r.y)[0], g(x , y)[1] + f(r.x, r.y)[1]);
+    g.reorder({y, x});
+
+    Var xi("xi"), yi("yi");
+    g.update(0).tile(x, y, xi, yi, 2, 2);
+
+    Var u("u");
+    Func intm1 = g.update(0).rfactor({{r.y, u}});
+    intm1.update(0).parallel(u, 2);
+    RVar rxi("rxi"), rxo("rxo");
+    intm1.tile(x, y, xi, yi, 2, 2);
+    intm1.update(0).split(r.x, rxo, rxi, 2);
+
+    Var v("v");
+    Func intm2 = intm1.update(0).rfactor({{rxo, v}});
+    intm2.update(0).vectorize(v);
+    intm2.compute_at(intm1, rxo);
+
+    if (compile_module) {
+        // Check the call graphs.
+        Module m = g.compile_to_module({g.infer_arguments()});
+        CheckCalls checker;
+        m.functions().front().body.accept(&checker);
+
+        CallGraphs expected = {
+            {g.name(), {}},
+            {g.update(0).name(), {intm1.name() + ".0", intm1.name() + ".1",
+                                  g.name() + ".0", g.name() + ".1"}},
+            {intm1.name(), {}},
+            {intm1.update(0).name(), {intm2.name() + ".0", intm2.name() + ".1",
+                                      intm1.name() + ".0", intm1.name() + ".1"}},
+            {intm2.name(), {}},
+            {intm2.update(0).name(), {f.name() + ".0", f.name() + ".1",
+                                      intm2.name() + ".0", intm2.name() + ".1"}},
+            {f.name(), {}},
+        };
+        if (check_call_graphs(checker.calls, expected) != 0) {
+            return -1;
+        }
+    } else {
+        Realization rn = g.realize(80, 80);
+        Image<int> im1(rn[0]);
+        Image<int> im2(rn[1]);
+
+        Image<int> ref_im1(ref_rn[0]);
+        Image<int> ref_im2(ref_rn[1]);
+
+        auto func1 = [&ref_im1](int x, int y, int z) {
+            return ref_im1(x, y);
+        };
+        if (check_image(im1, func1)) {
+            return -1;
+        }
+
+        auto func2 = [&ref_im2](int x, int y, int z) {
+            return ref_im2(x, y);
+        };
+        if (check_image(im2, func2)) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int tuple_specialize_rdom_predicate_rfactor_test(bool compile_module) {
+    Func f("f"), g("g");
+    Var x("x"), y("y"), z("z");
+
+    f(x, y, z) = Tuple(x + y + z, x - y + z);
+    f.compute_root();
+
+    RDom r(5, 20, 5, 20, 5, 20);
+    r.where(r.x*r.x + r.z*r.z <= 200);
+    r.where(r.y*r.z + r.z*r.z > 100);
+
+    Func ref("ref");
+    ref(x, y) = Tuple(1, 3);
+    ref(x, y) = Tuple(ref(x, y)[0] + f(r.x, r.y, r.z)[0], ref(x, y)[1] + f(r.x, r.y, r.z)[1]);
+    Realization ref_rn = ref.realize(10, 10);
+
+    g(x, y) = Tuple(1, 3);
+
+    g(x, y) = Tuple(g(x, y)[0] + f(r.x, r.y, r.z)[0], g(x, y)[1] + f(r.x, r.y, r.z)[1]);
+
+    Param<int> p;
+    Param<bool> q;
+
+    Var u("u"), v("v"), w("w");
+    Func intm1 = g.update(0).specialize(p >= 5).rfactor({{r.y, v}, {r.z, w}});
+    intm1.update(0).parallel(v, 2);
+
+    RVar rxi("rxi"), rxo("rxo");
+    intm1.update(0).split(r.x, rxo, rxi, 2);
+    Var t("t");
+    Func intm2 = intm1.update(0).specialize(q).rfactor({{rxi, t}});
+    Func intm3 = intm1.update(0).specialize(!q).rfactor({{rxo, t}});
+    Func intm4 = g.update(0).rfactor({{r.x, u}, {r.z, w}});
+    intm4.update(0).vectorize(u);
+
+    if (compile_module) {
+        // Check the call graphs.
+        Module m = g.compile_to_module({g.infer_arguments()});
+        CheckCalls checker;
+        m.functions().front().body.accept(&checker);
+
+        CallGraphs expected = {
+            {g.name(), {}},
+            {g.update(0).name(), {intm1.name() + ".0", intm1.name() + ".1",
+                                  intm4.name() + ".0", intm4.name() + ".1",
+                                  g.name() + ".0", g.name() + ".1"}},
+            {intm1.name(), {}},
+            {intm1.update(0).name(), {intm2.name() + ".0", intm2.name() + ".1",
+                                      intm3.name() + ".0", intm3.name() + ".1",
+                                      intm1.name() + ".0", intm1.name() + ".1"}},
+            {intm2.name(), {}},
+            {intm2.update(0).name(), {f.name() + ".0", f.name() + ".1",
+                                      intm2.name() + ".0", intm2.name() + ".1"}},
+            {intm3.name(), {}},
+            {intm3.update(0).name(), {f.name() + ".0", f.name() + ".1",
+                                      intm3.name() + ".0", intm3.name() + ".1"}},
+            {intm4.name(), {}},
+            {intm4.update(0).name(), {f.name() + ".0", f.name() + ".1",
+                                      intm4.name() + ".0", intm4.name() + ".1"}},
+            {f.name(), {}},
+        };
+        if (check_call_graphs(checker.calls, expected) != 0) {
+            return -1;
+        }
+    } else {
+        {
+            p.set(10);
+            q.set(true);
+            Realization rn = g.realize(10, 10);
+            Image<int> im1(rn[0]);
+            Image<int> im2(rn[1]);
+
+            Image<int> ref_im1(ref_rn[0]);
+            Image<int> ref_im2(ref_rn[1]);
+
+            auto func1 = [&ref_im1](int x, int y, int z) {
+                return ref_im1(x, y, z);
+            };
+            if (check_image(im1, func1)) {
+                return -1;
+            }
+            auto func2 = [&ref_im2](int x, int y, int z) {
+                return ref_im2(x, y, z);
+            };
+            if (check_image(im2, func2)) {
+                return -1;
+            }
+        }
+        {
+            p.set(10);
+            q.set(false);
+            Realization rn = g.realize(10, 10);
+            Image<int> im1(rn[0]);
+            Image<int> im2(rn[1]);
+
+            Image<int> ref_im1(ref_rn[0]);
+            Image<int> ref_im2(ref_rn[1]);
+
+            auto func1 = [&ref_im1](int x, int y, int z) {
+                return ref_im1(x, y, z);
+            };
+            if (check_image(im1, func1)) {
+                return -1;
+            }
+            auto func2 = [&ref_im2](int x, int y, int z) {
+                return ref_im2(x, y, z);
+            };
+            if (check_image(im2, func2)) {
+                return -1;
+            }
+        }
+        {
+            p.set(0);
+            q.set(true);
+            Realization rn = g.realize(10, 10);
+            Image<int> im1(rn[0]);
+            Image<int> im2(rn[1]);
+
+            Image<int> ref_im1(ref_rn[0]);
+            Image<int> ref_im2(ref_rn[1]);
+
+            auto func1 = [&ref_im1](int x, int y, int z) {
+                return ref_im1(x, y, z);
+            };
+            if (check_image(im1, func1)) {
+                return -1;
+            }
+            auto func2 = [&ref_im2](int x, int y, int z) {
+                return ref_im2(x, y, z);
+            };
+            if (check_image(im2, func2)) {
+                return -1;
+            }
+        }
+        {
+            p.set(0);
+            q.set(false);
+            Realization rn = g.realize(10, 10);
+            Image<int> im1(rn[0]);
+            Image<int> im2(rn[1]);
+
+            Image<int> ref_im1(ref_rn[0]);
+            Image<int> ref_im2(ref_rn[1]);
+
+            auto func1 = [&ref_im1](int x, int y, int z) {
+                return ref_im1(x, y, z);
+            };
+            if (check_image(im1, func1)) {
+                return -1;
+            }
+            auto func2 = [&ref_im2](int x, int y, int z) {
+                return ref_im2(x, y, z);
+            };
+            if (check_image(im2, func2)) {
+                return -1;
+            }
         }
     }
     return 0;
@@ -645,6 +885,26 @@ int main(int argc, char **argv) {
     }
     printf("    checking output img correctness...\n");
     if (parallel_dot_product_rfactor_test(false) != 0) {
+        return -1;
+    }
+
+    printf("Running tuple rfactor test\n");
+    printf("    checking call graphs...\n");
+    if (tuple_rfactor_test(true) != 0) {
+        return -1;
+    }
+    printf("    checking output img correctness...\n");
+    if (tuple_rfactor_test(false) != 0) {
+        return -1;
+    }
+
+    printf("Running tuple specialize rdom predicate rfactor test\n");
+    printf("    checking call graphs...\n");
+    if (tuple_specialize_rdom_predicate_rfactor_test(true) != 0) {
+        return -1;
+    }
+    printf("    checking output img correctness...\n");
+    if (tuple_specialize_rdom_predicate_rfactor_test(false) != 0) {
         return -1;
     }
 
