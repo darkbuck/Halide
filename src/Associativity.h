@@ -15,9 +15,10 @@ namespace Halide {
 namespace Internal {
 
 /**
- * Detect whether an operator is associative.
+ * Given a binary expression operator 'bin_op' in the form of op(x, y), prove that
+ * 'bin_op' is associative, i.e. prove that (x op y) op z == x op (y op z)
  */
-EXPORT bool is_associative(const std::function<Expr(Expr, Expr)> &op);
+EXPORT bool is_bin_op_associative(Expr bin_op);
 
 EXPORT void associativity_test();
 

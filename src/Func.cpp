@@ -28,6 +28,8 @@
 #include "Substitute.h"
 #include "ExprUsesVar.h"
 #include "Simplify.h"
+#include "Solve.h"
+#include "Associativity.h"
 
 namespace Halide {
 
@@ -252,9 +254,9 @@ int Func::add_implicit_vars(vector<Expr> &args) const {
 
 namespace {
 bool var_name_match(string candidate, string var, bool assert_on=true) {
-    /*internal_assert(!assert_on || var.find('.') == string::npos)
+    internal_assert(!assert_on || var.find('.') == string::npos)
         << "var_name_match expects unqualified names for the second argument. "
-        << "Name passed: " << var << "\n";*/
+        << "Name passed: " << var << "\n";
     if (candidate == var) return true;
     return Internal::ends_with(candidate, "." + var);
 }
@@ -385,7 +387,7 @@ Expr substitute_self_reference(Expr val, const string &func, const Function &sub
 void apply_split(const Split &s, vector<ReductionVariable> &rvars) {
     internal_assert(s.is_split());
     const auto iter = std::find_if(rvars.begin(), rvars.end(),
-        [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
+        [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var, false); });
     if (iter != rvars.end()) {
         debug(4) << "  Splitting " << iter->var << " into " << s.outer << " and " << s.inner << "\n";
         Expr old_extent = iter->extent;
@@ -403,9 +405,9 @@ void apply_split(const Split &s, vector<ReductionVariable> &rvars) {
 void apply_fuse(const Split &s, vector<ReductionVariable> &rvars) {
     internal_assert(s.is_fuse());
     const auto iter_outer = std::find_if(rvars.begin(), rvars.end(),
-        [&s](const ReductionVariable& rv) { return var_name_match(s.outer, rv.var); });
+        [&s](const ReductionVariable& rv) { return var_name_match(s.outer, rv.var, false); });
     const auto iter_inner = std::find_if(rvars.begin(), rvars.end(),
-        [&s](const ReductionVariable& rv) { return var_name_match(s.inner, rv.var); });
+        [&s](const ReductionVariable& rv) { return var_name_match(s.inner, rv.var, false); });
 
     if ((iter_outer != rvars.end()) && (iter_inner != rvars.end())) {
         debug(4) << "  Fusing " << s.outer << " and " << s.inner << " into " << s.old_var << "\n";
@@ -422,7 +424,7 @@ void apply_fuse(const Split &s, vector<ReductionVariable> &rvars) {
 void apply_purify(const Split &s, vector<ReductionVariable> &rvars) {
     internal_assert(s.is_purify());
     const auto iter = std::find_if(rvars.begin(), rvars.end(),
-        [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
+        [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var, false); });
     if (iter != rvars.end()) {
         debug(4) << "  Purify RVar " << iter->var << " into Var " << s.outer
                  << ", deleting it from the rvars list\n";
@@ -434,7 +436,7 @@ void apply_purify(const Split &s, vector<ReductionVariable> &rvars) {
 void apply_rename(const Split &s, vector<ReductionVariable> &rvars) {
     internal_assert(s.is_rename());
     const auto iter = std::find_if(rvars.begin(), rvars.end(),
-        [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
+        [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var, false); });
     if (iter != rvars.end()) {
         debug(4) << "  Renaming " << iter->var << " into " << s.outer << "\n";
         iter->var = s.outer;
@@ -454,10 +456,62 @@ void apply_split_directive(const Split &s, vector<ReductionVariable> &rvars) {
     }
 }
 
+class SubstituteFuncWithVar : public IRMutator {
+    using IRVisitor::visit;
+
+    const string func;
+    const string var_name;
+
+    void visit(const Call *c) {
+        IRMutator::visit(c);
+        c = expr.as<Call>();
+        internal_assert(c);
+
+        if ((c->call_type == Call::Halide) && (func == c->name)) {
+            internal_assert(!c->func.defined())
+                << "func should not have been defined for a self-reference\n";
+            debug(0) << "...Replace call to Func \"" << c->name << "\" with "
+                     << "\"" << var_name << "\"\n";
+            Expr var = Variable::make(c->type, var_name);
+            expr = var;
+        }
+    }
+public:
+    SubstituteFuncWithVar(const string &func, const string &v) : func(func), var_name(v) {}
+};
+
+// Given an update definition of a Func, return the binary op that represent
+// the update, e.g. x + y
+Expr solve_for_binary_op(const string &func, const Definition &def) {
+    user_assert(!def.is_init()) << "Must be called on an update definition\n";
+
+    //TODO(psuriana): implement this
+    // Initialize to the RHS of the Func's update definition
+    Expr bin_op;
+    SubstituteFuncWithVar subs(func, "x");
+    bin_op = subs.mutate(bin_op);
+    bin_op = solve_expression(bin_op, "x"); // Move 'x' as far to the left
+    debug(0) << "checking associativity for bin_op: " << bin_op << "\n";
+    return bin_op;
+}
+
 } // anonymous namespace
 
 Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     user_assert(!definition.is_init()) << "rfactor() must be called on an update definition\n";
+
+    string func_name;
+    {
+        vector<std::string> tmp = split_string(stage_name, ".update(");
+        internal_assert(!tmp.empty() && !tmp[0].empty());
+        func_name = tmp[0];
+    }
+
+    // TODO(psuriana): Check whether the operator is associative and compute the identity of
+    // the operator
+    Expr identity = 0;
+    bool is_assoc = is_bin_op_associative(solve_for_binary_op(func_name, definition));
+    user_assert(is_assoc) << "Cannot prove associativity of the operator\n";
 
     vector<Split> &splits = definition.schedule().splits();
     vector<Expr> &args = definition.args();
@@ -466,13 +520,6 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     vector<Dim> &dims = definition.schedule().dims();
     Scope<string> scope; // Contains list of RVars lifted to the intermediate Func
     vector<string> rvars_removed;
-
-    string func_name;
-    {
-        vector<std::string> tmp = split_string(stage_name, ".update(");
-        internal_assert(!tmp.empty() && !tmp[0].empty());
-        func_name = tmp[0];
-    }
 
     for (const pair<RVar, Var> &i : preserved) {
         const RVar &rv = i.first;
@@ -567,8 +614,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     init_args.insert(init_args.end(), vars_rename.begin(), vars_rename.end());
     init_args.insert(init_args.end(), dim_vars.begin(), dim_vars.end());
 
-    // TODO(psuriana): should replace this with the identity
-    vector<Expr> init_vals(values.size(), 0);
+    vector<Expr> init_vals(values.size(), identity);
 
     Func intm(func_name + "_intm");
     intm(init_args) = Tuple(init_vals);
@@ -967,7 +1013,7 @@ void Stage::remove(const string &var) {
     string old_name = var;
     vector<Dim> &dims = schedule.dims();
     for (size_t i = 0; (!found) && i < dims.size(); i++) {
-        if (var_name_match(dims[i].var, var)) {
+        if (var_name_match(dims[i].var, var, false)) {
             found = true;
             old_name = dims[i].var;
             dims.erase(dims.begin() + i);
