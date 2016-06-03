@@ -25,7 +25,7 @@ private:
     void visit(const ProducerConsumer *op) {
         string old_producer = producer;
         producer = op->name;
-        debug(0) << "*******FOUND producer: " << producer << "\n";
+        //debug(0) << "*******FOUND producer: " << producer << "\n";
         calls[producer]; // Make sure each producer is allocated a slot
         op->produce.accept(this);
         producer = old_producer;
@@ -33,7 +33,7 @@ private:
         if (op->update.defined()) {
             // Just lump all the update stages together
             producer = op->name + ".update(" + std::to_string(0) + ")";
-            debug(0) << "*******FOUND producer: " << producer << "\n";
+            //debug(0) << "*******FOUND producer: " << producer << "\n";
             calls[producer]; // Make sure each producer is allocated a slot
             op->update.accept(this);
             producer = old_producer;
@@ -48,7 +48,7 @@ private:
             assert(calls.count(producer) > 0);
             vector<string> &callees = calls[producer];
             if(std::find(callees.begin(), callees.end(), op->name) == callees.end()) {
-                debug(0) << "******producer: " << producer << ", consumer: " << op->name << "\n";
+                //debug(0) << "******producer: " << producer << ", consumer: " << op->name << "\n";
                 callees.push_back(op->name);
             }
         }
@@ -527,12 +527,12 @@ int parallel_dot_product_rfactor_test(bool compile_module) {
     Var u("u");
     Func intm1 = dot.update(0).rfactor({{rxo, u}});
     RVar rxio("rxio"), rxii("rxii");
-    intm1.update(0).split(rxi, rxio, rxii, 8);
-    Var v("v");
-    Func intm2 = intm1.update(0).rfactor({{rxii, v}});
-
     intm1.compute_root();
     intm1.update(0).parallel(u);
+    intm1.update(0).split(rxi, rxio, rxii, 8);
+
+    Var v("v");
+    Func intm2 = intm1.update(0).rfactor({{rxii, v}});
     intm2.compute_at(intm1, u);
     intm2.update(0).vectorize(v, 8);
 

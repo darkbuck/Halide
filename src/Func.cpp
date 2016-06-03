@@ -418,8 +418,9 @@ void apply_purify(const Split &s, vector<ReductionVariable> &rvars) {
     const auto iter = std::find_if(
         rvars.begin(), rvars.end(), [&s](const ReductionVariable& rv) { return var_name_match(s.old_var, rv.var); });
     if (iter != rvars.end()) {
-        debug(4) << "  Purify RVar " << iter->var << " into Var " << s.outer << "\n";
-        iter->var = s.outer;
+        debug(4) << "  Purify RVar " << iter->var << " into Var " << s.outer
+                 << ", deleting it from the rvars list\n";
+        rvars.erase(iter);
     }
 }
 
@@ -497,8 +498,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         }
     }
 
-    // Remove any rvars not in 'rvars_kept' from the reduction dims 'rvars'.
-    // Those removed reduction dims are to be lifted to the intermediate Func.
+    // Reduction domain of the intermediate Func.
     vector<ReductionVariable> intm_rvars;
     for (const auto &rv : rvars) {
         const auto &iter = std::find_if(
@@ -524,6 +524,8 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         }
     );
 
+    // List of RVars should be removed from the original update definition
+    vector<ReductionVariable> removed_rvars;
     {
         vector<ReductionVariable> temp;
         for (const auto &rv : rvars) {
@@ -531,6 +533,9 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
                 preserved.begin(), preserved.end(), [&rv](const pair<RVar, Var>& pair) { return var_name_match(rv.var, pair.first.name()); });
             if (iter != preserved.end()) {
                 temp.push_back(rv);
+            } else {
+                removed_rvars.push_back(rv);
+                rvars_lifted.push(rv.var, rv.var);
             }
         }
         rvars.swap(temp);
@@ -565,32 +570,22 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     Func intm(func_name + "_intm");
     intm(init_args) = Tuple(init_vals);
 
-
-    // Remove any rvars not in 'rvars_kept' from the dims list.
-    // Those removed reduction dims are to be lifted to the intermediate Func.
-    {
-        vector<Dim> temp;
-        for (const Dim &dim : dims) {
-            if (dim.is_rvar) {
-                const auto &iter = std::find_if(
-                    rvars_kept.begin(), rvars_kept.end(), [&dim](const RVar& v) { return var_name_match(dim.var, v.name()); });
-                if (iter != rvars_kept.end()) {
-                    temp.push_back(dim);
-                } else {
-                    rvars_lifted.push(dim.var, dim.var);
-                }
-            }
-        }
-        dims.swap(temp);
-    }
     // Add the new pure dims we just added to the dim list
     for (const Var &v : dim_vars) {
-        Dim d = {v.name(), ForType::Serial, DeviceAPI::None, true, false};
-        dims.push_back(d);
+        const auto iter = std::find_if(
+            dims.begin(), dims.end(), [&v](const Dim& dim) { return var_name_match(dim.var, v.name()); });
+        if (iter == dims.end()) {
+            Dim d = {v.name(), ForType::Serial, DeviceAPI::None, true, false};
+            dims.insert(dims.end()-1, d);
+        }
     }
-    // Add the outermost dim
-    dims.push_back({Var::outermost().name(), ForType::Serial, DeviceAPI::None, true, false});
 
+    if (0) {
+        debug(0) << "\n\n*********DIM AFTER REMOVE: \n";
+        for (const auto &dim : dims) {
+            debug(0) << "DIM: " << dim.var << "\n";
+        }
+    }
 
     // Update definition args of the intermediate Func
     vector<Expr> update_args(args.size() + vars_rename.size());
@@ -645,12 +640,18 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         for (const auto &val : intm.function().update(0).values()) {
             debug(0) << "VAL: " << val << "\n";
         }
+        debug(0) << "\n";
     }
 
     // Determine the dims and schedule of the update definition of the
     // intermediate function.
     intm.function().update(0).schedule().dims() = old_dims;
-    intm.function().update(0).schedule().splits().swap(splits);
+    intm.function().update(0).schedule().splits() = splits;
+
+    // Remove RVars in 'removed_rvars' from the dims list
+    for (const ReductionVariable &rv : removed_rvars) {
+        remove(rv.var);
+    }
 
     for (size_t i = 0; i < rvars_kept.size(); ++i) {
         // Replace the old RVar with a Var
@@ -735,6 +736,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         for (const auto &val : values) {
             debug(0) << "VALS: " << val << "\n";
         }
+        debug(0) << "\n\n";
     }
 
     return intm;
@@ -939,6 +941,102 @@ Stage &Stage::purify(VarOrRVar old_var, VarOrRVar new_var) {
     return *this;
 }
 
+void Stage::remove(const string &var) {
+    debug(4) << "In schedule for " << stage_name << ", remove " << var << "\n";
+
+    Schedule &schedule = definition.schedule();
+
+    // Replace the old dimension with the new dimensions in the dims list
+    bool found = false;
+    string old_name = var;
+    vector<Dim> &dims = schedule.dims();
+    for (size_t i = 0; (!found) && i < dims.size(); i++) {
+        if (var_name_match(dims[i].var, var)) {
+            found = true;
+            old_name = dims[i].var;
+            dims.erase(dims.begin() + i);
+        }
+    }
+
+    if (!found) {
+        user_error
+            << "In schedule for " << stage_name
+            << ", could not find remove dimension: "
+            << var
+            << "\n"
+            << dump_argument_list();
+
+    }
+
+    std::set<string> removed_vars;
+    removed_vars.insert(var);
+
+    auto should_remove = [&removed_vars](const string &var) {
+        const auto &iter = std::find_if(
+            removed_vars.begin(), removed_vars.end(), [&var](const string& rv) { return rv == var; });
+        return iter != removed_vars.end();
+    };
+
+    vector<Split> &splits = schedule.splits();
+    vector<Split> temp;
+    for (size_t i = splits.size(); i > 0; i--) {
+        bool is_removed = false;
+        if (splits[i-1].is_fuse()) {
+            debug(4) << "    checking fuse " << splits[i-1].inner << " and "
+                     << splits[i-1].inner << " into " << splits[i-1].old_var << "\n";
+            if (splits[i-1].inner == old_name ||
+                splits[i-1].outer == old_name) {
+                user_error
+                    << "In schedule for " << stage_name
+                    << ", can't remove variable " << old_name
+                    << " because it has already been fused into "
+                    << splits[i-1].old_var << "\n"
+                    << dump_argument_list();
+            }
+            if (should_remove(splits[i-1].old_var)) {
+                is_removed = true;
+                removed_vars.insert(splits[i-1].outer);
+                removed_vars.insert(splits[i-1].inner);
+            }
+        } else if (splits[i-1].is_split()) {
+            debug(4) << "    splitting " << splits[i-1].old_var << " into "
+                     << splits[i-1].outer << " and " << splits[i-1].inner << "\n";
+            if (should_remove(splits[i-1].inner)) {
+                is_removed = true;
+                removed_vars.insert(splits[i-1].old_var);
+            } else if (should_remove(splits[i-1].outer)) {
+                is_removed = true;
+                removed_vars.insert(splits[i-1].old_var);
+            }
+            if (splits[i-1].old_var == old_name) {
+                user_error
+                    << "In schedule for " << stage_name
+                    << ", can't remove a variable " << old_name
+                    << " because it has already been renamed or split.\n"
+                    << dump_argument_list();
+            }
+        } else {
+            debug(4) << "    replace/rename " << splits[i-1].old_var
+                     << " into " << splits[i-1].outer << "\n";
+            if (should_remove(splits[i-1].outer)) {
+                is_removed = true;
+                removed_vars.insert(splits[i-1].old_var);
+            }
+            if (splits[i-1].old_var == old_name) {
+                user_error
+                    << "In schedule for " << stage_name
+                    << ", can't remove a variable " << old_name
+                    << " because it has already been renamed or split.\n"
+                    << dump_argument_list();
+            }
+        }
+        if (!is_removed) {
+            temp.insert(temp.begin(), splits[i-1]);
+        }
+    }
+    splits.swap(temp);
+}
+
 Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
     if (old_var.is_rvar) {
         user_assert(new_var.is_rvar)
@@ -980,7 +1078,6 @@ Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
             << dump_argument_list();
 
     }
-
 
     // If possible, rewrite the split or rename that defines it.
     found = false;

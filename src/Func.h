@@ -57,6 +57,8 @@ class Stage {
     void split(const std::string &old, const std::string &outer, const std::string &inner,
                Expr factor, bool exact, TailStrategy tail);
 
+    void remove(const std::string &var);
+
 public:
     Stage(Internal::Definition d, const std::string &n, const std::vector<Var> &args)
             : definition(d), stage_name(n), dim_vars(args) {
