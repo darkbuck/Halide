@@ -653,7 +653,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     }
     definition.predicate() = f_rdom.domain().predicate();
 
-    if (0) {
+    if (1) {
         debug(0) << "\n\n*********ORIGINAL DIM: \n";
         for (const auto &dim : dims) {
             debug(0) << "DIM: " << dim.var << "\n";
@@ -693,7 +693,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         intm.update(0).purify(rvars_kept[i], vars_rename[i]);
     }
 
-    if (0) {
+    if (1) {
         debug(0) << "\n\n*********intermediate INIT DIM: \n";
         for (const auto &dim : intm.function().schedule().dims()) {
             debug(0) << "DIM: " << dim.var << "\n";
@@ -766,12 +766,14 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
             f_values[i] = prev_val + intm(f_load_args)[i];
         }
     } else {
+        //TODO(psuriana): this is only correct for addition, we need to actually
+        //infer the part we substituted
         Expr prev_val = Call::make(intm.output_types()[0], func_name,
                                    f_store_args, Call::CallType::Halide);
         f_values[0] = prev_val + intm(f_load_args);
     }
 
-    if (0) {
+    if (1) {
         debug(0) << "\n*********NEW FINAL DIM: \n";
         for (const auto &dim : dims) {
             debug(0) << "DIM: " << dim.var << "\n";
@@ -791,7 +793,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     args.swap(f_store_args);
     values.swap(f_values);
 
-    if (0) {
+    if (1) {
         debug(0) << "\n*********F_VALS: \n";
         for (const auto &val : values) {
             debug(0) << "VALS: " << val << "\n";

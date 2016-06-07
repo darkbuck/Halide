@@ -59,14 +59,22 @@ class SubstituteInAllLets : public IRGraphMutator {
     }
 };
 
+// Replace self-reference to Func 'func' with arguments 'args' at index
+// 'value_index' in the Expr/Stmt with Var 'substitute'
 class ConvertSelfRef : public IRMutator {
     using IRMutator::visit;
 
     const string func;
     const vector<Expr> args;
-    const string subs;
+    // If that function has multiple values, which value does this
+    // call node refer to?
+    int value_index;
+    const string substitute;
 
     void visit(const Call *op) {
+        if (is_not_associative) {
+            return;
+        }
         IRMutator::visit(op);
         op = expr.as<Call>();
         internal_assert(op);
@@ -76,21 +84,46 @@ class ConvertSelfRef : public IRMutator {
                 << "Func should not have been defined for a self-reference\n";
             internal_assert(args.size() == op->args.size())
                 << "Self-reference should have the same number of args as the original\n";
+            if (is_in_conditional) {
+                debug(0) << "Self-reference of " << op->name
+                         << "inside a conditional. Operation is not associative\n";
+                is_not_associative = true;
+                return;
+            }
             for (size_t i = 0; i < op->args.size(); i++) {
                 if (!equal(op->args[i], args[i])) {
-                    debug(0) << "Find self-reference with different args: operation is not associative\n";
+                    debug(0) << "Self-reference of " << op->name
+                             << " with different args from the LHS. Operation is not associative\n";
                     is_not_associative = true;
                     return;
                 }
             }
             // Substitute the call
-            expr = Variable::make(op->type, subs);
+            expr = Variable::make(op->type, substitute);
         }
     }
 
+    template<typename T>
+    void visit_conditional(const T *op) {
+        if (is_not_associative) {
+            return;
+        }
+        is_in_conditional = true;
+        IRMutator::visit(op);
+        is_in_conditional = false;
+    }
+
+    void visit(const Select *op) {
+        visit_conditional(op);
+    }
+
+    void visit(const IfThenElse *op) {
+        visit_conditional(op);
+    }
+
 public:
-    ConvertSelfRef(const string &f, const vector<Expr> &args, const string &s) :
-        func(f), args(args), subs(s), is_not_associative(false) {}
+    ConvertSelfRef(const string &f, const vector<Expr> &args, int idx, const string &s) :
+        func(f), args(args), value_index(idx), substitute(s), is_not_associative(false) {}
 
     bool is_not_associative;
 };
@@ -109,9 +142,10 @@ class BinaryOpConverter : public IRMutator {
     Expr lhs, rhs;
 
     enum OpType {
-        OP_X = 0,
-        OP_Y,
-        OP_CONST,
+        OP_X,       // x only or mixed of x/constant
+        OP_Y,       // y only
+        OP_CONST,   // constant only
+        OP_MIXED,   // mixed of x/y
         OP_NONE
     };
 
@@ -119,19 +153,17 @@ class BinaryOpConverter : public IRMutator {
         if (is_const(e)) {
             return OP_CONST;
         }
-        const Variable *v = e.as<Variable>();
-        if (v) {
-            if (v->name == op_x) {
-                return OP_X;
-            } else if (v->name == op_y) {
-                return OP_Y;
-            }
-        }
-        if (expr_uses_vars(e, rvars)) {
+        bool use_y = expr_uses_var(e, op_y);
+        bool use_x = expr_uses_var(e, op_x);
+        if (use_y && !use_x) {
             return OP_Y;
-        } else {
-            return OP_CONST;
+        } else if (use_y && use_x) {
+            return OP_MIXED;
+        } else if (use_x) {
+            return OP_X;
         }
+        internal_error << "Unknown type\n";
+        return OP_NONE;
     }
 
     void visit(const Variable *op) {
@@ -141,7 +173,7 @@ class BinaryOpConverter : public IRMutator {
         if (rvars.contains(op->name)) {
             expr = Variable::make(op->type, op_y);
         } else {
-            // Const Var
+            // Constant Var
             expr = make_const(op->type, 0);
         }
     }
@@ -149,8 +181,8 @@ class BinaryOpConverter : public IRMutator {
     void visit(const Cast *op) {
         Expr val = mutate(op->value);
         OpType op_type = get_op_type(val);
-        if ((op_type == OP_X) || (op_type == OP_NONE)) {
-            // Either x only or mixed of x/constant or x/y
+        if ((op_type == OP_X) || (op_type == OP_MIXED)) {
+            // Either x only or mixed of x/constant or mixed of x/y
             expr = Cast::make(op->type, val);
         } else  {
             // Either y or constant
@@ -167,19 +199,19 @@ class BinaryOpConverter : public IRMutator {
         OpType b_op_type = get_op_type(b);
 
         if ((a_op_type == OP_X) || (b_op_type == OP_X) ||
-            (a_op_type == OP_NONE) || (b_op_type == OP_NONE)) {
+            (a_op_type == OP_MIXED) || (b_op_type == OP_MIXED)) {
             lhs = a;
             rhs = b;
-        } else if (a_op_type == OP_Y) {
+        } else if ((a_op_type == OP_Y) || (a_op_type == OP_CONST)) {
             lhs = a;
             rhs = Expr();
-        } else if (b_op_type == OP_Y) {
+        } else {
+            // b is either constant or y
+            internal_assert((b_op_type == OP_Y) || (b_op_type == OP_CONST));
             lhs = b;
             rhs = Expr();
-        } else { // Both a and b are constant
-            lhs = a;
-            rhs = Expr();
         }
+        internal_assert(lhs.defined());
         expr = rhs.defined() ? Opp::make(lhs, rhs) : lhs;
     }
 
@@ -220,7 +252,7 @@ class BinaryOpConverter : public IRMutator {
     }
 
     void visit(const Let *op) {
-        internal_error << "Should be substituted before calling this mutator\n";
+        internal_error << "Let should have been substituted before calling this mutator\n";
     }
 
     void visit(const Select *op) {
@@ -230,36 +262,52 @@ class BinaryOpConverter : public IRMutator {
 
     template<typename T, typename Opp>
     void visit_cmp(const T *op) {
-        IRMutator::visit(op);
-        //TODO
+        Expr a = mutate(op->a - op->b);
+        Expr b = make_const(op->type, 0);
+        expr = Opp::make(a, b);
     }
 
     void visit(const LE *op) {
-        visit_cmp(op);
+        visit_cmp<LE, LE>(op);
     }
 
     void visit(const LT *op) {
-        visit_cmp(op);
+        visit_cmp<LT, LT>(op);
     }
 
     void visit(const GE *op) {
-        visit_cmp(op);
+        visit_cmp<GE, GE>(op);
     }
 
     void visit(const GT *op) {
-        visit_cmp(op);
+        visit_cmp<GT, GT>(op);
     }
 
     void visit(const EQ *op) {
-        visit_cmp(op);
+        visit_cmp<EQ, EQ>(op);
     }
 
     void visit(const NE *op) {
-        visit_cmp(op);
+        visit_cmp<NE, NE>(op);
     }
 
     void visit(const Not *op) {
-        //TODO
+        /*Expr val = mutate(op->value);
+        OpType b_op_type = get_op_type(val);
+
+        if ((a_op_type == OP_X) || (b_op_type == OP_X) ||
+            (a_op_type == OP_MIXED) || (b_op_type == OP_MIXED)) {
+            lhs = a;
+            rhs = b;
+        } else if ((a_op_type == OP_Y) || (a_op_type == OP_CONST)) {
+            lhs = a;
+            rhs = Expr();
+        } else {
+            // b is either constant or y
+            internal_assert((b_op_type == OP_Y) || (b_op_type == OP_CONST));
+            lhs = b;
+            rhs = Expr();
+        }*/
     }
 
     void visit(const Call *op) {
@@ -268,7 +316,7 @@ class BinaryOpConverter : public IRMutator {
         internal_assert(op);
 
         if ((op->call_type == Call::Halide) && (func == op->name)) {
-            internal_error << "The self-reference should be replaced before calling this mutator\n";
+            internal_error << "The self-reference should have been replaced before calling this mutator\n";
         }
         for (const Expr &arg : args) {
             if (get_op_type(arg) == OP_Y) { // arg depends on RVars
@@ -290,13 +338,14 @@ public:
 };
 
 bool is_associative(const string &f, const Scope<string> *rvars, vector<Expr> args, Expr expr) {
-    for (Expr &arg :args) {
+    expr = simplify(expr);
+    for (Expr &arg : args) {
         arg = common_subexpression_elimination(arg);
         arg = simplify(arg);
         arg = SubstituteInAllLets().mutate(arg);
     }
     debug(0) << "Expr: " << expr << "\n";
-    string op_x = "x";
+    string op_x = "x"; //TODO(psuriana): might need unique name
     ConvertSelfRef csr(f, args, op_x);
     expr = csr.mutate(expr);
     debug(0) << "Expr after ConvertSelfRef: " << expr << "\n";
@@ -308,6 +357,9 @@ bool is_associative(const string &f, const Scope<string> *rvars, vector<Expr> ar
     expr = SubstituteInAllLets().mutate(expr);
     expr = solve_expression(expr, op_x); // Move 'x' to the left as possible
     debug(0) << "Expr after solve_expression: " << expr << "\n";
+
+    // TODO(psuriana): If we can't separate the 'x' and 'y', assume the op is not associative
+
 
     BinaryOpConverter conv(f, args, rvars);
     expr = conv.mutate(expr);
@@ -400,6 +452,9 @@ void associativity_test() {
     std::cout << "e1: " << e1 << "\n";
     std::cout << "e2: " << e2 << "\n";
     std::cout << "is equal? " << equal(e1, e2) << "\n";
+
+    //Expr test = y + x + min(y, x);
+    //std::cout << "Solve: " << solve_expression(test) << "\n";
 
     std::cout << "associativity test passed" << std::endl;
 }
