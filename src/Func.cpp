@@ -469,7 +469,7 @@ class SubstituteFuncWithVar : public IRMutator {
 
         if ((c->call_type == Call::Halide) && (func == c->name)) {
             internal_assert(!c->func.defined())
-                << "func should not have been defined for a self-reference\n";
+                << "Func should not have been defined for a self-reference\n";
             debug(0) << "...Replace call to Func \"" << c->name << "\" with "
                      << "\"" << var_name << "\"\n";
             Expr var = Variable::make(c->type, var_name);
