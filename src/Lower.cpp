@@ -87,7 +87,7 @@ Stmt lower(vector<Function> outputs, const string &pipeline_name, const Target &
 
     debug(1) << "Creating initial loop nests...\n";
     Stmt s = schedule_functions(outputs, order, env, t, any_memoized);
-    debug(0) << "Lowering after creating initial loop nests:\n" << s << '\n';
+    debug(2) << "Lowering after creating initial loop nests:\n" << s << '\n';
 
     if (any_memoized) {
         debug(1) << "Injecting memoization...\n";

@@ -168,6 +168,18 @@ class BinaryOpConverter : public IRMutator {
         return false;
     }
 
+    template<typename T>
+    void visit_unary_op(const T *op) {
+        type = OP_Y;
+        current_y = Expr(op);
+        expr = Variable::make(op->type, op_y);
+    }
+
+    void visit(const IntImm *op)    { visit_unary_op<IntImm>(op); }
+    void visit(const UIntImm *op)   { visit_unary_op<UIntImm>(op); }
+    void visit(const FloatImm *op)  { visit_unary_op<FloatImm>(op); }
+    void visit(const StringImm *op) { visit_unary_op<StringImm>(op); }
+
     void visit(const Variable *op) {
         if (!is_solvable) {
             return;
@@ -266,6 +278,7 @@ class BinaryOpConverter : public IRMutator {
     }
 
     void visit(const Select *op) {
+        debug(0) << "VISIT Select: " << Expr(op) << "\n";
         if (!is_solvable) {
             return;
         }
@@ -285,13 +298,19 @@ class BinaryOpConverter : public IRMutator {
             return;
         }
         if (type == OP_MIXED) {
+            debug(0) << "true value mixed\n";
             is_solvable = false;
             return;
         } else if (type == OP_Y) {
             if (old_y.defined()) {
                 if (!equal(old_y, current_y)) {
-                    is_solvable = false;
-                    return;
+                    if (is_const(current_y)) {
+                        current_y = old_y;
+                    } else if (!is_const(old_y)) {
+                        debug(0) << "true value diff y value; old_y: " << old_y << "; current_y: " << current_y << "\n";
+                        is_solvable = false;
+                        return;
+                    }
                 }
             }
             old_y = current_y;
@@ -303,12 +322,18 @@ class BinaryOpConverter : public IRMutator {
         }
         if (type == OP_MIXED) {
             is_solvable = false;
+            debug(0) << "false value diff y value\n";
             return;
         } else if (type == OP_Y) {
             if (old_y.defined()) {
                 if (!equal(old_y, current_y)) {
-                    is_solvable = false;
-                    return;
+                    if (is_const(current_y)) {
+                        current_y = old_y;
+                    } else if (!is_const(old_y)) {
+                        debug(0) << "false value diff y value; old_y: " << old_y << "; current_y: " << current_y << "\n";
+                        is_solvable = false;
+                        return;
+                    }
                 }
             }
             old_y = current_y;
@@ -392,16 +417,34 @@ pair<bool, vector<Expr>> is_associative(const string &f, vector<Expr> args, vect
 
         BinaryOpConverter conv(f, args, self_ref_subs, op_y);
         expr = conv.mutate(expr);
-        debug(0) << "Output : " << expr << "\n";
+        debug(0) << "---Bin op : " << expr << "\n";
         if (!conv.is_solvable) {
             debug(0) << "Not solvable\n";
             return std::make_pair(false, vector<Expr>());
         }
+
         Expr y_part = conv.current_y;
         debug(0) << "y_part: " << y_part << "\n";
+        if (self_ref_subs.count(idx) == 0) {
+            if (is_const(y_part)) {
+                // Update with a constant is associative
+                y_parts.push_back(y_part);
+                continue;
+            } else {
+                debug(0) << "update by non-constant not associative\n";
+                return std::make_pair(false, vector<Expr>());
+            }
+        }
 
         debug(0) << "Checking for associativity\n";
-        if (!is_bin_op_associative(expr, op_x, op_y)){
+        Type type_y = y_part.type();
+        internal_assert(self_ref_subs.count(idx));
+        Type type_x = self_ref_subs[idx].type();
+        if (type_y != type_x) {
+            debug(0) << "x and y have different types\n";
+            return std::make_pair(false, vector<Expr>());
+        }
+        if (!is_bin_op_associative(expr, op_x, op_y, type_y)){
             debug(0) << "Not solvable\n";
             return std::make_pair(false, vector<Expr>());
         }
@@ -413,15 +456,20 @@ pair<bool, vector<Expr>> is_associative(const string &f, vector<Expr> args, vect
 
 // Given a binary expression operator 'bin_op' in the form of op(x, y), prove that
 // 'bin_op' is associative, i.e. prove that (x op y) op z == x op (y op z)
-bool is_bin_op_associative(Expr bin_op, const string &op_x, const string &op_y) {
-    Expr x = Variable::make(Int(32), op_x);
-    Expr y = Variable::make(Int(32), op_y);
+bool is_bin_op_associative(Expr bin_op, const string &op_x, const string &op_y, Type t) {
+    debug(0) << "Checking associativity of " << bin_op << "; op_x: " << op_x << "; op_y: " << op_y << "\n";
+    Expr x = Variable::make(t, op_x);
+    Expr y = Variable::make(t, op_y);
     string op_z = unique_name("_z");
-    Expr z = Variable::make(Int(32), op_z);
+    Expr z = Variable::make(t, op_z);
 
+    debug(0) << "  Substituting lhs\n";
     Expr lhs = substitute(op_y, z, bin_op);
+    debug(0) << "lhs after substitution: " << lhs << "\n";
     lhs = substitute(op_x, bin_op, lhs);
+    debug(0) << "lhs after second substitution: " << lhs << "\n";
 
+    debug(0) << "  Substituting rhs\n";
     Expr rhs = substitute({{op_x, y}, {op_y, z}}, bin_op);
     rhs = substitute(op_y, rhs, bin_op);
 
@@ -488,13 +536,21 @@ void associativity_test() {
     Expr prev_val1 = Call::make(Int(32), "dummy", {x},
                                Call::CallType::Halide,
                                nullptr, 1);
+    Expr prev_val2 = Call::make(Int(32), "dummy", {x},
+                               Call::CallType::Halide,
+                               nullptr, 2);
 
     //TODO(psuriana): error
-    //auto res = is_associative("dummy", {x}, {Cast::make(Int(16), min(prev_val0, z))});
-    //auto res = is_associative("dummy", {x}, {y + z + prev_val1});
-    //auto res = is_associative("dummy", {x}, {max(y, prev_val1)});
+    /*Expr pv = Call::make(Int(16), "dummy", {x}, Call::CallType::Halide, nullptr, 0);
+    auto res = is_associative("dummy", {x}, {min(pv, Cast::make(Int(16), z))});*/
+
+    //auto res = is_associative("dummy", {x}, {y + z + prev_val0});
+    //auto res = is_associative("dummy", {x}, {max(y, prev_val0)});
+    //auto res = is_associative("dummy", {x}, {2, 3, prev_val2 + z});
+
     //TODO(psuriana): does not work for select
-    auto res = is_associative("dummy", {x}, {min(prev_val0, z), select(z < prev_val0, z, prev_val1)});
+    auto res = is_associative("dummy", {x}, {2, select(z < prev_val0, z, prev_val1)});
+    //auto res = is_associative("dummy", {x}, {min(prev_val0, z), select(z < prev_val0, z, prev_val1)});
     std::cout << "****is assoc? " << res.first << "\n";
 
     std::cout << "associativity test passed" << std::endl;
