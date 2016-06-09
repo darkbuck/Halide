@@ -459,7 +459,7 @@ void IRPrinter::visit(const Call *op) {
             stream << ", ";
         }
     }
-    stream << ")";
+    stream << ")[" << op->value_index << "]";
 }
 
 void IRPrinter::visit(const Let *op) {

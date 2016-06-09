@@ -507,15 +507,18 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         func_name = tmp[0];
     }
 
-    // TODO(psuriana): Check whether the operator is associative and compute the identity of
-    // the operator
-    Expr identity = 0;
-    bool is_assoc = true;
-    user_assert(is_assoc) << "Cannot prove associativity of the operator\n";
-
-    vector<Split> &splits = definition.schedule().splits();
     vector<Expr> &args = definition.args();
     vector<Expr> &values = definition.values();
+
+    // Check whether the operator is associative and determine the operator and
+    // its identity for each value in the definition
+    bool is_assoc;
+    vector<Operator> ops;
+    std::tie(is_assoc, ops) = prove_associativity(func_name, args, values);
+    user_assert(is_assoc) << "Cannot prove associativity of the operator\n";
+    internal_assert(ops.size() == values.size());
+
+    vector<Split> &splits = definition.schedule().splits();
     vector<ReductionVariable> &rvars = definition.schedule().rvars();
     vector<Dim> &dims = definition.schedule().dims();
     Scope<string> scope; // Contains list of RVars lifted to the intermediate Func
@@ -614,7 +617,10 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     init_args.insert(init_args.end(), vars_rename.begin(), vars_rename.end());
     init_args.insert(init_args.end(), dim_vars.begin(), dim_vars.end());
 
-    vector<Expr> init_vals(values.size(), identity);
+    vector<Expr> init_vals(values.size());
+    for (size_t i = 0; i < init_vals.size(); ++i) {
+        init_vals[i] = ops[i].identity;
+    }
 
     Func intm(func_name + "_intm");
     intm(init_args) = Tuple(init_vals);
@@ -653,7 +659,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     }
     definition.predicate() = f_rdom.domain().predicate();
 
-    if (1) {
+    if (0) {
         debug(0) << "\n\n*********ORIGINAL DIM: \n";
         for (const auto &dim : dims) {
             debug(0) << "DIM: " << dim.var << "\n";
@@ -693,7 +699,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         intm.update(0).purify(rvars_kept[i], vars_rename[i]);
     }
 
-    if (1) {
+    if (0) {
         debug(0) << "\n\n*********intermediate INIT DIM: \n";
         for (const auto &dim : intm.function().schedule().dims()) {
             debug(0) << "DIM: " << dim.var << "\n";
@@ -763,17 +769,33 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
             Expr prev_val = Call::make(intm.output_types()[i], func_name,
                                        f_store_args, Call::CallType::Halide,
                                        nullptr, i);
-            f_values[i] = prev_val + intm(f_load_args)[i];
+            const Operator &op = ops[i];
+            Expr val = substitute(op.y.first, intm(f_load_args)[i], op.op);
+            if (!op.x.first.empty()) {
+                val = substitute(op.x.first, prev_val, val);
+            } else {
+                user_warning << "Update definition of " << func_name << " at index " << i
+                             << " doesn't depend on the previous value. This isn't a"
+                             << " reduction operator\n";
+            }
+            f_values[i] = val;
         }
     } else {
-        //TODO(psuriana): this is only correct for addition, we need to actually
-        //infer the part we substituted
         Expr prev_val = Call::make(intm.output_types()[0], func_name,
                                    f_store_args, Call::CallType::Halide);
-        f_values[0] = prev_val + intm(f_load_args);
+        const Operator &op = ops[0];
+        Expr val = substitute(op.y.first, intm(f_load_args), op.op);
+        if (!op.x.first.empty()) {
+            val = substitute(op.x.first, prev_val, val);
+        } else {
+            user_warning << "Update definition of " << func_name
+                         << " doesn't depend on the previous value. This isn't a"
+                         << " reduction operator\n";
+        }
+        f_values[0] = val;
     }
 
-    if (1) {
+    if (0) {
         debug(0) << "\n*********NEW FINAL DIM: \n";
         for (const auto &dim : dims) {
             debug(0) << "DIM: " << dim.var << "\n";
@@ -793,7 +815,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     args.swap(f_store_args);
     values.swap(f_values);
 
-    if (1) {
+    if (0) {
         debug(0) << "\n*********F_VALS: \n";
         for (const auto &val : values) {
             debug(0) << "VALS: " << val << "\n";

@@ -75,7 +75,6 @@ class ConvertSelfRef : public IRMutator {
     bool is_conditional;
 
     void visit(const Call *op) {
-        debug(0) << "VISIT CALL " << op->name << " at value index " << op->value_index << "\n";
         if (is_not_associative) {
             return;
         }
@@ -108,12 +107,17 @@ class ConvertSelfRef : public IRMutator {
                 const Variable *v = iter->second.as<Variable>();
                 internal_assert(v);
                 internal_assert(v->type == op->type);
-                debug(0) << "....Substituting Call " << op->name << " at value index " << op->value_index << " with " << v->name << "\n";
+                debug(0) << "   Substituting Call " << op->name << " at value index "
+                         << op->value_index << " with " << v->name << "\n";
                 expr = iter->second;
             } else {
-                debug(0) << "....Substituting Call " << op->name << " at value index " << op->value_index << " with " << op_x << "\n";
+                debug(0) << "   Substituting Call " << op->name << " at value index "
+                         << op->value_index << " with " << op_x << "\n";
                 expr = Variable::make(op->type, op_x);
                 self_ref_subs->emplace(op->value_index, expr);
+            }
+            if (op->value_index == value_index) {
+                current_x = op;
             }
         }
     }
@@ -135,19 +139,23 @@ class ConvertSelfRef : public IRMutator {
     }
 
 public:
-    ConvertSelfRef(const string &f, const vector<Expr> &args, int idx, const string &x, map<int, Expr> *subs) :
-        func(f), args(args), value_index(idx), op_x(x), self_ref_subs(subs), is_conditional(false), is_not_associative(false) {}
+    ConvertSelfRef(const string &f, const vector<Expr> &args, int idx,
+                   const string &x, map<int, Expr> *subs) :
+        func(f), args(args), value_index(idx), op_x(x), self_ref_subs(subs),
+        is_conditional(false), is_not_associative(false) {}
 
     bool is_not_associative;
+    Expr current_x;
 };
 
-class BinaryOpConverter : public IRMutator {
+class OperatorConverter : public IRMutator {
     using IRMutator::visit;
 
     const string func;
     const vector<Expr> args;
     map<int, Expr> self_ref_subs;
     string op_y;
+    map<Expr, string, ExprCompare> y_subs;
 
     enum OpType {
         OP_X,       // x only or mixed of x/constant
@@ -184,8 +192,6 @@ class BinaryOpConverter : public IRMutator {
         if (!is_solvable) {
             return;
         }
-        debug(0) << "Variable: " << op->name << "\n";
-
         if (is_x(op->name)) {
             type = OP_X;
             expr = op;
@@ -286,8 +292,13 @@ class BinaryOpConverter : public IRMutator {
         Expr old_y;
 
         Expr cond = mutate(op->condition);
-        if (type != OP_X) {
-            old_y = current_y;
+        if ((type != OP_X)) {
+            if (y_subs.count(current_y) == 0) {
+                old_y = current_y;
+            } else {
+                cond = substitute(op_y, Variable::make(current_y.type(), y_subs[current_y]), cond);
+                debug(0) << "FOUND OLD Y EXPR in the list: " << current_y << " -> " << y_subs[current_y] << "; new cond: " << cond << "\n";
+            }
         }
         if (!is_solvable) {
             return;
@@ -379,80 +390,32 @@ class BinaryOpConverter : public IRMutator {
     }
 
 public:
-    BinaryOpConverter(const string &f, const vector<Expr> &args, const map<int, Expr> &subs, const string y) :
-            func(f), args(args), self_ref_subs(subs), op_y(y), is_solvable(true) {}
+    OperatorConverter(const string &f, const vector<Expr> &args, const map<int, Expr> &x_subs,
+                      const string &y, const map<Expr, string, ExprCompare> &y_subs) :
+        func(f), args(args), self_ref_subs(x_subs), op_y(y), y_subs(y_subs), is_solvable(true) {}
 
     bool is_solvable;
     Expr current_y;
 };
 
-pair<bool, vector<Expr>> is_associative(const string &f, vector<Expr> args, vector<Expr> exprs) {
-    vector<Expr> y_parts;
-    map<int, Expr> self_ref_subs;
-    for (size_t idx = 0; idx < exprs.size(); ++idx) {
-        Expr expr = simplify(exprs[idx]);
-        for (Expr &arg : args) {
-            arg = common_subexpression_elimination(arg);
-            arg = simplify(arg);
-            arg = SubstituteInAllLets().mutate(arg);
+Expr find_identity(Expr bin_op, const string &op_x, const string &op_y, Type t) {
+    debug(0) << "Find identity of " << bin_op << "\n";
+    vector<Expr> possible_identities = {make_const(t, 0), make_const(t, 1), t.min(), t.max()};
+    // For unary op (the one where 'x' does not appear), any value would be fine
+    for (const Expr &val : possible_identities) {
+        debug(0) << "  Trying out " << val << " as possible identity to " << bin_op << "\n";
+        Expr subs = substitute(op_y, val, bin_op);
+        subs = common_subexpression_elimination(subs);
+        Expr compare = simplify(subs == Variable::make(t, op_x));
+        debug(0) << "   comparison: " << compare << "\n";
+        if (is_one(compare)) {
+            debug(0) << "    Found the identity: " << val << "\n";
+            return val;
         }
-        debug(0) << "\nExpr: " << expr << "\n";
-        string op_x = unique_name("_x");
-        string op_y = unique_name("_y");
-        ConvertSelfRef csr(f, args, idx, op_x, &self_ref_subs);
-        expr = csr.mutate(expr);
-        debug(0) << "Expr after ConvertSelfRef: " << expr << "\n";
-        if (csr.is_not_associative) {
-            return std::make_pair(false, vector<Expr>());
-        }
-        expr = common_subexpression_elimination(expr);
-        expr = simplify(expr);
-        expr = SubstituteInAllLets().mutate(expr);
-        for (const auto &iter : self_ref_subs) {
-            const Variable *v = iter.second.as<Variable>();
-            internal_assert(v);
-            expr = solve_expression(expr, v->name); // Move 'x' to the left as possible
-        }
-        debug(0) << "Expr after solve_expression " << op_x << ": " << expr << "\n";
-
-        BinaryOpConverter conv(f, args, self_ref_subs, op_y);
-        expr = conv.mutate(expr);
-        debug(0) << "---Bin op : " << expr << "\n";
-        if (!conv.is_solvable) {
-            debug(0) << "Not solvable\n";
-            return std::make_pair(false, vector<Expr>());
-        }
-
-        Expr y_part = conv.current_y;
-        debug(0) << "y_part: " << y_part << "\n";
-        if (self_ref_subs.count(idx) == 0) {
-            if (is_const(y_part)) {
-                // Update with a constant is associative
-                y_parts.push_back(y_part);
-                continue;
-            } else {
-                debug(0) << "update by non-constant not associative\n";
-                return std::make_pair(false, vector<Expr>());
-            }
-        }
-
-        debug(0) << "Checking for associativity\n";
-        Type type_y = y_part.type();
-        internal_assert(self_ref_subs.count(idx));
-        Type type_x = self_ref_subs[idx].type();
-        if (type_y != type_x) {
-            debug(0) << "x and y have different types\n";
-            return std::make_pair(false, vector<Expr>());
-        }
-        if (!is_bin_op_associative(expr, op_x, op_y, type_y)){
-            debug(0) << "Not solvable\n";
-            return std::make_pair(false, vector<Expr>());
-        }
-        y_parts.push_back(y_part);
     }
-    return std::make_pair(true, y_parts);
+    debug(0) << "Failed to find identity of " << bin_op << "\n";
+    return Expr(); // Fail to find the identity
 }
-
 
 // Given a binary expression operator 'bin_op' in the form of op(x, y), prove that
 // 'bin_op' is associative, i.e. prove that (x op y) op z == x op (y op z)
@@ -491,68 +454,152 @@ bool is_bin_op_associative(Expr bin_op, const string &op_x, const string &op_y, 
     return is_one(compare);
 }
 
+pair<bool, vector<Operator>> prove_associativity(const string &f, vector<Expr> args, vector<Expr> exprs) {
+    vector<Operator> ops;
+    map<int, Expr> self_ref_subs;
+    map<Expr, string, ExprCompare> y_subs;
+    for (size_t idx = 0; idx < exprs.size(); ++idx) {
+        Expr expr = simplify(exprs[idx]);
+        for (Expr &arg : args) {
+            arg = common_subexpression_elimination(arg);
+            arg = simplify(arg);
+            arg = SubstituteInAllLets().mutate(arg);
+        }
+        debug(0) << "\nExpr: " << expr << "\n";
+        string op_x = unique_name("_x_" + std::to_string(idx));
+        string op_y = unique_name("_y_" + std::to_string(idx));
+        ConvertSelfRef csr(f, args, idx, op_x, &self_ref_subs);
+        expr = csr.mutate(expr);
+        debug(0) << "Expr after ConvertSelfRef: " << expr << "\n";
+        if (csr.is_not_associative) {
+            return std::make_pair(false, vector<Operator>());
+        }
+        expr = common_subexpression_elimination(expr);
+        expr = simplify(expr);
+        expr = SubstituteInAllLets().mutate(expr);
+        debug(0) << "Simplify: " << expr << "\n";
+        for (const auto &iter : self_ref_subs) {
+            const Variable *v = iter.second.as<Variable>();
+            internal_assert(v);
+            expr = solve_expression(expr, v->name); // Move 'x' to the left as possible
+        }
+        if (!expr.defined()) {
+            debug(0) << "Failed to move 'x' to the left: " << "\n";
+            return std::make_pair(false, vector<Operator>());
+        }
+        expr = SubstituteInAllLets().mutate(expr);
+        debug(0) << "Expr after solve_expression " << op_x << ": " << expr << "\n";
+
+        OperatorConverter conv(f, args, self_ref_subs, op_y, y_subs);
+        expr = conv.mutate(expr);
+        debug(0) << "---Bin op : " << expr << "\n";
+        if (!conv.is_solvable) {
+            debug(0) << "Not solvable\n";
+            return std::make_pair(false, vector<Operator>());
+        }
+
+        Expr y_part = conv.current_y;
+        internal_assert(y_part.defined());
+        y_subs.emplace(y_part, op_y);
+
+        debug(0) << "y_part: " << y_part << "\n";
+        if (self_ref_subs.count(idx) == 0) {
+            internal_assert(!csr.current_x.defined());
+            if (is_const(y_part)) {
+                // Update with a constant is associative and the identity can be
+                // anything since it's going to be replaced anyway
+                ops.push_back({expr, 0, {"", Expr()}, {op_y, y_part}});
+                continue;
+            } else {
+                debug(0) << "update by non-constant not associative\n";
+                return std::make_pair(false, vector<Operator>());
+            }
+        }
+
+        debug(0) << "Checking for associativity\n";
+        Type type_y = y_part.type();
+        internal_assert(self_ref_subs.count(idx));
+        Type type_x = self_ref_subs[idx].type();
+        if (type_y != type_x) {
+            debug(0) << "x and y have different types\n";
+            return std::make_pair(false, vector<Operator>());
+        }
+        if (!is_bin_op_associative(expr, op_x, op_y, type_y)){
+            debug(0) << "Not solvable\n";
+            return std::make_pair(false, vector<Operator>());
+        }
+        internal_assert(csr.current_x.defined());
+
+        debug(0) << "\nFinding identity: \n";
+        Expr identity = find_identity(expr, op_x, op_y, type_y);
+        if (!identity.defined()) {
+            debug(0) << "Cannot find the identity\n";
+            return std::make_pair(false, vector<Operator>());
+        }
+        ops.push_back({expr, identity, {op_x, csr.current_x}, {op_y, y_part}});
+    }
+    debug(0) << "Proving associativity of Func " << f << "\n";
+    for (const auto &arg : args) {
+        debug(0) << "ARG: " << arg << "\n";
+    }
+    for (const auto &v : exprs) {
+        debug(0) << "Val: " << v << "\n";
+    }
+    for (const auto &op : ops) {
+        debug(0) << "Operator: " << op.op << "\n";
+        debug(0) << "   identity: " << op.identity << "\n";
+        debug(0) << "   x: " << op.x.first << " -> " << op.x.second << "\n";
+        debug(0) << "   y: " << op.y.first << " -> " << op.y.second << "\n";
+    }
+    return std::make_pair(true, ops);
+}
+
 void associativity_test() {
     Expr x = Variable::make(Int(32), "x");
     Expr y = Variable::make(Int(32), "y");
     Expr z = Variable::make(Int(32), "z");
     Expr t = Variable::make(Int(32), "t");
+    Expr rx = Variable::make(Int(32), "rx");
 
-    //Expr expr = Let::make("x", y + 1, Block::make(x + 1, x));
-    Expr mul = x + y;
-    //Expr expr = mul + max(mul, 1) + min(mul, mul + 2);
-
-    Expr expr1 = Call::make(Int(32), "f",
-                {mul, x*y},
-                Call::Extern);
-    Expr expr2 = expr1 + x*y;
-
-    Stmt let = LetStmt::make("p", expr1,
-        Block::make(common_subexpression_elimination(Evaluate::make(expr2)),
-                    common_subexpression_elimination(Evaluate::make(expr1))));
-
-    std::cout << "Expr: \n" << let << "\n";
-    Stmt s = common_subexpression_elimination(let);
-    s = simplify(s);
-    s = SubstituteInAllLets().mutate(s);
-    std::cout << "After CSE: \n" << s << "\n";
-
-    Expr e1 = common_subexpression_elimination(expr1 + x*y);
-    e1 = simplify(e1);
-    e1 = SubstituteInAllLets().mutate(e1);
-    Expr e2 = common_subexpression_elimination(expr2);
-    e2 = simplify(e2);
-    e2 = SubstituteInAllLets().mutate(e2);
-    std::cout << "e1: " << e1 << "\n";
-    std::cout << "e2: " << e2 << "\n";
-    std::cout << "is equal? " << equal(e1, e2) << "\n";
-
-    Expr test = select(y + 3 < x, y+x, 3-x);
-    std::cout << "Solve: " << solve_expression(test, "x") << "\n";
-
-
-    Expr prev_val0 = Call::make(Int(32), "dummy", {x},
+    Expr prev_val0 = Call::make(Int(32), "f", {x},
                                Call::CallType::Halide,
                                nullptr, 0);
-    Expr prev_val1 = Call::make(Int(32), "dummy", {x},
+    Expr prev_val1 = Call::make(Int(32), "f", {x},
                                Call::CallType::Halide,
                                nullptr, 1);
-    Expr prev_val2 = Call::make(Int(32), "dummy", {x},
+    Expr prev_val2 = Call::make(Int(32), "f", {x},
                                Call::CallType::Halide,
                                nullptr, 2);
 
-    //TODO(psuriana): error
-    /*Expr pv = Call::make(Int(16), "dummy", {x}, Call::CallType::Halide, nullptr, 0);
-    auto res = is_associative("dummy", {x}, {min(pv, Cast::make(Int(16), z))});*/
+    Expr g_call = Call::make(Int(32), "g", {rx},
+                             Call::CallType::Halide,
+                             nullptr, 0);
 
-    //auto res = is_associative("dummy", {x}, {y + z + prev_val0});
-    //auto res = is_associative("dummy", {x}, {max(y, prev_val0)});
-    //auto res = is_associative("dummy", {x}, {2, 3, prev_val2 + z});
+
+    //TODO(psuriana): error
+    /*Expr pv = Call::make(Int(16), "f", {x}, Call::CallType::Halide, nullptr, 0);
+    auto res = prove_associativity("f", {x}, {min(pv, Cast::make(Int(16), z))});*/
+
+    //auto res = prove_associativity("f", {x}, {y + z + prev_val0});
+    //auto res = prove_associativity("f", {x}, {max(y, prev_val0)});
+    //auto res = prove_associativity("f", {x}, {2, 3, prev_val2 + z});
+    //auto res = prove_associativity("f", {x}, {prev_val0 - g_call});
+    //auto res = prove_associativity("f", {x}, {max(prev_val0 + g_call, g_call)}); // should be not solvable
+    //auto res = prove_associativity("f", {x}, {max(prev_val0 + g_call, prev_val0 - 3)});
 
     //TODO(psuriana): does not work for select
-    auto res = is_associative("dummy", {x}, {2, select(z < prev_val0, z, prev_val1)});
-    //auto res = is_associative("dummy", {x}, {min(prev_val0, z), select(z < prev_val0, z, prev_val1)});
-    std::cout << "****is assoc? " << res.first << "\n";
+    auto res = prove_associativity("f", {x}, {2, select(z < prev_val0, z, prev_val1)});
+    //auto res = prove_associativity("f", {x}, {min(prev_val0, z), select(z < prev_val0, z, prev_val1)});
+    //auto res = prove_associativity("f", {x}, {min(prev_val0, g_call), select(g_call < prev_val0, rx, prev_val1)});
+    std::cout << "\n\n****is assoc? " << res.first << "\n";
 
+    for (const auto &op : res.second) {
+        debug(0) << "Operator: " << op.op << "\n";
+        debug(0) << "   identity: " << op.identity << "\n";
+        debug(0) << "   x: " << op.x.first << " -> " << op.x.second << "\n";
+        debug(0) << "   y: " << op.y.first << " -> " << op.y.second << "\n";
+    }
+    debug(0) << "\n";
     std::cout << "associativity test passed" << std::endl;
 }
 

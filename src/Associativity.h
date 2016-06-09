@@ -14,12 +14,28 @@
 namespace Halide {
 namespace Internal {
 
+struct Operator {
+	Expr op;
+	Expr identity;
+	std::pair<std::string, Expr> x;
+	std::pair<std::string, Expr> y;
+};
+
 /**
- * Given a binary expression operator 'bin_op' in the form of op(x, y), prove that
- * 'bin_op' is associative, i.e. prove that (x op y) op z == x op (y op z)
+ * Given an update definition of a Func 'f', determine its equivalent associative
+ * binary operator if there is any. The first boolean value of the returned pair
+ * indicates if the operation was successfuly proven as associative. The second
+ * vector contains the list of Operators for each Tuple element in the update
+ * definition.
+ *
+ * For instance, f(x) = min(f(x), g(r.x)) will return true and it will also return
+ * {{min(_x_0, _y_0), {{_x_0, f(x)}, {_y_0, g(r.x)}}, +inf}}, where the first Expr
+ * is the equivalent binary operator, the second vector contains the corresponding
+ * definition of each variable in the binary operator, and the last element is the
+ * identity of the binary operator.
  */
-EXPORT bool is_bin_op_associative(Expr bin_op, const std::string &op_x,
-								  const std::string &op_y, Type t);
+std::pair<bool, std::vector<Operator>> prove_associativity(
+	const std::string &f, std::vector<Expr> args, std::vector<Expr> exprs);
 
 EXPORT void associativity_test();
 

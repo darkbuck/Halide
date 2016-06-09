@@ -111,9 +111,9 @@ int simple_rfactor_test(bool compile_module) {
     f(x, y) = x + y;
     f.compute_root();
 
-    g(x, y) = 1;
+    g(x, y) = 40;
     RDom r(10, 20, 30, 40);
-    g(r.x, r.y) += f(r.x, r.y);
+    g(r.x, r.y) = max(g(r.x, r.y) + f(r.x, r.y), g(r.x, r.y));
 
     Var u("u");
     Func intm = g.update(0).rfactor({{r.y, u}});
@@ -140,7 +140,7 @@ int simple_rfactor_test(bool compile_module) {
     } else {
         Image<int> im = g.realize(80, 80);
         auto func = [](int x, int y, int z) {
-            return (10 <= x && x <= 29) && (30 <= y && y <= 69) ? x + y + 1 : 1;
+            return (10 <= x && x <= 29) && (30 <= y && y <= 69) ? std::max(40 + x + y, 40) : 40;
         };
         if (check_image(im, func)) {
             return -1;
@@ -336,9 +336,9 @@ int simple_rfactor_with_specialize_test(bool compile_module) {
     f(x, y) = x + y;
     f.compute_root();
 
-    g(x, y) = 1;
+    g(x, y) = 40;
     RDom r(10, 20, 30, 40);
-    g(r.x, r.y) += f(r.x, r.y);
+    g(r.x, r.y) = min(f(r.x, r.y) + 2, g(r.x, r.y));
 
     Param<int> p;
     Var u("u");
@@ -369,7 +369,7 @@ int simple_rfactor_with_specialize_test(bool compile_module) {
             p.set(0);
             Image<int> im = g.realize(80, 80);
             auto func = [](int x, int y, int z) {
-                return (10 <= x && x <= 29) && (30 <= y && y <= 69) ? x + y + 1 : 1;
+                return (10 <= x && x <= 29) && (30 <= y && y <= 69) ? std::min(x + y + 2, 40) : 40;
             };
             if (check_image(im, func)) {
                 return -1;
@@ -379,7 +379,7 @@ int simple_rfactor_with_specialize_test(bool compile_module) {
             p.set(20);
             Image<int> im = g.realize(80, 80);
             auto func = [](int x, int y, int z) {
-                return (10 <= x && x <= 29) && (30 <= y && y <= 69) ? x + y + 1 : 1;
+                return (10 <= x && x <= 29) && (30 <= y && y <= 69) ? std::min(x + y + 2, 40) : 40;
             };
             if (check_image(im, func)) {
                 return -1;
@@ -578,11 +578,11 @@ int tuple_rfactor_test(bool compile_module) {
 
     Func ref("ref");
     ref(x, y) = Tuple(1, 3);
-    ref(x, y) = Tuple(ref(x , y)[0] + f(r.x, r.y)[0], ref(x , y)[1] + f(r.x, r.y)[1]);
+    ref(x, y) = Tuple(ref(x , y)[0] + f(r.x, r.y)[0] + 3, min(ref(x , y)[1], f(r.x, r.y)[1]));
     Realization ref_rn = ref.realize(80, 80);
 
     g(x, y) = Tuple(1, 3);
-    g(x , y) = Tuple(g(x , y)[0] + f(r.x, r.y)[0], g(x , y)[1] + f(r.x, r.y)[1]);
+    g(x , y) = Tuple(g(x , y)[0] + f(r.x, r.y)[0] + 3, min(g(x , y)[1], f(r.x, r.y)[1]));
     g.reorder({y, x});
 
     Var xi("xi"), yi("yi");
@@ -659,12 +659,12 @@ int tuple_specialize_rdom_predicate_rfactor_test(bool compile_module) {
 
     Func ref("ref");
     ref(x, y) = Tuple(1, 3);
-    ref(x, y) = Tuple(ref(x, y)[0] + f(r.x, r.y, r.z)[0], ref(x, y)[1] + f(r.x, r.y, r.z)[1]);
+    ref(x, y) = Tuple(ref(x, y)[0]*f(r.x, r.y, r.z)[0], ref(x, y)[1] + 2*f(r.x, r.y, r.z)[1]);
     Realization ref_rn = ref.realize(10, 10);
 
     g(x, y) = Tuple(1, 3);
 
-    g(x, y) = Tuple(g(x, y)[0] + f(r.x, r.y, r.z)[0], g(x, y)[1] + f(r.x, r.y, r.z)[1]);
+    g(x, y) = Tuple(g(x, y)[0]*f(r.x, r.y, r.z)[0], g(x, y)[1] + 2*f(r.x, r.y, r.z)[1]);
 
     Param<int> p;
     Param<bool> q;
