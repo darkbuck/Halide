@@ -188,7 +188,6 @@ private:
                 expr = a + b;
             }
         }
-
     }
 
     void visit(const Sub *op) {
@@ -344,14 +343,27 @@ private:
 
         if (b_uses_var && !a_uses_var) {
             std::swap(a, b);
+            std::swap(a_uses_var, b_uses_var);
         } else if (a_uses_var && b_uses_var) {
             fail(T::make(a, b));
         }
 
-        if (a.same_as(op->a) && b.same_as(op->b)) {
-            expr = op;
-        } else {
-            expr = T::make(a, b);
+        expr = Expr();
+
+        if (a_uses_var && !b_uses_var) {
+            const T *t_a = a.as<T>();
+            if (t_a) {
+                // op(op(f(x), a), b) -> op(f(x), op(a, b))
+                expr = mutate(T::make(t_a->a, T::make(t_a->b, b)));
+            }
+        }
+
+        if (!expr.defined()) {
+            if (a.same_as(op->a) && b.same_as(op->b)) {
+                expr = op;
+            } else {
+                expr = T::make(a, b);
+            }
         }
     }
 
