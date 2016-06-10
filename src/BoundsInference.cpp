@@ -151,7 +151,7 @@ public:
             }
             vecs[1] = def.values();
 
-            for (size_t i = 0; i <result.size(); ++i) {
+            for (size_t i = 0; i < result.size(); ++i) {
                 for (const Expr &val : vecs[i]) {
                     if (!predicates.empty()) {
                         Expr cond_val = Call::make(val.type(),
@@ -225,6 +225,11 @@ public:
         // pushes all reduction domains it encounters into the 'rvars' set
         // for later use.
         void compute_exprs() {
+            // We need to clear 'exprs' and 'rdoms' first, in case compute_exprs()
+            // is called multiple times.
+            exprs.clear();
+            rdoms.clear();
+
             bool is_update = (stage != 0);
             vector<vector<CondValue>> result;
             if (!is_update) {
@@ -432,7 +437,7 @@ public:
             for (size_t d = 0; d < b.size(); d++) {
                 string arg = name + ".s" + std::to_string(stage) + "." + func_args[d];
 
-                if (b[d].min.same_as(b[d].max)) {
+                if (b[d].is_single_point()) {
                     s = LetStmt::make(arg + ".min", Variable::make(Int(32), arg + ".max"), s);
                 } else {
                     s = LetStmt::make(arg + ".min", b[d].min, s);
@@ -710,7 +715,7 @@ public:
                 if (!b.empty()) {
                     // Check for unboundedness
                     for (size_t k = 0; k < b.size(); k++) {
-                        if (!b[k].min.defined() || !b[k].max.defined()) {
+                        if (!b[k].is_bounded()) {
                             std::ostringstream err;
                             if (consumer.stage == 0) {
                                 err << "The pure definition ";
@@ -855,10 +860,10 @@ public:
             if (producing >= 0 && !inner_productions.empty()) {
                 const vector<string> f_args = f.args();
                 for (size_t i = 0; i < box.size(); i++) {
-                    internal_assert(box[i].min.defined() && box[i].max.defined());
+                    internal_assert(box[i].is_bounded());
                     string var = stage_name + "." + f_args[i];
 
-                    if (box[i].max.same_as(box[i].min)) {
+                    if (box[i].is_single_point()){
                         body = LetStmt::make(var + ".max", Variable::make(Int(32), var + ".min"), body);
                     } else {
                         body = LetStmt::make(var + ".max", box[i].max, body);

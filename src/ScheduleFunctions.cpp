@@ -19,6 +19,7 @@ using std::map;
 using std::vector;
 using std::pair;
 using std::make_pair;
+using std::set;
 
 namespace {
 // A structure representing a containing LetStmt, IfThenElse, or For
@@ -85,15 +86,6 @@ Stmt build_provide_loop_nest_helper(string func_name,
 
     vector<Split> splits = s.splits();
 
-    Dim innermost_non_trivial_loop;
-    for (const Dim &d : s.dims()) {
-        if (d.for_type != ForType::Vectorized &&
-            d.for_type != ForType::Unrolled) {
-            innermost_non_trivial_loop = d;
-            break;
-        }
-    }
-
     // Define the function args in terms of the loop variables using the splits
     for (const Split &split : splits) {
         Expr outer = Variable::make(Int(32), prefix + split.outer);
@@ -146,6 +138,9 @@ Stmt build_provide_loop_nest_helper(string func_name,
                 // old extent. No need to adjust the base or add an if
                 // statement.
                 known_size_dims[split.outer] = iter->second / split.factor;
+            } else if (is_negative_const(split.factor) || is_zero(split.factor)) {
+                user_error << "Can't split " << split.old_var << " by " << split.factor
+                           << ". Split factors must be strictly positive\n";
             } else if (is_one(split.factor)) {
                 // The split factor trivially divides the old extent,
                 // but we know nothing new about the outer dimension.
@@ -173,14 +168,10 @@ Stmt build_provide_loop_nest_helper(string func_name,
                 // Adjust the base downwards to not compute off the
                 // end of the realization.
 
-                // Only mark the base as likely (triggering a loop
-                // partition) if the outer var is the innermost
-                // non-trivial loop and it's a serial loop. This
-                // usually is due to an unroll or vectorize call.
-                if (split.outer == innermost_non_trivial_loop.var &&
-                    innermost_non_trivial_loop.for_type == ForType::Serial) {
-                    base = likely(base);
-                }
+                // We'll only mark the base as likely (triggering a loop
+                // partition) if we're at or inside the innermost
+                // non-trivial loop.
+                base = likely_if_innermost(base);
 
                 base = Min::make(base, old_max + (1 - split.factor));
             } else {
@@ -1122,7 +1113,9 @@ class RemoveLoopsOverOutermost : public IRMutator {
     using IRMutator::visit;
 
     void visit(const For *op) {
-        if (ends_with(op->name, ".__outermost") && is_one(simplify(op->extent))) {
+        if (ends_with(op->name, ".__outermost") &&
+            is_one(simplify(op->extent)) &&
+            op->device_api == DeviceAPI::None) {
             stmt = mutate(substitute(op->name, op->min, op->body));
         } else {
             IRMutator::visit(op);
