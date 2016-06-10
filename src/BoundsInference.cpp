@@ -894,7 +894,7 @@ public:
                 for (const ReductionVariable &rv : s.rvars) {
                     string var = s.stage_prefix + rv.var;
                     Interval in = bounds_of_inner_var(var, body);
-                    if (in.min.defined() && in.max.defined()) {
+                    if (in.is_bounded()) {
                         body = LetStmt::make(var + ".min", in.min, body);
                         body = LetStmt::make(var + ".max", in.max, body);
                     } else {
