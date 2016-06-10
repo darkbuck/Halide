@@ -511,11 +511,11 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     vector<Expr> &values = definition.values();
 
     // Check whether the operator is associative and determine the operator and
-    // its identity for each value in the definition
+    // its identity for each value in the definition if it is a Tuple
     bool is_assoc;
     vector<Operator> ops;
     std::tie(is_assoc, ops) = prove_associativity(func_name, args, values);
-    user_assert(is_assoc) << "Cannot prove associativity of the operator\n";
+    user_assert(is_assoc) << "Failed to call rfactor() since it can't prove associativity of the operator\n";
     internal_assert(ops.size() == values.size());
 
     vector<Split> &splits = definition.schedule().splits();
