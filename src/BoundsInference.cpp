@@ -225,10 +225,10 @@ public:
         // pushes all reduction domains it encounters into the 'rvars' set
         // for later use.
         void compute_exprs() {
-            // We need to clear 'exprs' and 'rdoms' first, in case compute_exprs()
+            // We need to clear 'exprs' and 'rvars' first, in case compute_exprs()
             // is called multiple times.
             exprs.clear();
-            rdoms.clear();
+            rvars.clear();
 
             bool is_update = (stage != 0);
             vector<vector<CondValue>> result;
