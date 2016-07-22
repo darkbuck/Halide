@@ -20,6 +20,9 @@ struct ComplexExpr {
     // Halide::Expr or constant float) to a complex number with an
     // imaginary part of zero.
     ComplexExpr(Halide::Expr x, Halide::Expr y = 0.0f) : x(x), y(y) {}
+    // Initialize to undef.
+    ComplexExpr(const Halide::Undef &x, const Halide::Undef &y)
+        : ComplexExpr(Halide::Tuple(x, y)) {}
 
     Halide::Expr re() { return x; }
     Halide::Expr im() { return y; }

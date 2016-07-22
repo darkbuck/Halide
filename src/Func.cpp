@@ -2121,6 +2121,15 @@ Stage FuncRef::operator=(const FuncRef &e) {
     }
 }
 
+// Helper for converting Undef to call expr
+Expr undef_to_expr(const Undef &u) {
+    return Call::make(u.type, Call::undef, vector<Expr>(), Call::PureIntrinsic);
+}
+
+Stage FuncRef::operator=(const Undef &u) {
+    return (*this) = Tuple(undef_to_expr(u));
+}
+
 // Inject a suitable base-case definition given an update
 // definition. This is a helper for FuncRef::operator+= and co.
 Func define_base_case(Internal::Function func, const vector<Expr> &a, const Tuple &e) {
@@ -2193,6 +2202,10 @@ Stage FuncRef::operator+=(const FuncRef &e) {
     }
 }
 
+Stage FuncRef::operator+=(const Undef &u) {
+    return (*this) += undef_to_expr(u);
+}
+
 Stage FuncRef::operator*=(Expr e) {
     return func_ref_update<std::multiplies<Expr>>(e, 1);
 }
@@ -2211,6 +2224,10 @@ Stage FuncRef::operator*=(const FuncRef &e) {
     } else {
         return (*this) *= Tuple(e);
     }
+}
+
+Stage FuncRef::operator*=(const Undef &u) {
+    return (*this) *= undef_to_expr(u);
 }
 
 Stage FuncRef::operator-=(Expr e) {
@@ -2233,6 +2250,10 @@ Stage FuncRef::operator-=(const FuncRef &e) {
     }
 }
 
+Stage FuncRef::operator-=(const Undef &u) {
+    return (*this) -= undef_to_expr(u);
+}
+
 Stage FuncRef::operator/=(Expr e) {
     return func_ref_update<std::divides<Expr>>(e, 1);
 }
@@ -2251,6 +2272,10 @@ Stage FuncRef::operator/=(const FuncRef &e) {
     } else {
         return (*this) /= Tuple(e);
     }
+}
+
+Stage FuncRef::operator/=(const Undef &u) {
+    return (*this) /= undef_to_expr(u);
 }
 
 FuncRef::operator Expr() const {

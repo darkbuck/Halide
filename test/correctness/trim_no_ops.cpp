@@ -155,13 +155,20 @@ int main(int argc, char **argv) {
         // if statement instead of a select.
         Func f;
         Var x, y;
-        f(x, y) = select(2*x < y, 5, undef<int>());
 
-        Var xi, yi;
-        f.tile(x, y, xi, yi, 4, 4);
+        f(x, y) = undef<int32_t>();
+
+        Param<int> width("width");
+        Param<int> height("height");
+        RDom r(0, width, 0, height);
+        r.where(2*r.x < r.y);
+        f(r.x, r.y) = 5;
+
+        RVar rxi, ryi;
+        f.update().tile(r.x, r.y, rxi, ryi, 4, 4);
 
         // Check there are no if statements.
-        Module m = f.compile_to_module({});
+        Module m = f.compile_to_module({width, height});
         CountConditionals s;
         m.functions().front().body.accept(&s);
         if (s.count != 0) {
@@ -185,15 +192,14 @@ int main(int argc, char **argv) {
         f(x, y) = x + y;
 
         RDom r(0, 100, 0, 100);
-        f(r.x, r.y) += select((r.x < r.y) && (r.x == 10), 3, undef<int>());
+        r.where((r.x < r.y) && (r.x == 10));
+        f(r.x, r.y) += 3;
 
         f.update(0).gpu_tile(r.x, r.y, 4, 4);
 
         Image<int> im = f.realize(200, 200);
 
-        // There should be no selects after trim_no_ops runs. The select should
-        // be lifted out as if condition. We can't trim gpu loop r.x based on the
-        // if condition since it depends on gpu outer loop r.y
+        // We can't trim gpu loop r.x based on the if condition since it depends on gpu outer loop r.y
         Target gpu_target(get_host_target());
         gpu_target.set_feature(Target::CUDA);
         Module m = f.compile_to_module({}, "", gpu_target);
@@ -203,8 +209,8 @@ int main(int argc, char **argv) {
             std::cerr << "There were selects in the lowered code: \n" << m.functions().front().body << "\n";
             return -1;
         }
-        if (s.count_if != 1) {
-            std::cerr << "There should be 1 if in the lowered code: \n" << m.functions().front().body << "\n";
+        if (s.count_if == 0) {
+            std::cerr << "There should be ifs in the lowered code: \n" << m.functions().front().body << "\n";
             return -1;
         }
 

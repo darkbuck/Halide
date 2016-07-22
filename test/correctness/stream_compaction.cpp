@@ -6,13 +6,13 @@ using namespace Halide;
 int main(int argc, char **argv) {
 
     // A zero-one function:
-    Func f;
-    Var x;
+    Func f("f");
+    Var x("x");
     f(x) = select((x % 7 == 0) || (x % 5 == 0), 1, 0);
     f.compute_root();
 
     // Take the cumulative sum. To do this part in parallel see the parallel_reductions test.
-    Func cum_sum;
+    Func cum_sum("cum_sum");
     cum_sum(x) = 0;
     RDom r(0, 1000);
     cum_sum(r+1) = f(r) + cum_sum(r);
@@ -22,17 +22,20 @@ int main(int argc, char **argv) {
     Func ones;
     ones(x) = -1; // Initialize to -1 as a sentinel.
 
+    RDom r1(0, 1000);
+    r1.where(f(r1) == 1);
+
     // Figure out which bin each coordinate should go into. Need a
     // clamp so that Halide knows how much space to allocate for ones.
-    Expr bin = clamp(cum_sum(r), 0, 1000);
+    Expr bin = clamp(cum_sum(r1), 0, 1000);
 
     // In this context, undef means skip writing when f(r) != 1
-    ones(bin) = select(f(r) == 1, r, undef<int>());
+    ones(bin) = r1;
 
     // This is actually safe to parallelize, because 'bin' is going to
-    // be one-to-one with 'r' when f(r) == 1, but that's too subtle
+    // be one-to-one with 'r1' when f(r1) == 1, but that's too subtle
     // for Halide to prove:
-    ones.update().allow_race_conditions().parallel(r, 50);
+    ones.update().allow_race_conditions().parallel(r1, 50);
 
     Image<int> result = ones.realize(1001);
     int next = 0;

@@ -30,17 +30,19 @@ int main(int argc, char **argv) {
 
     // Make a bitmask representing the region inside the crop.
     Image<bool> in_subregion(80, 60, 10, 10);
-    Expr test = ((x >= x_off) && (x < x_off + x_size*2) &&
-                 (y >= y_off) && (y < y_off + y_size*2) &&
-                 (z >= z_off) && (z < z_off + z_size*2) &&
-                 (w >= w_off) && (w < w_off + w_size*2) &&
-                 (x % 2 == 0) &&
-                 (y % 2 == 0) &&
-                 (z % 2 == 0) &&
-                 (w % 2 == 0));
-    Func test_func;
-    test_func(x, y, z, w) = test;
-    test_func.realize(in_subregion);
+    {
+        Expr test = ((x >= x_off) && (x < x_off + x_size*2) &&
+                     (y >= y_off) && (y < y_off + y_size*2) &&
+                     (z >= z_off) && (z < z_off + z_size*2) &&
+                     (w >= w_off) && (w < w_off + w_size*2) &&
+                     (x % 2 == 0) &&
+                     (y % 2 == 0) &&
+                     (z % 2 == 0) &&
+                     (w % 2 == 0));
+        Func test_func;
+        test_func(x, y, z, w) = test;
+        test_func.realize(in_subregion);
+    }
 
     Func f;
     f(x, y, z, w) = 3*x + 2*y + z + 4*w;
@@ -54,8 +56,24 @@ int main(int argc, char **argv) {
 
     // Put some data in the full host buffer, avoiding the region
     // being evaluated above.
-    Expr change_out_of_subregion = select(test, undef<int>(), 4*x + 3*y + 2*z + w);
-    lambda(x, y, z, w, change_out_of_subregion).realize(full);
+    {
+        Func change_out_of_subregion;
+        change_out_of_subregion(x, y, z, w) = undef<int>();
+
+        RDom r(full);
+        Expr test = !((r.x >= x_off) && (r.x < x_off + x_size*2) &&
+                     (r.y >= y_off) && (r.y < y_off + y_size*2) &&
+                     (r.z >= z_off) && (r.z < z_off + z_size*2) &&
+                     (r.w >= w_off) && (r.w < w_off + w_size*2) &&
+                     (r.x % 2 == 0) &&
+                     (r.y % 2 == 0) &&
+                     (r.z % 2 == 0) &&
+                     (r.w % 2 == 0));
+        r.where(test);
+
+        change_out_of_subregion(r.x, r.y, r.z, r.w) = 4*r.x + 3*r.y + 2*r.z + r.w;
+        change_out_of_subregion.realize(full);
+    }
 
     // Copy back the output subset from the GPU.
     out.copy_to_host();

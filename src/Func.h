@@ -280,6 +280,11 @@ public:
      * for a Func with multiple outputs. */
     EXPORT Stage operator=(const Tuple &);
 
+    /** Use this as the left-hand-side of a definition or an update definition
+     * (see \ref RDom) with undefined value.
+     */
+    EXPORT Stage operator=(const Undef &);
+
     /** Define this function as a sum reduction over the given
      * expression. The expression should refer to some RDom to sum
      * over. If the function does not already have a pure definition,
@@ -289,6 +294,7 @@ public:
     EXPORT Stage operator+=(Expr);
     EXPORT Stage operator+=(const Tuple &);
     EXPORT Stage operator+=(const FuncRef &);
+    EXPORT Stage operator+=(const Undef &);
     // @}
 
     /** Define this function as a sum reduction over the negative of
@@ -300,6 +306,7 @@ public:
     EXPORT Stage operator-=(Expr);
     EXPORT Stage operator-=(const Tuple &);
     EXPORT Stage operator-=(const FuncRef &);
+    EXPORT Stage operator-=(const Undef &);
     // @}
 
     /** Define this function as a product reduction. The expression
@@ -311,6 +318,7 @@ public:
     EXPORT Stage operator*=(Expr);
     EXPORT Stage operator*=(const Tuple &);
     EXPORT Stage operator*=(const FuncRef &);
+    EXPORT Stage operator*=(const Undef &);
     // @}
 
     /** Define this function as the product reduction over the inverse
@@ -322,6 +330,7 @@ public:
     EXPORT Stage operator/=(Expr);
     EXPORT Stage operator/=(const Tuple &);
     EXPORT Stage operator/=(const FuncRef &);
+    EXPORT Stage operator/=(const Undef &);
     // @}
 
     /* Override the usual assignment operator, so that

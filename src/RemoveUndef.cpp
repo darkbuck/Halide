@@ -80,33 +80,11 @@ private:
         Expr t = mutate(op->true_value);
         Expr f = mutate(op->false_value);
 
-        if (!cond.defined()) {
-            expr = Expr();
-            return;
-        }
+        internal_assert(cond.defined()) << "Can't have undef as condition in a Select\n";
+        internal_assert(t.defined()) << "Can't have undef as true value in a Select\n";
+        internal_assert(f.defined()) << "Can't have undef as false value in a Select\n";
 
-        if (!t.defined() && !f.defined()) {
-            expr = Expr();
-            return;
-        }
-
-        if (!t.defined()) {
-            // Swap the cases so that we only need to deal with the
-            // case when false is not defined below.
-            cond = Not::make(cond);
-            t = f;
-            f = Expr();
-        }
-
-        if (!f.defined()) {
-            // We need to convert this to an if-then-else
-            if (predicate.defined()) {
-                predicate = predicate && cond;
-            } else {
-                predicate = cond;
-            }
-            expr = t;
-        } else if (cond.same_as(op->condition) &&
+        if (cond.same_as(op->condition) &&
             t.same_as(op->true_value) &&
             f.same_as(op->false_value)) {
             expr = op;
@@ -317,15 +295,23 @@ private:
             new_args[i] = new_arg;
         }
 
+        bool all_values_undefined = true;
         for (size_t i = 0; i < op->values.size(); i++) {
             Expr old_value = op->values[i];
             Expr new_value = mutate(old_value);
             if (!expr.defined()) {
-                stmt = Stmt();
-                return;
+                new_value = Call::make(old_value.type(), Call::undef,
+                                       vector<Expr>(),
+                                       Call::PureIntrinsic);
+            } else {
+                all_values_undefined = false;
             }
             if (!new_value.same_as(old_value)) changed = true;
             new_values[i] = new_value;
+        }
+        if (all_values_undefined) {
+            stmt = Stmt();
+            return;
         }
 
         if (predicate.defined()) {

@@ -56,6 +56,9 @@ EXPORT bool is_negative_const(Expr e);
  */
 EXPORT bool is_negative_negatable_const(Expr e);
 
+/** Is the expression an undef */
+EXPORT bool is_undef(Expr e);
+
 /** Is the expression a const (as defined by is_const), and also equal
  * to zero (in all lanes, if a vector expression) */
 EXPORT bool is_zero(Expr e);
@@ -1812,6 +1815,13 @@ inline NO_INLINE Expr print_when(Expr condition, Expr a, Args... args) {
 
 // @}
 
+/** Represent an undef value of given type. */
+struct Undef {
+    Type type;
+
+    Undef(Type t) : type(t) {}
+    Undef() {}
+};
 
 /** Return an undef value of the given type. Halide skips stores that
  * depend on undef values, so you can use this to mean "do not modify
@@ -1831,14 +1841,12 @@ inline NO_INLINE Expr print_when(Expr condition, Expr a, Args... args) {
  * Use this feature with great caution, as you can use it to load from
  * uninitialized memory.
  */
-inline Expr undef(Type t) {
-    return Internal::Call::make(t, Internal::Call::undef,
-                                std::vector<Expr>(),
-                                Internal::Call::PureIntrinsic);
+inline Undef undef(Type t) {
+    return Undef(t);
 }
 
 template<typename T>
-inline Expr undef() {
+inline Undef undef() {
     return undef(type_of<T>());
 }
 

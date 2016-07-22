@@ -206,7 +206,7 @@ h::Expr random_int1(h::Expr seed)
 }
 
 
-h::Expr undef0(h::Type type)
+h::Undef undef0(h::Type type)
 {
     return h::undef(type);
 }

@@ -771,6 +771,8 @@ ComplexFunc fft2d_r2c(Func r,
     // We are going to add a row to the result (with update steps) by unzipping
     // the DC and Nyquist bin rows. To avoid unnecessarily computing some junk for
     // this row before we overwrite it, pad the pure definition with undef.
+
+    //TODO(psuriana): fix this without using undef
     dft = ComplexFunc(constant_exterior((Func)dft, Tuple(undef_z()), Expr(), Expr(), Expr(0), Expr(N1 / 2)));
 
     // Unzip the DFTs of the DC and Nyquist bin DFTs. Unzip the Nyquist DFT first,

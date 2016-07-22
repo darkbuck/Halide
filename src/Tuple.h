@@ -14,6 +14,36 @@ namespace Halide {
 
 class FuncRef;
 
+/** A class that can represent Exprs or Undefs. Used for Tuple's values
+ * which can accept a mix of either. */
+struct ExprOrUndef {
+    ExprOrUndef() : expr(Expr()), is_undef(false) {}
+    ExprOrUndef(Expr e) : expr(e), is_undef(false) {}
+    ExprOrUndef(const Undef &u) : undef(u), is_undef(true) {}
+
+    Expr expr;
+    Undef undef;
+    bool is_undef;
+
+    operator Expr() const {
+        if (!is_undef) {
+            return expr;
+        } else {
+            return Internal::Call::make(undef.type, Internal::Call::undef,
+                                        std::vector<Expr>(),
+                                        Internal::Call::PureIntrinsic);
+        }
+    }
+
+    Type type() const {
+        if (!is_undef) {
+            return expr.type();
+        } else {
+            return undef.type;
+        }
+    }
+};
+
 /** Create a small array of Exprs for defining and calling functions
  * with multiple outputs. */
 class Tuple {
@@ -50,9 +80,28 @@ public:
     }
     //@}
 
+    /** Construct a Tuple from mixed of Exprs and Undefs. */
+    //@{
+    template<typename ...Args>
+    Tuple(ExprOrUndef a, ExprOrUndef b, Args... args) {
+        exprs.push_back(a);
+        exprs.push_back(b);
+        Internal::collect_args(exprs, args...);
+    }
+    //@}
+
     /** Construct a Tuple from a vector of Exprs */
     explicit NO_INLINE Tuple(const std::vector<Expr> &e) : exprs(e) {
         user_assert(e.size() > 0) << "Tuples must have at least one element\n";
+    }
+
+    /** Construct a Tuple from a vector of Exprs and Undefs */
+    explicit NO_INLINE Tuple(const std::vector<ExprOrUndef> &e) {
+        user_assert(e.size() > 0) << "Tuples must have at least one element\n";
+        exprs.resize(e.size());
+        for (size_t i = 0; i < e.size(); ++i) {
+            exprs[i] = (Expr)e[i];
+        }
     }
 
     /** Construct a Tuple from a function reference. */

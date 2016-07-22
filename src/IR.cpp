@@ -221,6 +221,25 @@ Expr Select::make(Expr condition, Expr true_value, Expr false_value) {
                     condition.type().lanes() == true_value.type().lanes())
         << "In Select, vector lanes of condition must either be 1, or equal to vector lanes of arguments\n";
 
+    if (const Call *c = condition.as<Call>()) {
+        internal_assert(!c->is_intrinsic(Call::undef)) << "Condition of select is undef\n"
+            << "condition: " << condition << "\n"
+            << "true: " << true_value << "\n"
+            << "false: " << false_value << "\n";
+    }
+    if (const Call *c = true_value.as<Call>()) {
+        internal_assert(!c->is_intrinsic(Call::undef)) << "True value of select is undef\n"
+            << "condition: " << condition << "\n"
+            << "true: " << true_value << "\n"
+            << "false: " << false_value << "\n";
+    }
+    if (const Call *c = false_value.as<Call>()) {
+        internal_assert(!c->is_intrinsic(Call::undef)) << "False value of select is undef\n"
+            << "condition: " << condition << "\n"
+            << "true: " << true_value << "\n"
+            << "false: " << false_value << "\n";
+    }
+
     Select *node = new Select;
     node->type = true_value.type();
     node->condition = condition;
