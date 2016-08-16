@@ -109,12 +109,13 @@ struct Pattern {
         InterleaveResult = 1 << 0,  // After evaluating the pattern, interleave native vectors of the result.
         SwapOps01 = 1 << 1,  // Swap operands 0 and 1 prior to substitution.
         SwapOps12 = 1 << 2,  // Swap operands 1 and 2 prior to substitution.
-        ExactLog2Op1 = 1 << 3, // Replace operand 1 with its log base 2, if the log base 2 is exact.
-        ExactLog2Op2 = 1 << 4, // Save as above, but for operand 2.
+        SwapOps02_23 = 1 << 3, // Swap operands 0 and 2 and then 2 and 3. i.e. abcd -> cbda
+        ExactLog2Op1 = 1 << 4, // Replace operand 1 with its log base 2, if the log base 2 is exact.
+        ExactLog2Op2 = 1 << 5, // Save as above, but for operand 2.
 
-        DeinterleaveOp0 = 1 << 5,  // Prior to evaluating the pattern, deinterleave native vectors of operand 0.
-        DeinterleaveOp1 = 1 << 6,  // Same as above, but for operand 1.
-        DeinterleaveOp2 = 1 << 7,
+        DeinterleaveOp0 = 1 << 6,  // Prior to evaluating the pattern, deinterleave native vectors of operand 0.
+        DeinterleaveOp1 = 1 << 7,  // Same as above, but for operand 1.
+        DeinterleaveOp2 = 1 << 8,
         DeinterleaveOps = DeinterleaveOp0 | DeinterleaveOp1 | DeinterleaveOp2,
 
         // Many patterns are instructions that widen only
@@ -122,15 +123,17 @@ struct Pattern {
         // re-interleave the result.
         ReinterleaveOp0 = InterleaveResult | DeinterleaveOp0,
 
-        NarrowOp0 = 1 << 10,  // Replace operand 0 with its half-width equivalent.
-        NarrowOp1 = 1 << 11,  // Same as above, but for operand 1.
-        NarrowOp2 = 1 << 12,
-        NarrowOps = NarrowOp0 | NarrowOp1 | NarrowOp2,
+        NarrowOp0 = 1 << 11,  // Replace operand 0 with its half-width equivalent.
+        NarrowOp1 = 1 << 12,  // Same as above, but for operand 1.
+        NarrowOp2 = 1 << 13,
+        NarrowOp3 = 1 << 14,
+        NarrowOps = NarrowOp0 | NarrowOp1 | NarrowOp2 | NarrowOp3,
 
-        NarrowUnsignedOp0 = 1 << 15,  // Similar to the above, but narrow to an unsigned half width type.
-        NarrowUnsignedOp1 = 1 << 16,
-        NarrowUnsignedOp2 = 1 << 17,
-        NarrowUnsignedOps = NarrowUnsignedOp0 | NarrowUnsignedOp1 | NarrowUnsignedOp2,
+        NarrowUnsignedOp0 = 1 << 16,  // Similar to the above, but narrow to an unsigned half width type.
+        NarrowUnsignedOp1 = 1 << 17,
+        NarrowUnsignedOp2 = 1 << 18,
+        NarrowUnsignedOp3 = 1 << 19,
+        NarrowUnsignedOps = NarrowUnsignedOp0 | NarrowUnsignedOp1 | NarrowUnsignedOp2 | NarrowUnsignedOp3,
 
    };
 
@@ -215,6 +218,7 @@ Expr apply_patterns(Expr x, const vector<Pattern> &patterns, IRMutator *op_mutat
                 internal_assert(matches.size() >= 3);
                 std::swap(matches[1], matches[2]);
             }
+
             // Mutate the operands with the given mutator.
             for (Expr &op : matches) {
                 op = op_mutator->mutate(op);
@@ -331,6 +335,9 @@ private:
         static vector<Pattern> adds = {
             // Widening multiply-accumulates with a scalar.
             { "halide.hexagon.add_mpy.vuh.vub.ub", wild_u16x + wild_u16x*bc(wild_u16), Pattern::ReinterleaveOp0 | Pattern::NarrowOp1 | Pattern::NarrowOp2 },
+            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", wild_i16x*bc(wild_i16) + wild_i16x*bc(wild_i16), Pattern:: InterleaveResult | Pattern::NarrowUnsignedOp0 | Pattern::NarrowOp1 | Pattern::NarrowUnsignedOp2 | Pattern::NarrowOp3 | Pattern::SwapOps12 },
+            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", bc(wild_i16)*wild_i16x + wild_i16x*bc(wild_i16), Pattern:: InterleaveResult | Pattern::NarrowOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowUnsignedOp2 | Pattern::NarrowOp3 | Pattern::SwapOps02_23 },
+            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", bc(wild_i16)*wild_i16x + bc(wild_i16)*wild_i16x, Pattern:: InterleaveResult | Pattern::NarrowOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowOp2 | Pattern::NarrowUnsignedOp3 | Pattern::SwapOps02_23 },
             { "halide.hexagon.add_mpy.vh.vub.b",   wild_i16x + wild_i16x*bc(wild_i16), Pattern::ReinterleaveOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowOp2 },
             { "halide.hexagon.add_mpy.vuw.vuh.uh", wild_u32x + wild_u32x*bc(wild_u32), Pattern::ReinterleaveOp0 | Pattern::NarrowOp1 | Pattern::NarrowOp2 },
             { "halide.hexagon.add_mpy.vuh.vub.ub", wild_u16x + bc(wild_u16)*wild_u16x, Pattern::ReinterleaveOp0 | Pattern::NarrowOp1 | Pattern::NarrowOp2 | Pattern::SwapOps12 },

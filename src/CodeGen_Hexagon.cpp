@@ -212,6 +212,7 @@ void CodeGen_Hexagon::init_module() {
     struct HvxIntrinsic {
         enum {
             BroadcastScalarsToWords = 1 << 0,  // Some intrinsics need scalar arguments broadcasted up to 32 bits.
+            BroadcastScalar_ByteByteToWord = 1 << 1, // given byte lo and hi, word (w) = 0xhilohilo
         };
         Intrinsic::ID id;
         Type ret_type;
@@ -357,6 +358,7 @@ void CodeGen_Hexagon::init_module() {
         { IPICK(is_128B, Intrinsic::hexagon_V6_vmpyuh),  u32v2, "mpy.vuh.uh",  {u16v1, u16}, HvxIntrinsic::BroadcastScalarsToWords },
         { IPICK(is_128B, Intrinsic::hexagon_V6_vmpyh),   i32v2, "mpy.vh.h",    {i16v1, i16}, HvxIntrinsic::BroadcastScalarsToWords },
         { IPICK(is_128B, Intrinsic::hexagon_V6_vmpybus), i16v2, "mpy.vub.b",   {u8v1,  i8}, HvxIntrinsic::BroadcastScalarsToWords },
+        { IPICK(is_128B, Intrinsic::hexagon_V6_vmpabus),  i16v2, "add_mpy.vh.vub.b.b",     {i16v2, u8v1, i8, i8}, HvxIntrinsic::BroadcastScalarsToWords },
 
         { IPICK(is_128B, Intrinsic::hexagon_V6_vmpyub_acc),   u16v2, "add_mpy.vuh.vub.ub",   {u16v2, u8v1,  u8}, HvxIntrinsic::BroadcastScalarsToWords },
         { IPICK(is_128B, Intrinsic::hexagon_V6_vmpyuh_acc),   u32v2, "add_mpy.vuw.vuh.uh",   {u32v2, u16v1, u16}, HvxIntrinsic::BroadcastScalarsToWords },
@@ -505,6 +507,24 @@ llvm::Function *CodeGen_Hexagon::define_hvx_intrinsic(llvm::Function *intrin, Ty
         Type split_type = arg_types.front().with_lanes(arg_types.front().lanes() / 2);
         arg_types[0] = split_type;
         arg_types.insert(arg_types.begin() + 1, split_type);
+    } else if (args.size() == intrin_ty->getNumParams() + 1) {
+        // This intrinsic has two scalars as its last two elements. Merge them into one element.
+        int num_args = args.size();
+        Value *high = args[num_args-2];
+        Value *low = args[num_args-1];
+        llvm::Function *fn = nullptr;
+        internal_assert(arg_types[num_args-2].bits() == arg_types[num_args-1].bits());
+        unsigned bits = arg_types[num_args-2].bits();
+        switch (bits) {
+        case 8:
+            fn = module->getFunction("halide.hexagon.cat2.b");
+            break;
+        case 16:
+            fn = module->getFunction("halide.hexagon.cat2.h");
+            break;
+        }
+        args[num_args-2] = builder->CreateCall(fn, {high, low});
+        args.pop_back();
     }
 
     // Replace args with bitcasts if necessary.
