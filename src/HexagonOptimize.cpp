@@ -109,13 +109,15 @@ struct Pattern {
         InterleaveResult = 1 << 0,  // After evaluating the pattern, interleave native vectors of the result.
         SwapOps01 = 1 << 1,  // Swap operands 0 and 1 prior to substitution.
         SwapOps12 = 1 << 2,  // Swap operands 1 and 2 prior to substitution.
-        SwapOps02_23 = 1 << 3, // Swap operands 0 and 2 and then 2 and 3. i.e. abcd -> cbda
-        ExactLog2Op1 = 1 << 4, // Replace operand 1 with its log base 2, if the log base 2 is exact.
-        ExactLog2Op2 = 1 << 5, // Save as above, but for operand 2.
+        SwapOps03 = 1 << 3,
+        SwapOps01_12 = 1 << 4, // Swap operands 0 and 1 and then swap operands 1 and 2, i.e. abcd -> bcad
+        SwapOps01_03 = 1 << 5, // Swap operands 0 and 1 and then swap operands 0 and 3, i.e. abcd -> dacb
+        ExactLog2Op1 = 1 << 6, // Replace operand 1 with its log base 2, if the log base 2 is exact.
+        ExactLog2Op2 = 1 << 7, // Save as above, but for operand 2.
 
-        DeinterleaveOp0 = 1 << 6,  // Prior to evaluating the pattern, deinterleave native vectors of operand 0.
-        DeinterleaveOp1 = 1 << 7,  // Same as above, but for operand 1.
-        DeinterleaveOp2 = 1 << 8,
+        DeinterleaveOp0 = 1 << 8,  // Prior to evaluating the pattern, deinterleave native vectors of operand 0.
+        DeinterleaveOp1 = 1 << 9,  // Same as above, but for operand 1.
+        DeinterleaveOp2 = 1 << 10,
         DeinterleaveOps = DeinterleaveOp0 | DeinterleaveOp1 | DeinterleaveOp2,
 
         // Many patterns are instructions that widen only
@@ -123,17 +125,19 @@ struct Pattern {
         // re-interleave the result.
         ReinterleaveOp0 = InterleaveResult | DeinterleaveOp0,
 
-        NarrowOp0 = 1 << 11,  // Replace operand 0 with its half-width equivalent.
-        NarrowOp1 = 1 << 12,  // Same as above, but for operand 1.
-        NarrowOp2 = 1 << 13,
-        NarrowOp3 = 1 << 14,
+        NarrowOp0 = 1 << 13,  // Replace operand 0 with its half-width equivalent.
+        NarrowOp1 = 1 << 14,  // Same as above, but for operand 1.
+        NarrowOp2 = 1 << 15,
+        NarrowOp3 = 1 << 16,
         NarrowOps = NarrowOp0 | NarrowOp1 | NarrowOp2 | NarrowOp3,
 
-        NarrowUnsignedOp0 = 1 << 16,  // Similar to the above, but narrow to an unsigned half width type.
-        NarrowUnsignedOp1 = 1 << 17,
-        NarrowUnsignedOp2 = 1 << 18,
-        NarrowUnsignedOp3 = 1 << 19,
+        NarrowUnsignedOp0 = 1 << 18,  // Similar to the above, but narrow to an unsigned half width type.
+        NarrowUnsignedOp1 = 1 << 19,
+        NarrowUnsignedOp2 = 1 << 20,
+        NarrowUnsignedOp3 = 1 << 21,
         NarrowUnsignedOps = NarrowUnsignedOp0 | NarrowUnsignedOp1 | NarrowUnsignedOp2 | NarrowUnsignedOp3,
+
+        ConcatOps01 = 1 << 23,
 
    };
 
@@ -217,6 +221,29 @@ Expr apply_patterns(Expr x, const vector<Pattern> &patterns, IRMutator *op_mutat
             if (p.flags & Pattern::SwapOps12) {
                 internal_assert(matches.size() >= 3);
                 std::swap(matches[1], matches[2]);
+            }
+        // SwapOps01_12 = 1 << 4, // Swap operands 0 and 1 and then swap operands 1 and 2, i.e. abcd -> bcad
+        // SwapOps01_03 = 1 << 5, // Swap operands 0 and 1 and then swap operands 0 and 3, i.e. abcd -> dacb
+
+            if (p.flags & Pattern::SwapOps01_12) {
+                internal_assert(matches.size() >= 3);
+                std::swap(matches[0], matches[1]);
+                std::swap(matches[1], matches[2]);
+            }
+
+            if (p.flags & Pattern::SwapOps01_03) {
+                internal_assert(matches.size() >= 4);
+                std::swap(matches[0], matches[1]);
+                std::swap(matches[0], matches[3]);
+            }
+
+            if (p.flags & Pattern::ConcatOps01) {
+                internal_assert(matches.size() >= 2);
+                internal_assert(matches[0].type() == matches[1].type());
+                int lanes2x = 2 * matches[0].type().lanes();
+                Type t = matches[0].type().with_lanes(lanes2x);
+                matches[0] = Call::make(t, Call::concat_vectors, {matches[0], matches[1]}, Call::PureIntrinsic);
+                matches.erase(matches.begin()+1);
             }
 
             // Mutate the operands with the given mutator.
@@ -335,9 +362,24 @@ private:
         static vector<Pattern> adds = {
             // Widening multiply-accumulates with a scalar.
             { "halide.hexagon.add_mpy.vuh.vub.ub", wild_u16x + wild_u16x*bc(wild_u16), Pattern::ReinterleaveOp0 | Pattern::NarrowOp1 | Pattern::NarrowOp2 },
-            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", wild_i16x*bc(wild_i16) + wild_i16x*bc(wild_i16), Pattern:: InterleaveResult | Pattern::NarrowUnsignedOp0 | Pattern::NarrowOp1 | Pattern::NarrowUnsignedOp2 | Pattern::NarrowOp3 | Pattern::SwapOps12 },
-            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", bc(wild_i16)*wild_i16x + wild_i16x*bc(wild_i16), Pattern:: InterleaveResult | Pattern::NarrowOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowUnsignedOp2 | Pattern::NarrowOp3 | Pattern::SwapOps02_23 },
-            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", bc(wild_i16)*wild_i16x + bc(wild_i16)*wild_i16x, Pattern:: InterleaveResult | Pattern::NarrowOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowOp2 | Pattern::NarrowUnsignedOp3 | Pattern::SwapOps02_23 },
+
+            // The next 4 patterns deal with permutations of the same expression.
+            // a*v0 + b*v1, where v0 and v1 are widened vectors.
+            // We convert all these into the following call
+            // halide.hexagon_add_mpy_mpy.vh.vub.b.b(concat_vector(v0, v1), a, b).
+            // Note the relative order is important. 'a' and 'b' are the low and high constants respectively. v0 will form the lower vector in the concatenated
+            // vector and v1 will be the higher vector.
+            // The strategy to set up the operands is to first arrange them like so - v0, v1, a, b. Then concat operands 0 and 1.
+
+            // 1. v0*a + v1*b -> SwapOps12 + ConcatOps01.
+            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", wild_i16x*bc(wild_i16) + wild_i16x*bc(wild_i16), Pattern:: InterleaveResult | Pattern::NarrowUnsignedOp0 | Pattern::NarrowOp1 | Pattern::NarrowUnsignedOp2 | Pattern::NarrowOp3 | Pattern::SwapOps12 | Pattern::ConcatOps01},
+            // 2. a*v0 + v1*b -> SwapOps01_12 + ConcatOps01.
+            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", bc(wild_i16)*wild_i16x + wild_i16x*bc(wild_i16), Pattern:: InterleaveResult | Pattern::NarrowOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowUnsignedOp2 | Pattern::NarrowOp3 | Pattern::SwapOps01_12 | Pattern::ConcatOps01 },
+            // 3. a*v0 + b*v1 -> SwapOps03 + ConcatOps01
+            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", bc(wild_i16)*wild_i16x + bc(wild_i16)*wild_i16x, Pattern:: InterleaveResult | Pattern::NarrowOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowOp2 | Pattern::NarrowUnsignedOp3 | Pattern::SwapOps03 | Pattern::ConcatOps01 },
+            // 4. v0*a + b*v1 -> SwapOps01_03 + ConcatOps01
+            { "halide.hexagon_add_mpy_mpy.vh.vub.b.b", bc(wild_i16)*wild_i16x + bc(wild_i16)*wild_i16x, Pattern:: InterleaveResult | Pattern::NarrowOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowOp2 | Pattern::NarrowUnsignedOp3 | Pattern::SwapOps01_03 | Pattern::ConcatOps01 },
+
             { "halide.hexagon.add_mpy.vh.vub.b",   wild_i16x + wild_i16x*bc(wild_i16), Pattern::ReinterleaveOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowOp2 },
             { "halide.hexagon.add_mpy.vuw.vuh.uh", wild_u32x + wild_u32x*bc(wild_u32), Pattern::ReinterleaveOp0 | Pattern::NarrowOp1 | Pattern::NarrowOp2 },
             { "halide.hexagon.add_mpy.vuh.vub.ub", wild_u16x + bc(wild_u16)*wild_u16x, Pattern::ReinterleaveOp0 | Pattern::NarrowOp1 | Pattern::NarrowOp2 | Pattern::SwapOps12 },

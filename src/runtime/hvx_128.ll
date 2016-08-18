@@ -62,7 +62,7 @@ define weak_odr <256 x i8> @halide.hexagon.deinterleave.vb(<256 x i8> %arg) noun
 
 declare <32 x i32> @llvm.hexagon.V6.lvsplatw.128B(i32)
 
-define weak_odr i16 @halide.hexagon.cat2.b(i8 %hi, i8 %lo) nounwind uwtable readnone alwaysinline {
+define weak_odr i16 @halide.hexagon.cat2.b(i8 %lo, i8 %hi) nounwind uwtable readnone alwaysinline {
   %lo_i16 = zext i8 %lo to i16
   %hi_i16_0 = zext i8 %hi to i16
   %hi_i16_1 = shl i16 %hi_i16_0, 8
@@ -70,7 +70,7 @@ define weak_odr i16 @halide.hexagon.cat2.b(i8 %hi, i8 %lo) nounwind uwtable read
   ret i16 %r
 }
 
-define weak_odr i32 @halide.hexagon.cat2.h(i16 %hi, i16 %lo) nounwind uwtable readnone alwaysinline {
+define weak_odr i32 @halide.hexagon.cat2.h(i16 %lo, i16 %hi) nounwind uwtable readnone alwaysinline {
   %lo_i32 = zext i16 %lo to i32
   %hi_i32_0 = zext i16 %hi to i32
   %hi_i32_1 = shl i32 %hi_i32_0, 16
