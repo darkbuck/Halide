@@ -267,6 +267,7 @@ void CodeGen_Hexagon::init_module() {
         { IPICK(is_128B, Intrinsic::hexagon_V6_vaddb),     i8v1,  "add.vb.vb",     {i8v1,  i8v1} },
         { IPICK(is_128B, Intrinsic::hexagon_V6_vaddh),     i16v1, "add.vh.vh",     {i16v1, i16v1} },
         { IPICK(is_128B, Intrinsic::hexagon_V6_vaddw),     i32v1, "add.vw.vw",     {i32v1, i32v1} },
+        { IPICK(is_128B, Intrinsic::hexagon_V6_vaddubh),   i16v2, "add.vub.vub",   {u8v1, u8v1} },
         { IPICK(is_128B, Intrinsic::hexagon_V6_vaddb_dv),  i8v2,  "add.vb.vb.dv",  {i8v2,  i8v2} },
         { IPICK(is_128B, Intrinsic::hexagon_V6_vaddh_dv),  i16v2, "add.vh.vh.dv",  {i16v2, i16v2} },
         { IPICK(is_128B, Intrinsic::hexagon_V6_vaddw_dv),  i32v2, "add.vw.vw.dv",  {i32v2, i32v2} },
