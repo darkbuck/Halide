@@ -219,6 +219,7 @@ set(HEADER_FILES
   AddParameterChecks.h
   AllocationBoundsInference.h
   Argument.h
+  AssociativeOpsTable.h
   Associativity.h
   BoundaryConditions.h
   Bounds.h
@@ -382,6 +383,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   AddParameterChecks.cpp
   AlignLoads.cpp
   AllocationBoundsInference.cpp
+  AssociativeOpsTable.cpp
   Associativity.cpp
   BoundaryConditions.cpp
   Bounds.cpp

@@ -7,6 +7,8 @@
 #include "Solve.h"
 #include "ExprUsesVar.h"
 #include "CSE.h"
+#include "AssociativeOpsTable.h"
+#include "Util.h"
 
 #include <sstream>
 
@@ -95,6 +97,188 @@ public:
     Expr x_part;
 };
 
+class ExtractBinaryOp : public IRMutator {
+    using IRMutator::visit;
+
+    string op_x;
+    string op_y;
+
+    enum OpType {
+        OP_X,       // x only or mixed of x/constant
+        OP_Y,       // y only
+        OP_MIXED,   // mixed of x/y
+    };
+
+    OpType type;
+
+    bool is_x(const string &name) {
+        return (name == op_x);
+    }
+
+    void reset_y() {
+        if (y_part.defined()) {
+            if (!equal(y_part, current_y)) {
+                is_solvable = false;
+            }
+        } else {
+            y_part = current_y;
+        }
+        current_y = Expr();
+    }
+
+    template<typename T>
+    void visit_unary_op(const T *op) {
+        if (!is_solvable) {
+            return;
+        }
+        type = OP_Y;
+        current_y = Expr(op);
+        expr = Variable::make(op->type, op_y);
+    }
+
+    void visit(const IntImm *op)    { visit_unary_op<IntImm>(op); }
+    void visit(const UIntImm *op)   { visit_unary_op<UIntImm>(op); }
+    void visit(const FloatImm *op)  { visit_unary_op<FloatImm>(op); }
+    void visit(const StringImm *op) { visit_unary_op<StringImm>(op); }
+
+    void visit(const Variable *op) {
+        if (!is_solvable) {
+            return;
+        }
+        if (is_x(op->name)) {
+            type = OP_X;
+            expr = op;
+            return;
+        }
+        type = OP_Y;
+        current_y = Expr(op);
+        expr = Variable::make(op->type, op_y);
+    }
+
+    void visit(const Cast *op) {
+        if (!is_solvable) {
+            return;
+        }
+        Expr val = mutate(op->value);
+        if (type == OP_Y) {
+            current_y = Expr(op);
+            expr = Variable::make(op->type, op_y);
+        } else {
+            // Either x or pair of x/y
+            expr = Cast::make(op->type, val);
+        }
+    }
+
+    template<typename T, typename Opp>
+    void visit_binary_op(const T *op) {
+        if (!is_solvable) {
+            return;
+        }
+        Expr a = mutate(op->a);
+        OpType a_type = type;
+        Expr b = mutate(op->b);
+        OpType b_type = type;
+
+        internal_assert(a.type() == b.type());
+        if ((a_type == OP_X) && (b_type == OP_X)) {
+            is_solvable = false;
+            return;
+        } else if ((a_type == OP_Y) && (b_type == OP_Y)) {
+            type = OP_Y;
+            current_y = Expr(op);
+            expr = Variable::make(op->type, op_y);
+        } else if ((a_type == OP_Y) || (b_type == OP_Y)) {
+            // Pair of x and y
+            type = OP_MIXED;
+            reset_y();
+            expr = Opp::make(a, b);
+        } else {
+            expr = Opp::make(a, b);
+        }
+    }
+
+    void visit(const Add *op) { visit_binary_op<Add, Add>(op); }
+    void visit(const Sub *op) { visit_binary_op<Sub, Sub>(op); }
+    void visit(const Mul *op) { visit_binary_op<Mul, Mul>(op); }
+    void visit(const Div *op) { visit_binary_op<Div, Div>(op); }
+    void visit(const Mod *op) { visit_binary_op<Mod, Mod>(op); }
+    void visit(const Min *op) { visit_binary_op<Min, Min>(op); }
+    void visit(const Max *op) { visit_binary_op<Max, Max>(op); }
+    void visit(const And *op) { visit_binary_op<And, And>(op); }
+    void visit(const Or *op) { visit_binary_op<Or, Or>(op); }
+    void visit(const LE *op) { visit_binary_op<LE, LE>(op); }
+    void visit(const LT *op) { visit_binary_op<LT, LT>(op); }
+    void visit(const GE *op) { visit_binary_op<GE, GE>(op); }
+    void visit(const GT *op) { visit_binary_op<GT, GT>(op); }
+    void visit(const EQ *op) { visit_binary_op<EQ, EQ>(op); }
+    void visit(const NE *op) { visit_binary_op<NE, NE>(op); }
+
+    void visit(const Load *op) {
+        internal_error << "Can't handle Load\n";
+    }
+
+    void visit(const Ramp *op) {
+        internal_error << "Can't handle Ramp\n";
+    }
+
+    void visit(const Broadcast *op) {
+        internal_error << "Can't handle Broadcast\n";
+    }
+
+    void visit(const Let *op) {
+        internal_error << "Let should have been substituted before calling this mutator\n";
+    }
+
+    void visit(const Select *op) {
+        //TODO(psuriana)
+        internal_error << "Select NOT yet implemented\n";
+    }
+
+    void visit(const Not *op) {
+        if (!is_solvable) {
+            return;
+        }
+        Expr a = mutate(op->a);
+        if (type == OP_Y) {
+            current_y = Expr(op);
+            expr = Variable::make(op->type, op_y);
+        } else {
+            expr = Not::make(a);
+        }
+    }
+
+    void visit(const Call *op) {
+        if (!is_solvable) {
+            return;
+        }
+        if (op->call_type != Call::Halide) {
+            is_solvable = false;
+            return;
+        }
+
+        // Mutate the args
+        for (size_t i = 0; i < op->args.size(); i++) {
+            Expr new_args = mutate(op->args[i]);
+            if (type != OP_Y) {
+                is_solvable = false;
+                return;
+            }
+        }
+        internal_assert(type == OP_Y);
+        current_y = Expr(op);
+        expr = Variable::make(op->type, op_y);
+    }
+
+public:
+    ExtractBinaryOp(const string &x, const string &y) :
+        op_x(x), op_y(y), is_solvable(true) {}
+
+    bool is_solvable;
+    Expr current_y;
+    Expr y_part;
+};
+
+
 template<typename T>
 bool visit_associative_binary_op(const string &op_x, const string &op_y, Expr x_part,
                                  Expr lhs, Expr rhs, AssociativeOp &op) {
@@ -113,8 +297,36 @@ bool visit_associative_binary_op(const string &op_x, const string &op_y, Expr x_
     return true;
 }
 
-bool extract_associative_op(const string &op_x, const string &op_y, Expr x_part,
-                            Expr e, AssociativeOp &op) {
+template<std::size_t SIZE>
+int binary_search(const std::array<string, SIZE> &table, const string &val) {
+    int low = 0;
+    int high = SIZE - 1;
+    while (low <= high) {
+        int mid = (low + high) / 2;
+        string mid_val = table[mid];
+        if (mid_val == val) {
+            return mid;
+        } else if (mid_val.size() > val.size()) {
+            high = mid - 1;
+        } else if (mid_val.size() < val.size()) {
+            low = mid + 1;
+        }
+    }
+    return -1;
+}
+
+bool look_up_single_is32_associative_ops_table(const std::string &expr, Expr &identity) {
+    int index = binary_search(AssociativeOpsTable::table_single_i32_ops, expr);
+    if (index == -1) {
+        return false;
+    }
+    internal_assert((index >= 0) && (index < (int)AssociativeOpsTable::table_single_i32_ids.size()));
+    identity = make_const(Int(32), AssociativeOpsTable::table_single_i32_ids[index]);
+    return true;
+}
+
+bool extract_associative_op(int index, const string &op_x, const string &op_y,
+                            Expr x_part, Expr e, AssociativeOp &op) {
     Type t = e.type();
     Expr x = Variable::make(t, op_x);
     Expr y = Variable::make(t, op_y);
@@ -129,41 +341,77 @@ bool extract_associative_op(const string &op_x, const string &op_y, Expr x_part,
         return true;
     }
 
+    bool success = false;
     if (const Add *a = e.as<Add>()) {
         op.op = x + y;
         op.identity = make_const(t, 0);
-        return visit_associative_binary_op<Add>(op_x, op_y, x_part, a->a, a->b, op);
+        success = visit_associative_binary_op<Add>(op_x, op_y, x_part, a->a, a->b, op);
     } else if (const Sub *s = e.as<Sub>()) {
         op.op = x + y;
         op.identity = make_const(t, 0);
-        return visit_associative_binary_op<Sub>(op_x, op_y, x_part, s->a, s->b, op);
+        success = visit_associative_binary_op<Sub>(op_x, op_y, x_part, s->a, s->b, op);
     } else if (const Mul *m = e.as<Mul>()) {
         op.op = x * y;
         op.identity = make_const(t, 1);
-        return visit_associative_binary_op<Mul>(op_x, op_y, x_part, m->a, m->b, op);
+        success = visit_associative_binary_op<Mul>(op_x, op_y, x_part, m->a, m->b, op);
     } else if (const Min *m = e.as<Min>()) {
         op.op = Min::make(x, y);
         op.identity = t.max();
-        return visit_associative_binary_op<Min>(op_x, op_y, x_part, m->a, m->b, op);
+        success = visit_associative_binary_op<Min>(op_x, op_y, x_part, m->a, m->b, op);
     } else if (const Max *m = e.as<Max>()) {
         op.op = Max::make(x, y);
         op.identity = t.min();
-        return visit_associative_binary_op<Max>(op_x, op_y, x_part, m->a, m->b, op);
+        success = visit_associative_binary_op<Max>(op_x, op_y, x_part, m->a, m->b, op);
     } else if (const And *a = e.as<And>()) {
         op.op = And::make(x, y);
         op.identity = make_const(t, 1);
-        return visit_associative_binary_op<And>(op_x, op_y, x_part, a->a, a->b, op);
+        success = visit_associative_binary_op<And>(op_x, op_y, x_part, a->a, a->b, op);
     } else if (const Or *o = e.as<Or>()) {
         op.op = Or::make(x, y);
         op.identity = make_const(t, 0);
-        return visit_associative_binary_op<Or>(op_x, op_y, x_part, o->a, o->b, op);
+        success = visit_associative_binary_op<Or>(op_x, op_y, x_part, o->a, o->b, op);
     } else if (e.as<Let>()) {
         internal_error << "Let should have been substituted before calling this function\n";
-    } else {
-        debug(4) << "Can't prove associativity of " << e << "\n";
-        return false;
     }
-    return false;
+
+    if (!success && t.is_int() && (t.bits() == 32)) {
+        // It's non-trivial binary ops. Try looking at the associative ops table for int32
+        debug(4) << "Look-up associativity table for: " << e << "\n";
+
+        ExtractBinaryOp conv(op_x, op_y);
+        Expr expr = conv.mutate(e);
+        debug(4) << e << " -> " << expr << "\n";
+        if (!conv.is_solvable) {
+            return false;
+        }
+        if (!conv.y_part.defined()) {
+            // f(x) = f(x) -> We'll treat it as non-associative
+            return false;
+        }
+
+        std::ostringstream stream;
+        stream << expr;
+        string expr_str = stream.str();
+        {
+            // We need to convert the variable names into x{tuple_idx} and y
+            // {tuple_idx} to match it with the associative ops table.
+            string x = "x" + std::to_string(index);
+            string y = "y" + std::to_string(index);
+            expr_str = replace_all(expr_str, op_x, x);
+            expr_str = replace_all(expr_str, op_y, y);
+        }
+        debug(4) << "After replacement " << expr << " -> " << expr_str << "\n";
+
+        success = look_up_single_is32_associative_ops_table(expr_str, op.identity);
+        if (success) {
+            debug(4) << "Find associative ops for " << expr << "\n";
+            op.op = expr;
+            op.x = {op_x, x_part};
+            op.y = {op_y, conv.y_part};
+        }
+
+    }
+    return success;
 }
 
 } // anonymous namespace
@@ -209,7 +457,7 @@ pair<bool, vector<AssociativeOp>> prove_associativity(const string &f, vector<Ex
         // Try to infer the 'y' part of the operator. If we couldn't find
         // a single 'y' that satisfy the operator, give up
         AssociativeOp op;
-        bool is_associative = extract_associative_op(op_x, op_y, csr.x_part, expr, op);
+        bool is_associative = extract_associative_op(idx, op_x, op_y, csr.x_part, expr, op);
         if (!is_associative) {
             return std::make_pair(false, vector<AssociativeOp>());
         }
@@ -304,7 +552,6 @@ void associativity_test() {
     Expr f_call_2 = Call::make(Int(32), "f", {x}, Call::CallType::Halide, nullptr, 2);
     Expr g_call = Call::make(Int(32), "g", {rx}, Call::CallType::Halide, nullptr, 0);
 
-
     // f(x) = min(f(x), int16(z))
     check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
                         true, {{min(x, y), Int(32).max(), {"x", f_call_0}, {"y", y + Cast::make(Int(16), z)}}});
@@ -352,6 +599,10 @@ void associativity_test() {
     // f(x) = f(x) -> associative but doesn't really make any sense, so we'll treat it as non-associative
     check_associativity("f", {x}, {f_call_0},
                         false, {});
+
+    // f(x) = max(max(min(f(x), g(rx) + 2), f(x)), g(rx) + 2)
+    check_associativity("f", {x}, {max(max(min(f_call_0, g_call + 2), f_call_0), g_call + 2)},
+                        true, {{max(max(min(x, y), x), y), Int(32).min(), {"x", f_call_0}, {"y", g_call + 2}}});
 
     std::cout << "Associativity test passed" << std::endl;
 }
