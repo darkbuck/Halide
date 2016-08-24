@@ -24,6 +24,68 @@ using std::vector;
 
 namespace {
 
+class CountExprDepth : public IRVisitor {
+public:
+    int depth = 0;
+
+    using IRVisitor::visit;
+
+    template<typename T>
+    void visit_const(const T *op) {
+        depth = 1;
+    }
+
+    void visit(const IntImm *op)    { visit_const<IntImm>(op); }
+    void visit(const UIntImm *op)   { visit_const<UIntImm>(op); }
+    void visit(const FloatImm *op)  { visit_const<FloatImm>(op); }
+    void visit(const Variable *op)  { visit_const<Variable>(op); }
+
+    void visit(const Cast *op) {
+        op->value.accept(this);
+        depth += 1;
+    }
+
+    void visit(const Not *op) {
+        op->a.accept(this);
+        depth += 1;
+    }
+
+    template<typename T>
+    void visit_binary_operator(const T *op) {
+        op->a.accept(this);
+        int depth_a = depth;
+        op->b.accept(this);
+        int depth_b = depth;
+        depth = 1 + std::max(depth_a, depth_b);
+    }
+
+    void visit(const Add *op) {visit_binary_operator(op);}
+    void visit(const Sub *op) {visit_binary_operator(op);}
+    void visit(const Mul *op) {visit_binary_operator(op);}
+    void visit(const Div *op) {visit_binary_operator(op);}
+    void visit(const Mod *op) {visit_binary_operator(op);}
+    void visit(const Min *op) {visit_binary_operator(op);}
+    void visit(const Max *op) {visit_binary_operator(op);}
+    void visit(const EQ *op) {visit_binary_operator(op);}
+    void visit(const NE *op) {visit_binary_operator(op);}
+    void visit(const LT *op) {visit_binary_operator(op);}
+    void visit(const LE *op) {visit_binary_operator(op);}
+    void visit(const GT *op) {visit_binary_operator(op);}
+    void visit(const GE *op) {visit_binary_operator(op);}
+    void visit(const And *op) {visit_binary_operator(op);}
+    void visit(const Or *op) {visit_binary_operator(op);}
+
+    void visit(const Select *op) {
+        internal_error << "TODO(psuriana): implement this later\n";
+    }
+};
+
+int count_expr_depth(Expr e) {
+    CountExprDepth c;
+    e.accept(&c);
+    return c.depth;
+}
+
 // Replace self-reference to Func 'func' with arguments 'args' at index
 // 'value_index' in the Expr/Stmt with Var 'substitute'
 class ConvertSelfRef : public IRMutator {
@@ -299,31 +361,44 @@ bool visit_associative_binary_op(const string &op_x, const string &op_y, Expr x_
     return true;
 }
 
-bool compare_string(const string& lhs, const string& rhs) {
-   return lhs.size() < rhs.size();
+bool compare_expr_depths(const AssociativePair& lhs, const AssociativePair& rhs) {
+    int lhs_depth = count_expr_depth(lhs.op);
+    int rhs_depth = count_expr_depth(rhs.op);
+    return lhs_depth < rhs_depth;
 }
 
-bool look_up_single_is32_associative_ops_table(const std::string &expr, Expr &identity) {
-    auto lower = std::lower_bound(AssociativeOpsTable::table_single_i32_ops.begin(),
-                                  AssociativeOpsTable::table_single_i32_ops.end(),
-                                  expr, compare_string);
-    auto upper = std::upper_bound(AssociativeOpsTable::table_single_i32_ops.begin(),
-                                  AssociativeOpsTable::table_single_i32_ops.end(),
-                                  expr, compare_string);
+bool find_match(const vector<AssociativePair> &table, Expr e, Expr &identity) {
+    auto lower = std::lower_bound(table.begin(), table.end(), AssociativePair(e), compare_expr_depths);
+    auto upper = std::upper_bound(table.begin(), table.end(), AssociativePair(e), compare_expr_depths);
 
+    map<string, Expr> result;
     for (; lower < upper; lower++) {
-        string val = *lower;
-        if (val.size() > expr.size()) {
-            return false;
-        } else {
-            internal_assert(val.size() == expr.size());
-            if (val == expr) {
-                int index = std::distance(AssociativeOpsTable::table_single_i32_ops.begin(), lower);
-                internal_assert((index >= 0) && (index < (int)AssociativeOpsTable::table_single_i32_ids.size()));
-                identity = make_const(Int(32), AssociativeOpsTable::table_single_i32_ids[index]);
-                return true;
-            }
+        AssociativePair pattern = *lower;
+        if (expr_match(pattern.op, e, result)) {
+            identity = pattern.identity;
+            return true;
         }
+    }
+
+    return false;
+}
+
+bool lookup_single_i32_associative_ops_table(Expr e, Expr &identity) {
+    Type t = Int(32);
+    internal_assert(e.type() == t);
+
+    debug(5) << "**lookup_single_i32_associative_ops_table: " << e << "\n";
+
+    if (e.as<Add>()) {
+        return find_match(get_single_i32_ops_table_add(), e, identity);
+    } else if (e.as<Sub>()) {
+        return find_match(get_single_i32_ops_table_sub(), e, identity);
+    } else if (e.as<Mul>()) {
+        return find_match(get_single_i32_ops_table_mul(), e, identity);
+    } else if (e.as<Min>()) {
+        return find_match(get_single_i32_ops_table_min(), e, identity);
+    } else if (e.as<Max>()) {
+        return find_match(get_single_i32_ops_table_max(), e, identity);
     }
     return false;
 }
@@ -398,27 +473,23 @@ bool extract_associative_op(int index, const string &op_x, const string &op_y,
         expr = simplify(expr);
         debug(5) << "Canonicalized expr: " << expr << "\n";
 
-        std::ostringstream stream;
-        stream << expr;
-        string expr_str = stream.str();
         {
             // We need to convert the variable names into x{tuple_idx} and y
             // {tuple_idx} to match it with the associative ops table.
             string x = "x" + std::to_string(index);
             string y = "y" + std::to_string(index);
-            expr_str = replace_all(expr_str, op_x, x);
-            expr_str = replace_all(expr_str, op_y, y);
+            Expr temp = substitute(op_x, Variable::make(t, x), expr);
+            temp = substitute(op_y, Variable::make(t, y), temp);
+            debug(5) << "After replacement " << expr << " -> " << temp << "\n";
+            success = lookup_single_i32_associative_ops_table(temp, op.identity);
         }
-        debug(5) << "After replacement " << expr << " -> " << expr_str << "\n";
 
-        success = look_up_single_is32_associative_ops_table(expr_str, op.identity);
         if (success) {
             debug(5) << "Find associative ops for " << expr << "\n";
             op.op = expr;
             op.x = {op_x, x_part};
             op.y = {op_y, conv.y_part};
         }
-
     }
     return success;
 }
@@ -562,7 +633,7 @@ void associativity_test() {
     Expr g_call = Call::make(Int(32), "g", {rx}, Call::CallType::Halide, nullptr, 0);
 
     // f(x) = min(f(x), int16(z))
-    /*check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
+    check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
                         true, {{min(x, y), Int(32).max(), {"x", f_call_0}, {"y", y + Cast::make(Int(16), z)}}});
 
     // f(x) = f(x) + g(rx) + y + z
@@ -615,10 +686,22 @@ void associativity_test() {
 
     // f(x) = ((min(max((f(x)*g(rx)), g(rx)), (f(x)*g(rx))) + g(rx)) + f(x))
     check_associativity("f", {x}, {((min(max((g_call*f_call_0), g_call), (f_call_0*g_call)) + g_call) + f_call_0)},
-                        true, {{((min(max((x*y), y), (x*y)) + y) + x), make_const(Int(32), 0), {"x", f_call_0}, {"y", g_call}}});*/
+                        true, {{((min(max((x*y), y), (x*y)) + y) + x), make_const(Int(32), 0), {"x", f_call_0}, {"y", g_call}}});
 
-    Expr x0 = Variable::make(Int(32), "x0");
+    /*Expr x0 = Variable::make(Int(32), "x0");
     Expr y0 = Variable::make(Int(32), "y0");
+
+    Expr expr = max(max(min((x0*y0), x0), y0), x0); // Leaves 5
+    int depth = count_expr_depth(expr);
+    std::cout << "Depth of " << expr << ": " << depth << "\n";
+
+    expr = min(max(((x0 + y0)*x0), max((y0*y0), y0)), y0); // Leaves 6
+    depth = count_expr_depth(expr);
+    std::cout << "Depth of " << expr << ": " << depth << "\n";
+
+    expr = max(min(((y0 - x0)*(y0 - x0)), min((y0*y0), y0)), y0); // Leaves 8
+    depth = count_expr_depth(expr);
+    std::cout << "Depth of " << expr << ": " << depth << "\n";*/
 
     std::cout << "Associativity test passed" << std::endl;
 }

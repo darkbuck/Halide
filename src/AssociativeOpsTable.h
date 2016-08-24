@@ -12,12 +12,22 @@
 
 namespace Halide {
 namespace Internal {
-namespace AssociativeOpsTable {
 
-extern std::array<std::string, 14487> table_single_i32_ops;
-extern std::array<int32_t, 14487> table_single_i32_ids;
+struct AssociativePair {
+	Expr op;
+	Expr identity;
 
-}
+	AssociativePair() {}
+	AssociativePair(Expr op) : op(op) {}
+	AssociativePair(Expr op, Expr id) : op(op), identity(id) {}
+};
+
+const std::vector<AssociativePair> &get_single_i32_ops_table_add();
+const std::vector<AssociativePair> &get_single_i32_ops_table_mul();
+const std::vector<AssociativePair> &get_single_i32_ops_table_max();
+const std::vector<AssociativePair> &get_single_i32_ops_table_min();
+const std::vector<AssociativePair> &get_single_i32_ops_table_sub();
+
 }
 }
 
