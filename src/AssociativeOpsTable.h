@@ -8,7 +8,7 @@
 #include "IROperator.h"
 
 #include <iostream>
-#include <array>
+#include <vector>
 
 namespace Halide {
 namespace Internal {

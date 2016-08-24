@@ -177,31 +177,60 @@ public:
     Expr x_part;
 };
 
-class ExtractBinaryOp : public IRMutator {
+class ExtractYPart : public IRMutator {
     using IRMutator::visit;
 
-    string op_x;
-    string op_y;
+    vector<string> op_x_names;
+    vector<string> op_y_names;
+    map<int, Expr> *y_subs;
 
     enum OpType {
         OP_X,       // x only or mixed of x/constant
         OP_Y,       // y only
         OP_MIXED,   // mixed of x/y
-    };
+    } type;
 
-    OpType type;
+    bool is_x(const string &name) const {
+        for (const auto &x : op_x_names) {
+            if (x == name) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-    bool is_x(const string &name) {
-        return (name == op_x);
+    string get_op_y_name() const {
+        if (index < (int)y_subs->size()) {
+            return op_y_names[index];
+        } else {
+            // Use a dummy name. If it turns out the final 'y_part' is
+            // not in y_subs, the expression is not solvable since we're
+            // using more distinct y variables than the tuple size.
+            return unique_name("_dummy");
+        }
     }
 
     void reset_y() {
-        if (y_part.defined()) {
-            if (!equal(y_part, current_y)) {
-                is_solvable = false;
+        // Check if 'current_y' already has a op_y sub associated with it.
+        for (const auto &iter : *y_subs) {
+            if (equal(iter.second, current_y)) {
+                // Since it's already there, we need to update the expr to use
+                // that variable instead.
+                internal_assert(iter.first < (int)y_subs->size());
+                Expr y_var = Variable::make(current_y.type(), op_y_names[iter.first]);
+                expr = substitute(get_op_y_name(), y_var, expr);
+                current_y = Expr();
+                return;
             }
+        }
+
+        // It is not in y_subs, we need to add the replacement to y_subs.
+        if (index < (int)y_subs->size()) {
+            y_subs->emplace(index, current_y);
+            index += 1;
         } else {
-            y_part = current_y;
+            // We've used up all the 'op_y' vars to substitute the expr.
+            is_solvable = false;
         }
         current_y = Expr();
     }
@@ -213,7 +242,7 @@ class ExtractBinaryOp : public IRMutator {
         }
         type = OP_Y;
         current_y = Expr(op);
-        expr = Variable::make(op->type, op_y);
+        expr = Variable::make(op->type, get_op_y_name());
     }
 
     void visit(const IntImm *op)    { visit_unary_op<IntImm>(op); }
@@ -232,7 +261,7 @@ class ExtractBinaryOp : public IRMutator {
         }
         type = OP_Y;
         current_y = Expr(op);
-        expr = Variable::make(op->type, op_y);
+        expr = Variable::make(op->type, get_op_y_name());
     }
 
     void visit(const Cast *op) {
@@ -242,14 +271,14 @@ class ExtractBinaryOp : public IRMutator {
         Expr val = mutate(op->value);
         if (type == OP_Y) {
             current_y = Expr(op);
-            expr = Variable::make(op->type, op_y);
+            expr = Variable::make(op->type, get_op_y_name());
         } else {
             // Either x or pair of x/y
             expr = Cast::make(op->type, val);
         }
     }
 
-    template<typename T, typename Opp>
+    template<typename T>
     void visit_binary_op(const T *op) {
         if (!is_solvable) {
             return;
@@ -266,32 +295,32 @@ class ExtractBinaryOp : public IRMutator {
         } else if ((a_type == OP_Y) && (b_type == OP_Y)) {
             type = OP_Y;
             current_y = Expr(op);
-            expr = Variable::make(op->type, op_y);
+            expr = Variable::make(op->type, get_op_y_name());
         } else if ((a_type == OP_Y) || (b_type == OP_Y)) {
             // Pair of x and y
             type = OP_MIXED;
             reset_y();
-            expr = Opp::make(a, b);
+            expr = T::make(a, b);
         } else {
-            expr = Opp::make(a, b);
+            expr = T::make(a, b);
         }
     }
 
-    void visit(const Add *op) { visit_binary_op<Add, Add>(op); }
-    void visit(const Sub *op) { visit_binary_op<Sub, Sub>(op); }
-    void visit(const Mul *op) { visit_binary_op<Mul, Mul>(op); }
-    void visit(const Div *op) { visit_binary_op<Div, Div>(op); }
-    void visit(const Mod *op) { visit_binary_op<Mod, Mod>(op); }
-    void visit(const Min *op) { visit_binary_op<Min, Min>(op); }
-    void visit(const Max *op) { visit_binary_op<Max, Max>(op); }
-    void visit(const And *op) { visit_binary_op<And, And>(op); }
-    void visit(const Or *op) { visit_binary_op<Or, Or>(op); }
-    void visit(const LE *op) { visit_binary_op<LE, LE>(op); }
-    void visit(const LT *op) { visit_binary_op<LT, LT>(op); }
-    void visit(const GE *op) { visit_binary_op<GE, GE>(op); }
-    void visit(const GT *op) { visit_binary_op<GT, GT>(op); }
-    void visit(const EQ *op) { visit_binary_op<EQ, EQ>(op); }
-    void visit(const NE *op) { visit_binary_op<NE, NE>(op); }
+    void visit(const Add *op) { visit_binary_op<Add>(op); }
+    void visit(const Sub *op) { visit_binary_op<Sub>(op); }
+    void visit(const Mul *op) { visit_binary_op<Mul>(op); }
+    void visit(const Div *op) { visit_binary_op<Div>(op); }
+    void visit(const Mod *op) { visit_binary_op<Mod>(op); }
+    void visit(const Min *op) { visit_binary_op<Min>(op); }
+    void visit(const Max *op) { visit_binary_op<Max>(op); }
+    void visit(const And *op) { visit_binary_op<And>(op); }
+    void visit(const Or *op) { visit_binary_op<Or>(op); }
+    void visit(const LE *op) { visit_binary_op<LE>(op); }
+    void visit(const LT *op) { visit_binary_op<LT>(op); }
+    void visit(const GE *op) { visit_binary_op<GE>(op); }
+    void visit(const GT *op) { visit_binary_op<GT>(op); }
+    void visit(const EQ *op) { visit_binary_op<EQ>(op); }
+    void visit(const NE *op) { visit_binary_op<NE>(op); }
 
     void visit(const Load *op) {
         internal_error << "Can't handle Load\n";
@@ -321,7 +350,7 @@ class ExtractBinaryOp : public IRMutator {
         Expr a = mutate(op->a);
         if (type == OP_Y) {
             current_y = Expr(op);
-            expr = Variable::make(op->type, op_y);
+            expr = Variable::make(op->type, get_op_y_name());
         } else {
             expr = Not::make(a);
         }
@@ -346,17 +375,39 @@ class ExtractBinaryOp : public IRMutator {
         }
         internal_assert(type == OP_Y);
         current_y = Expr(op);
-        expr = Variable::make(op->type, op_y);
+        expr = Variable::make(op->type, get_op_y_name());
     }
 
 public:
-    ExtractBinaryOp(const string &x, const string &y) :
-        op_x(x), op_y(y), is_solvable(true) {}
+    ExtractYPart(const vector<string> &x_names, const vector<string> &y_names,
+                 map<int, Expr> *subs) :
+        op_x_names(x_names), op_y_names(y_names), y_subs(subs), is_solvable(true), index(subs->size()) {}
 
     bool is_solvable;
     Expr current_y;
-    Expr y_part;
+    int index;
 };
+
+Expr extract_y_part(int index, const vector<string> &x_names, const vector<string> &y_names,
+                    map<int, Expr> &subs, Expr &expr) {
+    // Substitute all exprs that already have replacements to cut down the
+    // number of cases ExtractYPart needs to handle.
+    debug(0) << "Before substituting y_subs: " << expr << "\n";
+    for (const auto &iter : subs) {
+        expr = substitute(iter.second, Variable::make(iter.second.type(), y_names[iter.first]), expr);
+    }
+    debug(0) << "After substituting y_subs: " << expr << "\n";
+
+    ExtractYPart conv(x_names, y_names, &subs);
+    expr = conv.mutate(expr);
+
+    const auto &iter = subs.find(index);
+    if (!conv.is_solvable || (iter == subs.end())) {
+        // f(x) = f(x) -> We'll treat it as non-associative
+        return Expr();
+    }
+    return iter->second;
+}
 
 
 template<typename T>
@@ -419,9 +470,13 @@ bool lookup_single_i32_associative_ops_table(Expr e, Expr &identity) {
     return false;
 }
 
-bool extract_associative_op(int index, const string &op_x, const string &op_y,
-                            Expr x_part, Expr e, AssociativeOp &op) {
+bool extract_associative_op(int index, const vector<string> &op_x_names,
+                            const vector<string> &op_y_names,
+                            map<int, Expr> &y_subs, Expr x_part,
+                            Expr e, AssociativeOp &op) {
     Type t = e.type();
+    const string &op_x = op_x_names[index];
+    const string &op_y = op_y_names[index];
     Expr x = Variable::make(t, op_x);
     Expr y = Variable::make(t, op_y);
 
@@ -471,40 +526,33 @@ bool extract_associative_op(int index, const string &op_x, const string &op_y,
     if (!success && t.is_int() && (t.bits() == 32)) {
         // It's non-trivial binary ops. Try looking at the associative ops table for int32
         debug(5) << "Look-up associativity table for: " << e << "\n";
-
-        ExtractBinaryOp conv(op_x, op_y);
-        Expr expr = conv.mutate(e);
-        debug(5) << e << " -> " << expr << "\n";
-        if (!conv.is_solvable) {
-            return false;
-        }
-        if (!conv.y_part.defined()) {
-            // f(x) = f(x) -> We'll treat it as non-associative
+        Expr y_part = extract_y_part(index, op_x_names, op_y_names, y_subs, e);
+        if (!y_part.defined()) {
             return false;
         }
 
         // Canonicalize the expression
-        expr = solve_expression(expr, op_y).result;
-        expr = solve_expression(expr, op_x).result;
-        expr = simplify(expr);
-        debug(5) << "Canonicalized expr: " << expr << "\n";
+        e = solve_expression(e, op_y).result;
+        e = solve_expression(e, op_x).result;
+        e = simplify(e);
+        debug(5) << "Canonicalized expr: " << e << "\n";
 
         {
             // We need to convert the variable names into x{tuple_idx} and y
             // {tuple_idx} to match it with the associative ops table.
             string x = "x" + std::to_string(index);
             string y = "y" + std::to_string(index);
-            Expr temp = substitute(op_x, Variable::make(t, x), expr);
+            Expr temp = substitute(op_x, Variable::make(t, x), e);
             temp = substitute(op_y, Variable::make(t, y), temp);
-            debug(5) << "After replacement " << expr << " -> " << temp << "\n";
+            debug(5) << "After replacement " << e << " -> " << temp << "\n";
             success = lookup_single_i32_associative_ops_table(temp, op.identity);
         }
 
         if (success) {
-            debug(5) << "Find associative ops for " << expr << "\n";
-            op.op = expr;
+            debug(5) << "Find associative ops for " << e << "\n";
+            op.op = e;
             op.x = {op_x, x_part};
-            op.y = {op_y, conv.y_part};
+            op.y = {op_y, y_part};
         }
     }
     return success;
@@ -519,7 +567,7 @@ pair<bool, vector<AssociativeOp>> prove_associativity(const string &f, vector<Ex
                                                       vector<Expr> exprs) {
     vector<AssociativeOp> ops;
     map<int, Expr> x_subs;
-    map<Expr, string, ExprCompare> y_subs;
+    map<int, Expr> y_subs;
 
     for (Expr &arg : args) {
         arg = common_subexpression_elimination(arg);
@@ -559,7 +607,8 @@ pair<bool, vector<AssociativeOp>> prove_associativity(const string &f, vector<Ex
         // Try to infer the 'y' part of the operator. If we couldn't find
         // a single 'y' that satisfy the operator, give up
         AssociativeOp op;
-        bool is_associative = extract_associative_op(idx, op_x, op_y, csr.x_part, expr, op);
+        bool is_associative = extract_associative_op(idx, op_x_names, op_y_names,
+                                                     y_subs, csr.x_part, expr, op);
         if (!is_associative) {
             return std::make_pair(false, vector<AssociativeOp>());
         }
