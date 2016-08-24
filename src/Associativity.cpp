@@ -199,18 +199,22 @@ class ExtractYPart : public IRMutator {
         return false;
     }
 
-    string get_op_y_name() const {
-        if (index < (int)y_subs->size()) {
-            return op_y_names[index];
-        } else {
-            // Use a dummy name. If it turns out the final 'y_part' is
-            // not in y_subs, the expression is not solvable since we're
-            // using more distinct y variables than the tuple size.
-            return unique_name("_dummy");
+    string get_op_y_name() {
+        if (current_y_name.empty()) {
+            if (index < (int)op_y_names.size()) {
+                current_y_name = op_y_names[index];
+            } else {
+                // Use a dummy name. If it turns out the final 'y_part' is
+                // not in y_subs, the expression is not solvable since we're
+                // using more distinct y variables than the tuple size.
+                current_y_name = unique_name("_dummy");
+            }
         }
+        return current_y_name;
     }
 
     void reset_y() {
+        debug(0) << "****RESETING for " << current_y << ", index: " << index << "\n";
         // Check if 'current_y' already has a op_y sub associated with it.
         for (const auto &iter : *y_subs) {
             if (equal(iter.second, current_y)) {
@@ -218,14 +222,20 @@ class ExtractYPart : public IRMutator {
                 // that variable instead.
                 internal_assert(iter.first < (int)y_subs->size());
                 Expr y_var = Variable::make(current_y.type(), op_y_names[iter.first]);
+                debug(0) << "FIND REPLACEMENT for " << current_y << " -> yvar: " << y_var << ", name: " << get_op_y_name() << "\n";
+                debug(0) << "before replacement: " << expr << "\n";
                 expr = substitute(get_op_y_name(), y_var, expr);
+                debug(0) << "after replacement: " << expr << "\n";
                 current_y = Expr();
+                current_y_name = "";
                 return;
             }
         }
 
+        debug(0) << "****ADDING REPLACEMENT for: " << current_y << ", index: " << index << "\n";
         // It is not in y_subs, we need to add the replacement to y_subs.
-        if (index < (int)y_subs->size()) {
+        if (index < (int)op_y_names.size()) {
+            debug(0) << "++++PUTTING INTO SUBS\n";
             y_subs->emplace(index, current_y);
             index += 1;
         } else {
@@ -233,6 +243,7 @@ class ExtractYPart : public IRMutator {
             is_solvable = false;
         }
         current_y = Expr();
+        current_y_name = "";
     }
 
     template<typename T>
@@ -299,8 +310,8 @@ class ExtractYPart : public IRMutator {
         } else if ((a_type == OP_Y) || (b_type == OP_Y)) {
             // Pair of x and y
             type = OP_MIXED;
-            reset_y();
             expr = T::make(a, b);
+            reset_y();
         } else {
             expr = T::make(a, b);
         }
@@ -385,27 +396,50 @@ public:
 
     bool is_solvable;
     Expr current_y;
+    string current_y_name;
     int index;
 };
 
 Expr extract_y_part(int index, const vector<string> &x_names, const vector<string> &y_names,
-                    map<int, Expr> &subs, Expr &expr) {
+                    map<int, Expr> &y_subs, Expr &expr) {
     // Substitute all exprs that already have replacements to cut down the
     // number of cases ExtractYPart needs to handle.
     debug(0) << "Before substituting y_subs: " << expr << "\n";
-    for (const auto &iter : subs) {
+    for (const auto &iter : y_subs) {
         expr = substitute(iter.second, Variable::make(iter.second.type(), y_names[iter.first]), expr);
     }
-    debug(0) << "After substituting y_subs: " << expr << "\n";
+    debug(5) << "After substituting y_subs: " << expr << "\n";
 
-    ExtractYPart conv(x_names, y_names, &subs);
+    ExtractYPart conv(x_names, y_names, &y_subs);
     expr = conv.mutate(expr);
+    debug(0) << "After mutation: " << expr << "\n";
 
-    const auto &iter = subs.find(index);
-    if (!conv.is_solvable || (iter == subs.end())) {
-        // f(x) = f(x) -> We'll treat it as non-associative
+    if (!conv.is_solvable) {
         return Expr();
     }
+
+    if(conv.current_y.defined()) {
+        debug(0) << "***NEED REPLACEMENT\n";
+        for (const auto &iter : y_subs) {
+            if (equal(iter.second, conv.current_y)) {
+                // Since it's already there, we need to update the expr to use
+                // that variable instead.
+                internal_assert(iter.first < (int)y_subs.size());
+                Expr y_var = Variable::make(conv.current_y.type(), y_names[iter.first]);
+                expr = substitute(conv.current_y_name, y_var, expr);
+                return conv.current_y;
+            }
+        }
+        // It is not in y_subs, we need to add the replacement to y_subs.
+        if (conv.index < (int)y_names.size()) {
+            y_subs.emplace(conv.index, conv.current_y);
+            return conv.current_y;
+        }
+        // We've used up all the 'op_y' vars to substitute the expr.
+        return Expr();
+    }
+
+    const auto &iter = y_subs.find(index);
     return iter->second;
 }
 
@@ -435,9 +469,11 @@ bool compare_expr_depths(const AssociativePair& lhs, const AssociativePair& rhs)
 }
 
 bool find_match(const vector<AssociativePair> &table, Expr e, Expr &identity) {
+    //TODO(psuriana): Find a tighter bound
     auto lower = std::lower_bound(table.begin(), table.end(), AssociativePair(e), compare_expr_depths);
     auto upper = std::upper_bound(table.begin(), table.end(), AssociativePair(e), compare_expr_depths);
 
+    //TODO: use the result
     map<string, Expr> result;
     for (; lower < upper; lower++) {
         AssociativePair pattern = *lower;
@@ -704,7 +740,7 @@ void associativity_test() {
     Expr g_call = Call::make(Int(32), "g", {rx}, Call::CallType::Halide, nullptr, 0);
 
     // f(x) = min(f(x), int16(z))
-    check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
+    /*check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
                         true, {{min(x, y), Int(32).max(), {"x", f_call_0}, {"y", y + Cast::make(Int(16), z)}}});
 
     // f(x) = f(x) + g(rx) + y + z
@@ -749,7 +785,7 @@ void associativity_test() {
 
     // f(x) = f(x) -> associative but doesn't really make any sense, so we'll treat it as non-associative
     check_associativity("f", {x}, {f_call_0},
-                        false, {});
+                        false, {});*/
 
     // f(x) = max(max(min(f(x), g(rx) + 2), f(x)), g(rx) + 2)
     check_associativity("f", {x}, {max(max(min(f_call_0, g_call + 2), f_call_0), g_call + 2)},
