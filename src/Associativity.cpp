@@ -201,7 +201,7 @@ bool compare_expr_depths(const AssociativePair& lhs, const AssociativePair& rhs)
     return lhs_depth < rhs_depth;
 }
 
-bool find_match(const vector<AssociativePair> &table, int index, const string &op_x,
+bool find_match(const vector<AssociativePair> &table, const string &op_x,
                 const string &op_y, Expr x_part, Expr e, AssociativeOp &op) {
 
     //TODO(psuriana): Find a tighter bound
@@ -214,7 +214,7 @@ bool find_match(const vector<AssociativePair> &table, int index, const string &o
     // We need to convert the variable names into x{tuple_idx}
     // to match it with the associative ops table.
     Expr old = e;
-    string x = "x" + std::to_string(index);
+    string x = "x0";
     e = substitute(op_x, Variable::make(x_part.type(), x), e);
 
     for (; lower < upper; lower++) {
@@ -222,7 +222,8 @@ bool find_match(const vector<AssociativePair> &table, int index, const string &o
         map<string, Expr> result;
         if (expr_match(pattern.op, e, result)) {
             debug(5) << "Find associative ops for " << e << " -> " << pattern.op
-                     << " with identity: " << pattern.identity << "\n";
+                     << " with identity: " << pattern.identity
+                     << ", y_part: " << result["y0"] << "\n";
 
             const Variable *xvar = result[x].as<Variable>();
             if ((xvar == nullptr) || (xvar->name != x)) {
@@ -231,7 +232,7 @@ bool find_match(const vector<AssociativePair> &table, int index, const string &o
                 continue;
             }
 
-            Expr y_part = result["y" + std::to_string(index)];
+            Expr y_part = result["y0"];
             // Make sure that y_part should not depend on x
             if (expr_uses_var(y_part, x)) {
                 debug(5) << "...Skipping match since the y_part depends on x\n";
@@ -251,21 +252,21 @@ bool find_match(const vector<AssociativePair> &table, int index, const string &o
     return false;
 }
 
-bool lookup_single_i32_associative_ops_table(int index, const string &op_x, const string &op_y,
+bool lookup_single_i32_associative_ops_table(const string &op_x, const string &op_y,
                                              Expr x_part, Expr e, AssociativeOp &op) {
     Type t = Int(32);
     internal_assert(e.type() == t);
 
     if (e.as<Add>()) {
-        return find_match(get_single_i32_ops_table_add(), index, op_x, op_y, x_part, e, op);
+        return find_match(get_single_i32_ops_table_add(), op_x, op_y, x_part, e, op);
     } else if (e.as<Sub>()) {
-        return find_match(get_single_i32_ops_table_sub(), index, op_x, op_y, x_part, e, op);
+        return find_match(get_single_i32_ops_table_sub(), op_x, op_y, x_part, e, op);
     } else if (e.as<Mul>()) {
-        return find_match(get_single_i32_ops_table_mul(), index, op_x, op_y, x_part, e, op);
+        return find_match(get_single_i32_ops_table_mul(), op_x, op_y, x_part, e, op);
     } else if (e.as<Min>()) {
-        return find_match(get_single_i32_ops_table_min(), index, op_x, op_y, x_part, e, op);
+        return find_match(get_single_i32_ops_table_min(), op_x, op_y, x_part, e, op);
     } else if (e.as<Max>()) {
-        return find_match(get_single_i32_ops_table_max(), index, op_x, op_y, x_part, e, op);
+        return find_match(get_single_i32_ops_table_max(), op_x, op_y, x_part, e, op);
     }
     return false;
 }
@@ -279,6 +280,8 @@ bool extract_associative_op(int index, const vector<string> &op_x_names,
     Expr x = Variable::make(t, op_x);
     Expr y = Variable::make(t, op_y);
 
+    debug(5) << "\n\nProving associativity of:  " << e << "\n";
+
     if (!x_part.defined()) { // op(y)
         // Update with no self-recurrence is associative and the identity can be
         // anything since it's going to be replaced anyway
@@ -290,7 +293,7 @@ bool extract_associative_op(int index, const vector<string> &op_x_names,
     }
 
     bool success = false;
-    if (const Add *a = e.as<Add>()) {
+    /*if (const Add *a = e.as<Add>()) {
         op.op = x + y;
         op.identity = make_const(t, 0);
         success = visit_associative_binary_op<Add>(op_x, op_y, x_part, a->a, a->b, op);
@@ -320,13 +323,14 @@ bool extract_associative_op(int index, const vector<string> &op_x_names,
         success = visit_associative_binary_op<Or>(op_x, op_y, x_part, o->a, o->b, op);
     } else if (e.as<Let>()) {
         internal_error << "Let should have been substituted before calling this function\n";
-    }
+    }*/
 
     if (!success && t.is_int() && (t.bits() == 32)) {
         // It's non-trivial binary ops. Try looking at the associative ops table for int32
         debug(5) << "Look-up associativity table for: " << e << "\n";
-        success = lookup_single_i32_associative_ops_table(index, op_x, op_y, x_part, e, op);
+        success = lookup_single_i32_associative_ops_table(op_x, op_y, x_part, e, op);
     }
+    debug(5) << e << " is associative? " << success << "\n";
     return success;
 }
 
@@ -511,8 +515,8 @@ void associativity_test() {
                         true, {{x + y, 0, {"x", f_call_0}, {"y", max(g_call, -3)}}});
 
     // f(x) = f(x) - g(rx) -> Is associative given that the merging operator is +
-    check_associativity("f", {x}, {f_call_0 - g_call},
-                        true, {{x + y, 0, {"x", f_call_0}, {"y", g_call}}});
+    /*check_associativity("f", {x}, {f_call_0 - g_call},
+                        true, {{x + y, 0, {"x", f_call_0}, {"y", g_call}}});*/
 
     // f(x) = min(4, g(rx)) -> trivially associative
     check_associativity("f", {x}, {min(4, g_call)},

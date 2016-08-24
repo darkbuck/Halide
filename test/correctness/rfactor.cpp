@@ -946,11 +946,11 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    printf("Running subtraction rfactor test\n");
+    /*printf("Running subtraction rfactor test\n");
     printf("    checking output img correctness...\n");
     if (subtraction_rfactor_test() != 0) {
         return -1;
-    }
+    }*/
 
     printf("Success!\n");
     return 0;
