@@ -269,9 +269,9 @@ bool lookup_single_i32_associative_ops_table(int index, const string &op_x, cons
     return false;
 }
 
-bool extract_associative_op(int index, const vector<string> &op_x_names,
-                            const vector<string> &op_y_names, Expr x_part,
-                            Expr e, AssociativeOps &assoc_ops) {
+bool extract_associative_op_single_element(int index, const vector<string> &op_x_names,
+                                           const vector<string> &op_y_names, Expr x_part,
+                                           Expr e, AssociativeOps &assoc_ops) {
     Type t = e.type();
     const string &op_x = op_x_names[index];
     const string &op_y = op_y_names[index];
@@ -350,6 +350,7 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
     }
 
     vector<set<int>> dependencies(exprs.size());
+    bool all_independent = true;
 
     // For a Tuple of exprs to be associative, each element of the Tuple
     // has to be associative.
@@ -366,20 +367,34 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             return AssociativityProverResult();
         }
         dependencies[idx] = csr.x_dependencies;
+        if (!csr.x_dependencies.empty()) {
+            all_independent = false;
+        }
 
         expr = common_subexpression_elimination(expr);
         expr = simplify(expr);
         expr = solve_expression(expr, op_x).result; // Move 'x' to the left as possible
         expr = substitute_in_all_lets(expr);
-
-        // Try to infer the 'y' part of the operator. If we couldn't find
-        // a single 'y' that satisfy the operator, give up
-        bool is_associative = extract_associative_op(idx, op_x_names, op_y_names,
-                                                     csr.x_part, expr, assoc_ops);
-        if (!is_associative) {
-            return AssociativityProverResult();
-        }
     }
+
+    if (all_independent || (exprs.size() == 1)) {
+        debug(0) << "All tuple elements are independent. Try proving associativity of "
+                 << "each element separately.\n";
+        // Since there is no x-cross-dependencies, check associativity of each tuple
+        // element separately.
+        for (size_t idx = 0; idx < exprs.size(); ++idx) {
+            // Try to infer the 'y' part of the operator. If we couldn't find
+            // a single 'y' that satisfy the operator, give up
+            bool is_associative = extract_associative_op_single_element(
+                idx, op_x_names, op_y_names, csr.x_part, expr, assoc_ops);
+            if (!is_associative) {
+                return AssociativityProverResult();
+            }
+        }
+    } else {
+        debug(0) << "There is cross-dependencies. Need to prove associativity in bulk.\n";
+    }
+
     return AssociativityProverResult(true, assoc_ops);
 }
 
@@ -475,11 +490,11 @@ void associativity_test() {
     Expr g_call = Call::make(Int(32), "g", {rx}, Call::CallType::Halide, nullptr, 0);
 
     // f(x) = f(x) - g(rx) -> Is associative given that the merging operator is +
-    check_associativity("f", {x}, {f_call_0 - g_call}, true,
+    /*check_associativity("f", {x}, {f_call_0 - g_call}, true,
                         {{AssociativePair(x + y, 0)},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", g_call)}
-                        });
+                        });*/
 
     // f(x) = min(f(x), int16(z))
     check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))}, true,
