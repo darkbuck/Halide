@@ -8,6 +8,7 @@
  */
 
 #include "IR.h"
+#include "AssociativeOpsTable.h"
 
 #include <functional>
 
@@ -19,7 +20,7 @@ namespace Internal {
  * For example, the following associative Expr, min(f(x), g(r.x) + 2), where f(x)
  * is the self-recurrence term, will be represented as:
  \code
- AssociativeOp assoc = {
+ AssociativeOps assoc = {
         min(x, y),
         +inf,
         {"x", f(x)},
@@ -31,7 +32,7 @@ namespace Internal {
  * and undefined Expr: {"", Expr()}. 'op' will only contain the 'y' term in
  * this case. For example, min(g(r.x), 4), will be represented as:
  \code
- AssociativeOp assoc = {
+ AssociativeOps assoc = {
         y,
         0,
         {"", Expr()},
@@ -41,11 +42,28 @@ namespace Internal {
  * Since it is a unary operator, the identity does not matter. It can be
  * anything.
  */
-struct AssociativeOp {
-        Expr op; // op(x, y)
-        Expr identity;
-        std::pair<std::string, Expr> x;
-        std::pair<std::string, Expr> y;
+struct AssociativeOps {
+    struct Replacement {
+        std::string var; // Variable name that is used to replace the expr in 'op'
+        Expr expr;
+
+        Replacement() {}
+        Replacement(const std::string &var, Expr expr) : var(var), expr(expr) {}
+    };
+
+    // List of pairs of binary associative op and its identity
+    std::vector<AssociativePair> ops;
+    std::vector<Replacement> x;
+    std::vector<Replacement> y;
+
+    AssociativeOps() {}
+    AssociativeOps(size_t size) : ops(size), x(size), y(size) {}
+    AssociativeOps(const std::vector<AssociativePair> &ops,
+                   const std::vector<Replacement> &x,
+                   const std::vector<Replacement> &y)
+        : ops(ops), x(x), y(y) {}
+
+    size_t size() const { return ops.size(); }
 };
 
 /**
@@ -65,8 +83,28 @@ struct AssociativeOp {
  * since it doesn't really make any sense to do any associative reduction on that
  * particular update definition.
  */
-std::pair<bool, std::vector<AssociativeOp>> prove_associativity(
-        const std::string &f, std::vector<Expr> args, std::vector<Expr> exprs);
+struct AssociativityProverResult {
+    AssociativeOps associative_ops;
+    bool is_associative;
+
+    AssociativityProverResult() : is_associative(false) {}
+    AssociativityProverResult(bool is_associative, const AssociativeOps &op)
+        : associative_ops(op), is_associative(is_associative) {}
+
+    const std::vector<AssociativePair> &ops() const { return associative_ops.ops; }
+    const std::vector<AssociativeOps::Replacement> &x() const { return associative_ops.x; }
+    const std::vector<AssociativeOps::Replacement> &y() const { return associative_ops.y; }
+
+    std::vector<AssociativePair> &ops() { return associative_ops.ops; }
+    std::vector<AssociativeOps::Replacement> &x() { return associative_ops.x; }
+    std::vector<AssociativeOps::Replacement> &y() { return associative_ops.y; }
+
+    bool associative() const { return is_associative; }
+    size_t size() const { return associative_ops.size(); }
+};
+
+AssociativityProverResult prove_associativity(
+    const std::string &f, std::vector<Expr> args, std::vector<Expr> exprs);
 
 EXPORT void associativity_test();
 

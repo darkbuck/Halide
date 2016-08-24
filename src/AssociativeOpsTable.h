@@ -13,6 +13,7 @@
 namespace Halide {
 namespace Internal {
 
+// Pair of associative op and its identity
 struct AssociativePair {
 	Expr op;
 	Expr identity;

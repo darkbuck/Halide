@@ -483,13 +483,11 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     // Check whether the operator is associative and determine the operator and
     // its identity for each value in the definition if it is a Tuple
-    bool is_assoc;
-    vector<AssociativeOp> ops;
-    std::tie(is_assoc, ops) = prove_associativity(func_name, args, values);
-    user_assert(is_assoc)
+    const auto &assoc_result = prove_associativity(func_name, args, values);
+    user_assert(assoc_result.associative())
         << "Failed to call rfactor() on " << stage_name
         << " since it can't prove associativity of the operator\n";
-    internal_assert(ops.size() == values.size());
+    internal_assert(assoc_result.ops().size() == values.size());
 
     vector<Split> &splits = definition.schedule().splits();
     vector<ReductionVariable> &rvars = definition.schedule().rvars();
@@ -601,7 +599,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     vector<Expr> init_vals(values.size());
     for (size_t i = 0; i < init_vals.size(); ++i) {
-        init_vals[i] = ops[i].identity;
+        init_vals[i] = assoc_result.ops()[i].identity;
     }
 
     Func intm(func_name + "_intm");
@@ -715,10 +713,9 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
             Expr prev_val = Call::make(intm.output_types()[i], func_name,
                                        f_store_args, Call::CallType::Halide,
                                        nullptr, i);
-            const AssociativeOp &op = ops[i];
-            Expr val = substitute(op.y.first, intm(f_load_args)[i], op.op);
-            if (!op.x.first.empty()) {
-                val = substitute(op.x.first, prev_val, val);
+            Expr val = substitute(assoc_result.y()[i].var, intm(f_load_args)[i], assoc_result.ops()[i].op);
+            if (!assoc_result.x()[i].var.empty()) {
+                val = substitute(assoc_result.x()[i].var, prev_val, val);
             } else {
                 user_warning << "Update definition of " << stage_name << " at index " << i
                              << " doesn't depend on the previous value. This isn't a"
@@ -729,10 +726,9 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     } else {
         Expr prev_val = Call::make(intm.output_types()[0], func_name,
                                    f_store_args, Call::CallType::Halide);
-        const AssociativeOp &op = ops[0];
-        Expr val = substitute(op.y.first, intm(f_load_args), op.op);
-        if (!op.x.first.empty()) {
-            val = substitute(op.x.first, prev_val, val);
+        Expr val = substitute(assoc_result.y()[0].var, intm(f_load_args), assoc_result.ops()[0].op);
+        if (!assoc_result.x()[0].var.empty()) {
+            val = substitute(assoc_result.x()[0].var, prev_val, val);
         } else {
             user_warning << "Update definition of " << stage_name
                          << " doesn't depend on the previous value. This isn't a"
