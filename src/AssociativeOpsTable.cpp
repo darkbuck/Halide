@@ -48,7 +48,7 @@ const vector<AssociativePair> &get_single_i32_ops_table_max() {
     static bool init = false;
     static vector<AssociativePair> exprs(4);
     if (!init) {
-        exprs[0] = {i32_max, i32_min};
+        exprs[0] = {i32_max, i32_tmin};
         exprs[1] = {Max::make(Max::make(i32_min, i32_x0), i32_y0), i32_tmin};
         exprs[2] = {Max::make(Min::make(i32_mul, i32_x0), i32_mul), i32_one};
         exprs[3] = {Max::make(Min::make(i32_mul, i32_y0), i32_mul), i32_one};
@@ -61,7 +61,7 @@ const vector<AssociativePair> &get_single_i32_ops_table_min() {
     static bool init = false;
     static vector<AssociativePair> exprs(5);
     if (!init) {
-        exprs[0] = {i32_min, i32_max};
+        exprs[0] = {i32_min, i32_tmax};
         exprs[1] = {Min::make(Min::make(i32_max, i32_x0), i32_y0), i32_tmax};
         exprs[2] = {Min::make(Max::make(i32_mul, i32_x0), i32_mul), i32_one};
         exprs[3] = {Min::make(Max::make(i32_mul, i32_y0), i32_mul), i32_one};
