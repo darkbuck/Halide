@@ -22,11 +22,19 @@ struct AssociativePair {
 	AssociativePair(Expr op, Expr id) : op(op), identity(id) {}
 };
 
+// Single element tuple of 32-bit integer
 const std::vector<AssociativePair> &get_single_i32_ops_table_add();
 const std::vector<AssociativePair> &get_single_i32_ops_table_mul();
 const std::vector<AssociativePair> &get_single_i32_ops_table_max();
 const std::vector<AssociativePair> &get_single_i32_ops_table_min();
 const std::vector<AssociativePair> &get_single_i32_ops_table_sub();
+
+// Two element tuple of 32-bit integer
+/*const std::vector<AssociativePair> &get_double_i32_ops_table_add();
+const std::vector<AssociativePair> &get_double_i32_ops_table_mul();
+const std::vector<AssociativePair> &get_double_i32_ops_table_max();
+const std::vector<AssociativePair> &get_double_i32_ops_table_min();
+const std::vector<AssociativePair> &get_double_i32_ops_table_sub();*/
 
 }
 }

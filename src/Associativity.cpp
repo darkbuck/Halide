@@ -19,6 +19,7 @@ namespace Internal {
 
 using std::map;
 using std::pair;
+using std::set;
 using std::string;
 using std::vector;
 
@@ -96,7 +97,8 @@ class ConvertSelfRef : public IRMutator {
     // If that function has multiple values, which value does this
     // call node refer to?
     int value_index;
-    string op_x;
+    vector<string> op_x_names;
+    map<int, Expr> *x_subs;
     bool is_conditional;
 
     void visit(const Call *op) {
@@ -112,10 +114,7 @@ class ConvertSelfRef : public IRMutator {
                 << "Func should not have been defined for a self-reference\n";
             internal_assert(args.size() == op->args.size())
                 << "Self-reference should have the same number of args as the original\n";
-            if (op->value_index != value_index) {
-                debug(4) << "Self-reference of " << op->name
-                         << " with different index. Cannot prove associativity\n";
-            } else if (is_conditional && (op->value_index == value_index)) {
+            if (is_conditional && (op->value_index == value_index)) {
                 debug(4) << "Self-reference of " << op->name
                          << " inside a conditional. Operation is not associative\n";
                 is_solvable = false;
@@ -130,10 +129,25 @@ class ConvertSelfRef : public IRMutator {
                 }
             }
             // Substitute the call
-            debug(4) << "   Substituting Call " << op->name << " at value index "
-                     << op->value_index << " with " << op_x << "\n";
-            expr = Variable::make(op->type, op_x);
-            x_part = op;
+            const auto &iter = x_subs->find(op->value_index);
+            if (iter != x_subs->end()) {
+                const Variable *v = iter->second.as<Variable>();
+                internal_assert(v && (v->type == op->type));
+                debug(4) << "   Substituting Call " << op->name << " at value index "
+                         << op->value_index << " with " << v->name << "\n";
+                expr = iter->second;
+            } else {
+                internal_assert(op->value_index < (int)op_x_names.size());
+                debug(4) << "   Substituting Call " << op->name << " at value index "
+                         << op->value_index << " with " << op_x_names[op->value_index] << "\n";
+                expr = Variable::make(op->type, op_x_names[op->value_index]);
+                x_subs->emplace(op->value_index, expr);
+            }
+            if (op->value_index == value_index) {
+                x_part = op;
+            } else {
+                x_dependencies.insert(op->value_index);
+            }
         }
     }
 
@@ -154,10 +168,12 @@ class ConvertSelfRef : public IRMutator {
     }
 
 public:
-    ConvertSelfRef(const string &f, const vector<Expr> &args, int idx, const string &x) :
-        func(f), args(args), value_index(idx), op_x(x), is_conditional(false) {}
+    ConvertSelfRef(const string &f, const vector<Expr> &args, int idx,
+                   const vector<string> &x_names, map<int, Expr> *subs) :
+        func(f), args(args), value_index(idx), op_x_names(x_names), x_subs(subs), is_conditional(false) {}
 
     bool is_solvable = true;
+    set<int> x_dependencies; // Contains dependencies on self-reference at different tuple indices
     Expr x_part;
 };
 
@@ -502,6 +518,7 @@ bool extract_associative_op(int index, const string &op_x, const string &op_y,
 pair<bool, vector<AssociativeOp>> prove_associativity(const string &f, vector<Expr> args,
                                                       vector<Expr> exprs) {
     vector<AssociativeOp> ops;
+    map<int, Expr> x_subs;
     map<Expr, string, ExprCompare> y_subs;
 
     for (Expr &arg : args) {
@@ -510,28 +527,33 @@ pair<bool, vector<AssociativeOp>> prove_associativity(const string &f, vector<Ex
         arg = substitute_in_all_lets(arg);
     }
 
-    // For a Tuple of exprs to be associative, each element of the Tuple
-    // has to be associative. This does not handle dependencies across
-    // Tuple's elements
+    vector<string> op_x_names(exprs.size()), op_y_names(exprs.size());
     for (size_t idx = 0; idx < exprs.size(); ++idx) {
-        string op_x = unique_name("_x_" + std::to_string(idx));
-        string op_y = unique_name("_y_" + std::to_string(idx));
+        op_x_names[idx] = unique_name("_x_" + std::to_string(idx));
+        op_y_names[idx] = unique_name("_y_" + std::to_string(idx));
+    }
+
+    vector<set<int>> dependencies(exprs.size());
+
+    // For a Tuple of exprs to be associative, each element of the Tuple
+    // has to be associative.
+    for (size_t idx = 0; idx < exprs.size(); ++idx) {
+        string op_x = op_x_names[idx];
+        string op_y = op_y_names[idx];
 
         Expr expr = simplify(exprs[idx]);
 
         // Replace any self-reference to Func 'f' with a Var
-        ConvertSelfRef csr(f, args, idx, op_x);
+        ConvertSelfRef csr(f, args, idx, op_x_names, &x_subs);
         expr = csr.mutate(expr);
         if (!csr.is_solvable) {
             return std::make_pair(false, vector<AssociativeOp>());
         }
+        dependencies[idx] = csr.x_dependencies;
 
         expr = common_subexpression_elimination(expr);
         expr = simplify(expr);
         expr = solve_expression(expr, op_x).result; // Move 'x' to the left as possible
-        if (!expr.defined()) {
-            return std::make_pair(false, vector<AssociativeOp>());
-        }
         expr = substitute_in_all_lets(expr);
 
         // Try to infer the 'y' part of the operator. If we couldn't find
