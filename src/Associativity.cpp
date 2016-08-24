@@ -9,7 +9,9 @@
 #include "CSE.h"
 #include "AssociativeOpsTable.h"
 #include "Util.h"
+#include "IRMatch.h"
 
+#include <algorithm>
 #include <sstream>
 
 namespace Halide {
@@ -297,32 +299,33 @@ bool visit_associative_binary_op(const string &op_x, const string &op_y, Expr x_
     return true;
 }
 
-template<std::size_t SIZE>
-int binary_search(const std::array<string, SIZE> &table, const string &val) {
-    int low = 0;
-    int high = SIZE - 1;
-    while (low <= high) {
-        int mid = (low + high) / 2;
-        string mid_val = table[mid];
-        if (mid_val == val) {
-            return mid;
-        } else if (mid_val.size() > val.size()) {
-            high = mid - 1;
-        } else if (mid_val.size() < val.size()) {
-            low = mid + 1;
-        }
-    }
-    return -1;
+bool compare_string(const string& lhs, const string& rhs) {
+   return lhs.size() < rhs.size();
 }
 
 bool look_up_single_is32_associative_ops_table(const std::string &expr, Expr &identity) {
-    int index = binary_search(AssociativeOpsTable::table_single_i32_ops, expr);
-    if (index == -1) {
-        return false;
+    auto lower = std::lower_bound(AssociativeOpsTable::table_single_i32_ops.begin(),
+                                  AssociativeOpsTable::table_single_i32_ops.end(),
+                                  expr, compare_string);
+    auto upper = std::upper_bound(AssociativeOpsTable::table_single_i32_ops.begin(),
+                                  AssociativeOpsTable::table_single_i32_ops.end(),
+                                  expr, compare_string);
+
+    for (; lower < upper; lower++) {
+        string val = *lower;
+        if (val.size() > expr.size()) {
+            return false;
+        } else {
+            internal_assert(val.size() == expr.size());
+            if (val == expr) {
+                int index = std::distance(AssociativeOpsTable::table_single_i32_ops.begin(), lower);
+                internal_assert((index >= 0) && (index < (int)AssociativeOpsTable::table_single_i32_ids.size()));
+                identity = make_const(Int(32), AssociativeOpsTable::table_single_i32_ids[index]);
+                return true;
+            }
+        }
     }
-    internal_assert((index >= 0) && (index < (int)AssociativeOpsTable::table_single_i32_ids.size()));
-    identity = make_const(Int(32), AssociativeOpsTable::table_single_i32_ids[index]);
-    return true;
+    return false;
 }
 
 bool extract_associative_op(int index, const string &op_x, const string &op_y,
@@ -376,11 +379,11 @@ bool extract_associative_op(int index, const string &op_x, const string &op_y,
 
     if (!success && t.is_int() && (t.bits() == 32)) {
         // It's non-trivial binary ops. Try looking at the associative ops table for int32
-        debug(4) << "Look-up associativity table for: " << e << "\n";
+        debug(5) << "Look-up associativity table for: " << e << "\n";
 
         ExtractBinaryOp conv(op_x, op_y);
         Expr expr = conv.mutate(e);
-        debug(4) << e << " -> " << expr << "\n";
+        debug(5) << e << " -> " << expr << "\n";
         if (!conv.is_solvable) {
             return false;
         }
@@ -388,6 +391,12 @@ bool extract_associative_op(int index, const string &op_x, const string &op_y,
             // f(x) = f(x) -> We'll treat it as non-associative
             return false;
         }
+
+        // Canonicalize the expression
+        expr = solve_expression(expr, op_y).result;
+        expr = solve_expression(expr, op_x).result;
+        expr = simplify(expr);
+        debug(5) << "Canonicalized expr: " << expr << "\n";
 
         std::ostringstream stream;
         stream << expr;
@@ -400,11 +409,11 @@ bool extract_associative_op(int index, const string &op_x, const string &op_y,
             expr_str = replace_all(expr_str, op_x, x);
             expr_str = replace_all(expr_str, op_y, y);
         }
-        debug(4) << "After replacement " << expr << " -> " << expr_str << "\n";
+        debug(5) << "After replacement " << expr << " -> " << expr_str << "\n";
 
         success = look_up_single_is32_associative_ops_table(expr_str, op.identity);
         if (success) {
-            debug(4) << "Find associative ops for " << expr << "\n";
+            debug(5) << "Find associative ops for " << expr << "\n";
             op.op = expr;
             op.x = {op_x, x_part};
             op.y = {op_y, conv.y_part};
@@ -553,7 +562,7 @@ void associativity_test() {
     Expr g_call = Call::make(Int(32), "g", {rx}, Call::CallType::Halide, nullptr, 0);
 
     // f(x) = min(f(x), int16(z))
-    check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
+    /*check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
                         true, {{min(x, y), Int(32).max(), {"x", f_call_0}, {"y", y + Cast::make(Int(16), z)}}});
 
     // f(x) = f(x) + g(rx) + y + z
@@ -603,6 +612,13 @@ void associativity_test() {
     // f(x) = max(max(min(f(x), g(rx) + 2), f(x)), g(rx) + 2)
     check_associativity("f", {x}, {max(max(min(f_call_0, g_call + 2), f_call_0), g_call + 2)},
                         true, {{max(max(min(x, y), x), y), Int(32).min(), {"x", f_call_0}, {"y", g_call + 2}}});
+
+    // f(x) = ((min(max((f(x)*g(rx)), g(rx)), (f(x)*g(rx))) + g(rx)) + f(x))
+    check_associativity("f", {x}, {((min(max((g_call*f_call_0), g_call), (f_call_0*g_call)) + g_call) + f_call_0)},
+                        true, {{((min(max((x*y), y), (x*y)) + y) + x), make_const(Int(32), 0), {"x", f_call_0}, {"y", g_call}}});*/
+
+    Expr x0 = Variable::make(Int(32), "x0");
+    Expr y0 = Variable::make(Int(32), "y0");
 
     std::cout << "Associativity test passed" << std::endl;
 }
