@@ -11,6 +11,7 @@
 #include "IRMatch.h"
 
 #include <algorithm>
+#include <iterator>
 #include <sstream>
 
 namespace Halide {
@@ -24,66 +25,30 @@ using std::vector;
 
 namespace {
 
-class CountExprDepth : public IRVisitor {
+class GetExprOpcode : public IRVisitor {
 public:
-    int depth = 0;
+    vector<int> opcode;
 
     using IRVisitor::visit;
 
     template<typename T>
-    void visit_const(const T *op) {
-        depth = 1;
-    }
-
-    void visit(const IntImm *op)    { visit_const<IntImm>(op); }
-    void visit(const UIntImm *op)   { visit_const<UIntImm>(op); }
-    void visit(const FloatImm *op)  { visit_const<FloatImm>(op); }
-    void visit(const Variable *op)  { visit_const<Variable>(op); }
-
-    void visit(const Cast *op) {
-        op->value.accept(this);
-        depth += 1;
-    }
-
-    void visit(const Not *op) {
+    void visit_binary_operator(const T *op, int code) {
+        opcode.push_back(code);
         op->a.accept(this);
-        depth += 1;
-    }
-
-    template<typename T>
-    void visit_binary_operator(const T *op) {
-        op->a.accept(this);
-        int depth_a = depth;
         op->b.accept(this);
-        int depth_b = depth;
-        depth = 1 + std::max(depth_a, depth_b);
     }
 
-    void visit(const Add *op) {visit_binary_operator(op);}
-    void visit(const Sub *op) {visit_binary_operator(op);}
-    void visit(const Mul *op) {visit_binary_operator(op);}
-    void visit(const Div *op) {visit_binary_operator(op);}
-    void visit(const Mod *op) {visit_binary_operator(op);}
-    void visit(const Min *op) {visit_binary_operator(op);}
-    void visit(const Max *op) {visit_binary_operator(op);}
-    void visit(const EQ *op) {visit_binary_operator(op);}
-    void visit(const NE *op) {visit_binary_operator(op);}
-    void visit(const LT *op) {visit_binary_operator(op);}
-    void visit(const LE *op) {visit_binary_operator(op);}
-    void visit(const GT *op) {visit_binary_operator(op);}
-    void visit(const GE *op) {visit_binary_operator(op);}
-    void visit(const And *op) {visit_binary_operator(op);}
-    void visit(const Or *op) {visit_binary_operator(op);}
-
-    void visit(const Select *op) {
-        internal_error << "TODO(psuriana): implement this later\n";
-    }
+    void visit(const Add *op) {visit_binary_operator(op, 0);}
+    void visit(const Mul *op) {visit_binary_operator(op, 1);}
+    void visit(const Max *op) {visit_binary_operator(op, 2);}
+    void visit(const Min *op) {visit_binary_operator(op, 3);}
+    void visit(const Sub *op) {visit_binary_operator(op, 4);}
 };
 
-int count_expr_depth(Expr e) {
-    CountExprDepth c;
+vector<int> get_expr_opcode(Expr e) {
+    GetExprOpcode c;
     e.accept(&c);
-    return c.depth;
+    return c.opcode;
 }
 
 // Replace self-reference to Func 'func' with arguments 'args' at index
@@ -194,10 +159,33 @@ bool visit_associative_binary_op(int index, const string &op_x, const string &op
     return true;
 }
 
-bool compare_expr_depths(const AssociativePair& lhs, const AssociativePair& rhs) {
-    int lhs_depth = count_expr_depth(lhs.op);
-    int rhs_depth = count_expr_depth(rhs.op);
-    return lhs_depth < rhs_depth;
+template <typename T>
+std::ostream &operator<<(std::ostream &out, const std::vector<T> &v) {
+    if (!v.empty()) {
+        out << '[';
+        for (size_t i = 0; i < v.size(); ++i) {
+            out << v[i];
+            if (i < v.size() - 1) {
+                out << ", ";
+            }
+        }
+        out << "]";
+    }
+    return out;
+}
+
+bool compare_expr_opcode(const vector<AssociativePair>& lhs, const vector<AssociativePair>& rhs) {
+    vector<vector<int>> lhs_opcode, rhs_opcode;
+    for (const auto &pair : lhs) {
+        debug(5) << "--lhs op: " << pair.op << "\n";
+        lhs_opcode.push_back(get_expr_opcode(pair.op));
+    }
+    for (const auto &pair : rhs) {
+        debug(5) << "--rhs op: " << pair.op << "\n";
+        rhs_opcode.push_back(get_expr_opcode(pair.op));
+    }
+    debug(5) << "lhs: " << lhs_opcode << ", rhs: " << rhs_opcode << ", lhs < rhs? " << (lhs_opcode < rhs_opcode) << "\n";
+    return lhs_opcode < rhs_opcode;
 }
 
 bool associative_op_pattern_match(Expr e,
@@ -214,7 +202,6 @@ bool associative_op_pattern_match(Expr e,
                  << ", y_part: " << result["y0"] << "\n";
 
         for (const auto &x_name : x_names) {
-            debug(5) << "x_name: " << x_name << "\n";
             const auto &iter = result.find(x_name);
             if (iter != result.end()) {
                 const Variable *xvar = iter->second.as<Variable>();
@@ -265,12 +252,18 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
     internal_assert(op_x_names.size() == exprs.size());
     internal_assert(op_x_names.size() == assoc_ops.size());
 
-    //TODO(psuriana): Find a tighter bound
-    //auto lower = std::lower_bound(table.begin(), table.end(), AssociativePair(e), compare_expr_depths);
-    //auto upper = std::upper_bound(table.begin(), table.end(), AssociativePair(e), compare_expr_depths);
+    vector<AssociativePair> expr_ops(exprs.size());
+    for (size_t i = 0; i < exprs.size(); ++i) {
+        expr_ops[i] = AssociativePair(exprs[i]);
+    }
 
+    //TODO(psuriana): Find a tighter bound
     auto lower = table.begin();
-    auto upper = table.end();
+    auto upper = std::upper_bound(table.begin(), table.end(), expr_ops, compare_expr_opcode);
+
+    //auto upper = table.end();
+
+    //std::cout << "****lower: " << lower << ", upper: " << upper << "\n";
 
     // We need to convert the variable names into x{tuple_idx}
     // to match it with the associative ops table.
@@ -403,6 +396,31 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
     return success;
 }
 
+class FindConflict : public IRGraphVisitor {
+    using IRGraphVisitor::visit;
+
+    string var;
+
+    void visit(const Variable *v) {
+        if (var == v->name) {
+            if (expr.defined()) {
+                internal_assert(equal(expr, Expr(v)));
+            } else {
+                expr = Expr(v);
+            }
+        }
+    }
+public:
+    FindConflict(const string &v) : var(v) {}
+    Expr expr;
+};
+
+Expr find_conflict(Expr e, const string &v) {
+    FindConflict f(v);
+    e.accept(&f);
+    return f.expr;
+}
+
 } // anonymous namespace
 
 
@@ -417,8 +435,39 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
         arg = substitute_in_all_lets(arg);
     }
 
-    //TODO(psuriana): need to cleanup all occurences of x0, y0, etc, to avoid
-    // clashing with the wildcard matching later on
+    // Need to cleanup all occurences of x0, y0, etc, to avoid clashing during
+    // the wildcard matching later on.
+    map<string, Expr> dummy_subs;
+    map<string, Expr> reverse_dummy_subs;
+    for (size_t idx = 0; idx < exprs.size(); ++idx) {
+        {
+            string x_name = "x" + std::to_string(idx);
+            Expr conflict = find_conflict(exprs[idx], x_name);
+            if (conflict.defined()) {
+                const auto &iter = dummy_subs.find(x_name);
+                if (iter == dummy_subs.end()) {
+                    string x_dummy = unique_name("x_dummy" + std::to_string(idx));
+                    dummy_subs.emplace(x_name, Variable::make(conflict.type(), x_dummy));
+                    reverse_dummy_subs.emplace(x_dummy, conflict);
+                }
+            }
+        }
+        {
+            string y_name = "y" + std::to_string(idx);
+            Expr conflict = find_conflict(exprs[idx], y_name);
+            if (conflict.defined()) {
+                const auto &iter = dummy_subs.find(y_name);
+                if (iter == dummy_subs.end()) {
+                    string y_dummy = unique_name("y_dummy" + std::to_string(idx));
+                    dummy_subs.emplace(y_name, Variable::make(conflict.type(), y_dummy));
+                    reverse_dummy_subs.emplace(y_dummy, conflict);
+                }
+            }
+        }
+    }
+    for (size_t idx = 0; idx < exprs.size(); ++idx) {
+        exprs[idx] = substitute(dummy_subs, exprs[idx]);
+    }
 
     vector<string> op_x_names(exprs.size()), op_y_names(exprs.size());
     for (size_t idx = 0; idx < exprs.size(); ++idx) {
@@ -478,6 +527,13 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             return AssociativityProverResult();
         }
 
+    }
+
+    // Replace the dummy variables
+    for (size_t idx = 0; idx < exprs.size(); ++idx) {
+        assoc_ops.ops[idx].op = substitute(reverse_dummy_subs, assoc_ops.ops[idx].op);
+        assoc_ops.x[idx].expr = substitute(reverse_dummy_subs, assoc_ops.x[idx].expr);
+        assoc_ops.y[idx].expr = substitute(reverse_dummy_subs, assoc_ops.y[idx].expr);
     }
 
     return AssociativityProverResult(true, assoc_ops);
@@ -546,8 +602,7 @@ void check_associativity(const string &f, vector<Expr> args, vector<Expr> exprs,
         }
 
         for (size_t i = 0; i < assoc_ops.size(); ++i) {
-            Expr expected_op = assoc_ops.ops[i].op;
-            expected_op = substitute(replacement, expected_op);
+            Expr expected_op = substitute(replacement, assoc_ops.ops[i].op);
 
             internal_assert(equal(result.ops()[i].op, expected_op))
                 << "Checking associativity: " << print_args(f, args, exprs) << "\n"
@@ -685,20 +740,12 @@ void associativity_test() {
                          {Replacement("y0", g_call_0), Replacement("y1", rx)},
                         });
 
-    /*Expr x0 = Variable::make(Int(32), "x0");
-    Expr y0 = Variable::make(Int(32), "y0");
-
-    Expr expr = max(max(min((x0*y0), x0), y0), x0); // Leaves 5
-    int depth = count_expr_depth(expr);
-    std::cout << "Depth of " << expr << ": " << depth << "\n";
-
-    expr = min(max(((x0 + y0)*x0), max((y0*y0), y0)), y0); // Leaves 6
-    depth = count_expr_depth(expr);
-    std::cout << "Depth of " << expr << ": " << depth << "\n";
-
-    expr = max(min(((y0 - x0)*(y0 - x0)), min((y0*y0), y0)), y0); // Leaves 8
-    depth = count_expr_depth(expr);
-    std::cout << "Depth of " << expr << ": " << depth << "\n";*/
+    // f(x) = max(x0, f(x)) -> x0 may conflict with the wildcard associative op patterns
+    check_associativity("f", {x}, {max(xs[0], f_call_0)}, true,
+                        {{AssociativePair(max(x, y), t.min())},
+                         {Replacement("x", f_call_0)},
+                         {Replacement("y", xs[0])}
+                        });
 
     std::cout << "Associativity test passed" << std::endl;
 }
