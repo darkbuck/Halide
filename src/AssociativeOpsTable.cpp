@@ -91,7 +91,7 @@ const vector<vector<AssociativePair>> &get_single_i32_ops_table_sub() {
 
 const vector<vector<AssociativePair>> &get_double_i32_ops_table_add() {
     static bool init = false;
-    static vector<vector<AssociativePair>> exprs(2);
+    static vector<vector<AssociativePair>> exprs(0);
     if (!init) {
         init = true;
     }
@@ -100,7 +100,7 @@ const vector<vector<AssociativePair>> &get_double_i32_ops_table_add() {
 
 const vector<vector<AssociativePair>> &get_double_i32_ops_table_mul() {
     static bool init = false;
-    static vector<vector<AssociativePair>> exprs(1);
+    static vector<vector<AssociativePair>> exprs(0);
     if (!init) {
         init = true;
     }
@@ -109,7 +109,7 @@ const vector<vector<AssociativePair>> &get_double_i32_ops_table_mul() {
 
 const vector<vector<AssociativePair>> &get_double_i32_ops_table_max() {
     static bool init = false;
-    static vector<vector<AssociativePair>> exprs(4);
+    static vector<vector<AssociativePair>> exprs(0);
     if (!init) {
         init = true;
     }
@@ -118,9 +118,10 @@ const vector<vector<AssociativePair>> &get_double_i32_ops_table_max() {
 
 const vector<vector<AssociativePair>> &get_double_i32_ops_table_min() {
     static bool init = false;
-    static vector<vector<AssociativePair>> exprs(5);
+    static vector<vector<AssociativePair>> exprs(2);
     if (!init) {
         exprs[0] = {{i32_mul_x0y0 - i32_mul_x1y1, i32_one}, {i32_x1 * i32_y0 + i32_x0 * i32_y1, i32_zero}};
+        exprs[1] = {{i32_min_x0y0, i32_tmax}, {Select::make(i32_x0 < i32_y0, i32_x1, i32_y1), i32_zero}};
         init = true;
     }
     return exprs;

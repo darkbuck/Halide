@@ -362,7 +362,7 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
     }
 
     bool success = false;
-    /*if (const Add *a = e.as<Add>()) {
+    if (const Add *a = e.as<Add>()) {
         assoc_ops.ops[index] = {x + y, make_const(t, 0)};
         success = visit_associative_binary_op<Add>(index, op_x, op_y, x_part, a->a, a->b, assoc_ops);
     } else if (const Sub *s = e.as<Sub>()) {
@@ -385,7 +385,7 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
         success = visit_associative_binary_op<Or>(index, op_x, op_y, x_part, o->a, o->b, assoc_ops);
     } else if (e.as<Let>()) {
         internal_error << "Let should have been substituted before calling this function\n";
-    }*/
+    }
 
     if (!success && t.is_int() && (t.bits() == 32)) {
         // It's non-trivial binary ops. Try looking at the associative ops table for int32
@@ -597,39 +597,39 @@ void associativity_test() {
 
     // f(x) = min(f(x), int16(z))
     check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))}, true,
-                        {{AssociativePair(min(x, y), Int(32).max())},
+                        {{AssociativePair(min(x, y), t.max())},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", y + Cast::make(Int(16), z))}
                         });
 
     // f(x) = f(x) + g(rx) + y + z
     check_associativity("f", {x}, {y + z + f_call_0}, true,
-                        {{AssociativePair(x + y, make_const(Int(32), 0))},
+                        {{AssociativePair(x + y, make_const(t, 0))},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", y + z)}
                         });
 
     // f(x) = max(y, f(x))
     check_associativity("f", {x}, {max(y, f_call_0)}, true,
-                        {{AssociativePair(max(x, y), Int(32).min())},
+                        {{AssociativePair(max(x, y), t.min())},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", y)}
                         });
 
     // f(x) = Tuple(2, 3, f(x)[2] + z)
     check_associativity("f", {x}, {2, 3, f_call_2 + z}, true,
-                        {{AssociativePair(ys[0], make_const(Int(32), 0)),
-                            AssociativePair(ys[1], make_const(Int(32), 0)),
-                            AssociativePair(xs[2] + ys[2], make_const(Int(32), 0))},
+                        {{AssociativePair(ys[0], make_const(t, 0)),
+                            AssociativePair(ys[1], make_const(t, 0)),
+                            AssociativePair(xs[2] + ys[2], make_const(t, 0))},
                          {Replacement("", Expr()), Replacement("", Expr()), Replacement("x2", f_call_2)},
                          {Replacement("y0", 2), Replacement("y1", 3), Replacement("y2", z)},
                         });
 
     // f(x) = Tuple(min(f(x)[0], g(rx)), f(x)[1]*g(x)*2, f(x)[2] + z)
     check_associativity("f", {x}, {min(f_call_0, g_call_0), f_call_1*g_call_0*2, f_call_2 + z}, true,
-                        {{AssociativePair(min(xs[0], ys[0]), Int(32).max()),
-                            AssociativePair(xs[1] * ys[1], make_const(Int(32), 1)),
-                            AssociativePair(xs[2] + ys[2], make_const(Int(32), 0))},
+                        {{AssociativePair(min(xs[0], ys[0]), t.max()),
+                            AssociativePair(xs[1] * ys[1], make_const(t, 1)),
+                            AssociativePair(xs[2] + ys[2], make_const(t, 0))},
                          {Replacement("x0", f_call_0), Replacement("x1", f_call_1), Replacement("x2", f_call_2)},
                          {Replacement("y0", g_call_0), Replacement("y1", g_call_0*2), Replacement("y2", z)},
                         });
@@ -646,7 +646,7 @@ void associativity_test() {
 
     // f(x) = min(4, g(rx)) -> trivially associative
     check_associativity("f", {x}, {min(4, g_call_0)}, true,
-                        {{AssociativePair(y, make_const(Int(32), 0))},
+                        {{AssociativePair(y, make_const(t, 0))},
                          {Replacement("", Expr())},
                          {Replacement("y", min(g_call_0, 4))}
                         });
@@ -656,7 +656,7 @@ void associativity_test() {
 
     // f(x) = max(max(min(f(x), g(rx) + 2), f(x)), g(rx) + 2)
     check_associativity("f", {x}, {max(max(min(f_call_0, g_call_0 + 2), f_call_0), g_call_0 + 2)}, true,
-                        {{AssociativePair(max(max(min(x, y), x), y), Int(32).min())},
+                        {{AssociativePair(max(max(min(x, y), x), y), t.min())},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", g_call_0 + 2)}
                         });
@@ -664,17 +664,25 @@ void associativity_test() {
     // f(x) = ((min(max((f(x)*g(rx)), g(rx)), (f(x)*g(rx))) + g(rx)) + f(x))
     check_associativity("f", {x}, {((min(max((g_call_0*f_call_0), g_call_0), (f_call_0*g_call_0)) + g_call_0) + f_call_0)},
                         true,
-                        {{AssociativePair(((min(max((x*y), y), (x*y)) + y) + x), make_const(Int(32), 0))},
+                        {{AssociativePair(((min(max((x*y), y), (x*y)) + y) + x), make_const(t, 0))},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", g_call_0)}
                         });
 
     // f(x) = Tuple(f(x)[0]*g(r.x)[0] - f(x)[1]*g(r.x)[1], f(x)[0]*g(r.x)[1] + f(x)[1]*g(r.x)[0])
     check_associativity("f", {x}, {f_call_0*g_call_0 - f_call_1*g_call_1, f_call_0*g_call_1 + f_call_1*g_call_0}, true,
-                        {{AssociativePair(xs[0]*ys[0] - xs[1]*ys[1], make_const(Int(32), 1)),
-                            AssociativePair(xs[1]*ys[0] + xs[0]*ys[1], make_const(Int(32), 0))},
+                        {{AssociativePair(xs[0]*ys[0] - xs[1]*ys[1], make_const(t, 1)),
+                            AssociativePair(xs[1]*ys[0] + xs[0]*ys[1], make_const(t, 0))},
                          {Replacement("x0", f_call_0), Replacement("x1", f_call_1)},
                          {Replacement("y0", g_call_0), Replacement("y1", g_call_1)},
+                        });
+
+    // f(x) = Tuple(f(x)[0]*g(r.x)[0] - f(x)[1]*g(r.x)[1], f(x)[0]*g(r.x)[1] + f(x)[1]*g(r.x)[0])
+    check_associativity("f", {x}, {min(f_call_0, g_call_0), select(f_call_0 < g_call_0, f_call_1, rx)}, true,
+                        {{AssociativePair(min(xs[0], ys[0]), t.max()),
+                            AssociativePair(select(xs[0] < ys[0], xs[1], ys[1]), make_const(t, 0))},
+                         {Replacement("x0", f_call_0), Replacement("x1", f_call_1)},
+                         {Replacement("y0", g_call_0), Replacement("y1", rx)},
                         });
 
     /*Expr x0 = Variable::make(Int(32), "x0");
