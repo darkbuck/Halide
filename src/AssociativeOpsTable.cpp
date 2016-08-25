@@ -30,67 +30,63 @@ const Expr i32_max_x1y1 = Max::make(i32_x1, i32_y1);
 const Expr i32_min_x1y1 = Min::make(i32_x1, i32_y1);
 const Expr i32_sub_x1y1 = Sub::make(i32_x1, i32_y1);
 
-} // anonymous namespace
-
-const vector<AssociativePair> &get_single_i32_ops_table_add() {
+const vector<vector<AssociativePair>> &get_single_i32_ops_table_add() {
     static bool init = false;
-    static vector<AssociativePair> exprs(2);
+    static vector<vector<AssociativePair>> exprs(2);
     if (!init) {
-        exprs[0] = {i32_add_x0y0, i32_zero};
-        exprs[1] = {Add::make(Add::make(Min::make(Max::make(i32_mul_x0y0, i32_y0), i32_mul_x0y0), i32_y0), i32_x0), i32_zero};
+        exprs[0] = {{i32_add_x0y0, i32_zero}};
+        exprs[1] = {{Add::make(Add::make(Min::make(Max::make(i32_mul_x0y0, i32_y0), i32_mul_x0y0), i32_y0), i32_x0), i32_zero}};
         init = true;
     }
     return exprs;
 }
 
-const vector<AssociativePair> &get_single_i32_ops_table_mul() {
+const vector<vector<AssociativePair>> &get_single_i32_ops_table_mul() {
     static bool init = false;
-    static vector<AssociativePair> exprs(1);
+    static vector<vector<AssociativePair>> exprs(1);
     if (!init) {
-        exprs[0] = {i32_mul_x0y0, i32_one};
+        exprs[0] = {{i32_mul_x0y0, i32_one}};
         init = true;
     }
     return exprs;
 }
 
-const vector<AssociativePair> &get_single_i32_ops_table_max() {
+const vector<vector<AssociativePair>> &get_single_i32_ops_table_max() {
     static bool init = false;
-    static vector<AssociativePair> exprs(4);
+    static vector<vector<AssociativePair>> exprs(4);
     if (!init) {
-        exprs[0] = {i32_max_x0y0, i32_tmin};
-        exprs[1] = {Max::make(Max::make(i32_min_x0y0, i32_x0), i32_y0), i32_tmin};
-        exprs[2] = {Max::make(Min::make(i32_mul_x0y0, i32_x0), i32_mul_x0y0), i32_one};
-        exprs[3] = {Max::make(Min::make(i32_mul_x0y0, i32_y0), i32_mul_x0y0), i32_one};
+        exprs[0] = {{i32_max_x0y0, i32_tmin}};
+        exprs[1] = {{Max::make(Max::make(i32_min_x0y0, i32_x0), i32_y0), i32_tmin}};
+        exprs[2] = {{Max::make(Min::make(i32_mul_x0y0, i32_x0), i32_mul_x0y0), i32_one}};
+        exprs[3] = {{Max::make(Min::make(i32_mul_x0y0, i32_y0), i32_mul_x0y0), i32_one}};
         init = true;
     }
     return exprs;
 }
 
-const vector<AssociativePair> &get_single_i32_ops_table_min() {
+const vector<vector<AssociativePair>> &get_single_i32_ops_table_min() {
     static bool init = false;
-    static vector<AssociativePair> exprs(5);
+    static vector<vector<AssociativePair>> exprs(5);
     if (!init) {
-        exprs[0] = {i32_min_x0y0, i32_tmax};
-        exprs[1] = {Min::make(Min::make(i32_max_x0y0, i32_x0), i32_y0), i32_tmax};
-        exprs[2] = {Min::make(Max::make(i32_mul_x0y0, i32_x0), i32_mul_x0y0), i32_one};
-        exprs[3] = {Min::make(Max::make(i32_mul_x0y0, i32_y0), i32_mul_x0y0), i32_one};
-        exprs[4] = {Min::make(Max::make(i32_mul_x0y0, i32_y0), i32_mul_x0y0), i32_zero};
+        exprs[0] = {{i32_min_x0y0, i32_tmax}};
+        exprs[1] = {{Min::make(Min::make(i32_max_x0y0, i32_x0), i32_y0), i32_tmax}};
+        exprs[2] = {{Min::make(Max::make(i32_mul_x0y0, i32_x0), i32_mul_x0y0), i32_one}};
+        exprs[3] = {{Min::make(Max::make(i32_mul_x0y0, i32_y0), i32_mul_x0y0), i32_one}};
+        exprs[4] = {{Min::make(Max::make(i32_mul_x0y0, i32_y0), i32_mul_x0y0), i32_zero}};
         init = true;
     }
     return exprs;
 }
 
-const vector<AssociativePair> &get_single_i32_ops_table_sub() {
+const vector<vector<AssociativePair>> &get_single_i32_ops_table_sub() {
     static bool init = false;
-    static vector<AssociativePair> exprs;
+    static vector<vector<AssociativePair>> exprs;
     if (!init) {
-        exprs[0] = {i32_add_x0y0, i32_zero};
+        exprs[0] = {{i32_add_x0y0, i32_zero}};
         init = true;
     }
     return exprs;
 }
-
-
 
 
 const vector<vector<AssociativePair>> &get_double_i32_ops_table_add() {
@@ -124,6 +120,7 @@ const vector<vector<AssociativePair>> &get_double_i32_ops_table_min() {
     static bool init = false;
     static vector<vector<AssociativePair>> exprs(5);
     if (!init) {
+        exprs[0] = {{i32_mul_x0y0 - i32_mul_x1y1, i32_one}, {i32_x1 * i32_y0 + i32_x0 * i32_y1, i32_zero}};
         init = true;
     }
     return exprs;
@@ -139,28 +136,50 @@ const vector<vector<AssociativePair>> &get_double_i32_ops_table_sub() {
     return exprs;
 }
 
+} // anonymous namespace
+
 const std::vector<std::vector<AssociativePair>> &get_i32_ops_table(const vector<Expr> &exprs) {
-    internal_assert(exprs.size() == 2);
+    internal_assert(!exprs.empty() && exprs.size() <= 2);
     internal_assert(exprs[0].type() == Int(32));
 
     static std::vector<std::vector<AssociativePair>> empty;
     if (exprs[0].as<Add>()) {
-        debug(0) << "Returning add root table\n";
-        return get_double_i32_ops_table_add();
+        debug(5) << "Returning add root table\n";
+        if (exprs.size() == 1) {
+            return get_single_i32_ops_table_add();
+        } else {
+            return get_double_i32_ops_table_add();
+        }
     } else if (exprs[0].as<Sub>()) {
-        debug(0) << "Returning sub root table\n";
-        return get_double_i32_ops_table_sub();
+        debug(5) << "Returning sub root table\n";
+        if (exprs.size() == 1) {
+            return get_single_i32_ops_table_sub();
+        } else {
+            return get_double_i32_ops_table_sub();
+        }
     } else if (exprs[0].as<Mul>()) {
-        debug(0) << "Returning mul root table\n";
-        return get_double_i32_ops_table_mul();
+        debug(5) << "Returning mul root table\n";
+        if (exprs.size() == 1) {
+            return get_single_i32_ops_table_mul();
+        } else {
+            return get_double_i32_ops_table_mul();
+        }
     } else if (exprs[0].as<Min>()) {
-        debug(0) << "Returning min root table\n";
-        return get_double_i32_ops_table_min();
+        debug(5) << "Returning min root table\n";
+        if (exprs.size() == 1) {
+            return get_single_i32_ops_table_min();
+        } else {
+            return get_double_i32_ops_table_min();
+        }
     } else if (exprs[0].as<Max>()) {
-        debug(0) << "Returning max root table\n";
-        return get_double_i32_ops_table_max();
+        debug(5) << "Returning max root table\n";
+        if (exprs.size() == 1) {
+            return get_single_i32_ops_table_max();
+        } else {
+            return get_double_i32_ops_table_max();
+        }
     }
-    debug(0) << "Returning empty table\n";
+    debug(5) << "Returning empty table\n";
     return empty;
 }
 

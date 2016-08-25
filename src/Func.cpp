@@ -709,19 +709,25 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     // the intermediate Func.
     vector<Expr> f_values(values.size());
     if (values.size() > 1) {
+        // There might be cross-dependencies between tuple elements, so we need
+        // to collect all substitutions first.
+        map<string, Expr> replacement;
         for (size_t i = 0; i < f_values.size(); ++i) {
-            Expr prev_val = Call::make(intm.output_types()[i], func_name,
-                                       f_store_args, Call::CallType::Halide,
-                                       nullptr, i);
-            Expr val = substitute(assoc_result.y()[i].var, intm(f_load_args)[i], assoc_result.ops()[i].op);
+            replacement.emplace(assoc_result.y()[i].var, intm(f_load_args)[i]);
             if (!assoc_result.x()[i].var.empty()) {
-                val = substitute(assoc_result.x()[i].var, prev_val, val);
+                Expr prev_val = Call::make(intm.output_types()[i], func_name,
+                                           f_store_args, Call::CallType::Halide,
+                                           nullptr, i);
+                replacement.emplace(assoc_result.x()[i].var, prev_val);
             } else {
                 user_warning << "Update definition of " << stage_name << " at index " << i
                              << " doesn't depend on the previous value. This isn't a"
                              << " reduction operation\n";
             }
-            f_values[i] = val;
+        }
+
+        for (size_t i = 0; i < f_values.size(); ++i) {
+            f_values[i] = substitute(replacement, assoc_result.ops()[i].op);
         }
     } else {
         Expr prev_val = Call::make(intm.output_types()[0], func_name,

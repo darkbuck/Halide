@@ -209,33 +209,33 @@ bool associative_op_pattern_match(Expr e,
 
     map<string, Expr> result;
     if (expr_match(pattern.op, e, result)) {
-        debug(0) << "Find associative ops for " << e << " -> " << pattern.op
+        debug(5) << "Find associative ops for " << e << " -> " << pattern.op
                  << " with identity: " << pattern.identity
                  << ", y_part: " << result["y0"] << "\n";
 
         for (const auto &x_name : x_names) {
-            debug(0) << "x_name: " << x_name << "\n";
+            debug(5) << "x_name: " << x_name << "\n";
             const auto &iter = result.find(x_name);
             if (iter != result.end()) {
                 const Variable *xvar = iter->second.as<Variable>();
                 if ((xvar == nullptr) || (xvar->name != x_name)) {
-                    debug(0) << "...Skipping match since the x_part is different than expected "
+                    debug(5) << "...Skipping match since the x_part is different than expected "
                              << iter->second << "\n";
                     return false;
                 }
-                debug(0) << "...x: " << iter->first << " -> " << iter->second << "\n";
+                debug(5) << "...x: " << iter->first << " -> " << iter->second << "\n";
             }
         }
         for (const auto &y_name : y_names) {
-            debug(0) << "y_name: " << y_name << "\n";
+            debug(5) << "y_name: " << y_name << "\n";
             const auto &iter = result.find(y_name);
             if (iter != result.end()) {
                 // Make sure that y_part should not depend on x vars
                 if (expr_uses_vars(iter->second, x_scope)) {
-                    debug(0) << "...Skipping match since the y_part depends on x vars\n";
+                    debug(5) << "...Skipping match since the y_part depends on x vars\n";
                     return false;
                 }
-                debug(0) << "...y: " << iter->first << " -> " << iter->second << "\n";
+                debug(5) << "...y: " << iter->first << " -> " << iter->second << "\n";
             }
         }
 
@@ -243,7 +243,7 @@ bool associative_op_pattern_match(Expr e,
         for (const auto &iter : result) {
             const auto &match_iter = match.find(iter.first);
             if (match_iter == match.end()) {
-                debug(0) << "Adding result: " << iter.first << " -> " << iter.second << "\n";
+                debug(5) << "Adding result: " << iter.first << " -> " << iter.second << "\n";
                 match.emplace(iter.first, iter.second);
             } else {
                 if (!equal(iter.first, match_iter->first) || !equal(iter.second, match_iter->second)) {
@@ -263,6 +263,7 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
     internal_assert(op_x_names.size() == op_y_names.size());
     internal_assert(op_x_names.size() == x_parts.size());
     internal_assert(op_x_names.size() == exprs.size());
+    internal_assert(op_x_names.size() == assoc_ops.size());
 
     //TODO(psuriana): Find a tighter bound
     //auto lower = std::lower_bound(table.begin(), table.end(), AssociativePair(e), compare_expr_depths);
@@ -285,7 +286,7 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
             sub_exprs[j] = substitute(op_x_names[i], Variable::make(x_parts[i].type(),
                                       pattern_x_names[i]), sub_exprs[j]);
         }
-        debug(0) << "**** expr: " << exprs[i] << " -> " << sub_exprs[i] << "\n";
+        debug(5) << "**** expr: " << exprs[i] << " -> " << sub_exprs[i] << "\n";
     }
 
     for (; lower < upper; lower++) {
@@ -305,93 +306,38 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
             continue;
         }
 
+        map<Expr, Expr, ExprCompare> replacement;
         for (const auto &y_name : pattern_y_names) {
+            debug(5) << "---Finding match for " << y_name << "\n";
             const auto &iter = pattern_match.find(y_name);
             if (iter == pattern_match.end()) {
                 // Didn't find y{index} during pattern matching. Try next pattern.
-                continue;
+                matched = false;
+                break;
             }
             Expr y_part = iter->second;
             int index = atoi(y_name.substr(1, y_name.size()-1).c_str());
             internal_assert(y_name == "y" + std::to_string(index));
 
-            Expr var = Variable::make(y_part.type(), op_y_names[index]);
-            Expr e = substitute(y_part, var, exprs[index]);
-            assoc_ops.ops[index] = {e, patterns[index].identity};
+            debug(5) << "Pattern: " << op_x_names[index] << " -> " << x_parts[index]
+                     << ", " << op_y_names[index] << " -> " << y_part << "\n";
             assoc_ops.x[index] = {op_x_names[index], x_parts[index]};
             assoc_ops.y[index] = {op_y_names[index], y_part};
+            replacement.emplace(y_part, Variable::make(y_part.type(), op_y_names[index]));
+        }
+        if (!matched) {
+            continue;
+        }
+        for (size_t index = 0; index < exprs.size(); ++index) {
+            Expr e = exprs[index];
+            for (const auto &iter : replacement) {
+                e = substitute(iter.first, iter.second, e);
+            }
+            assoc_ops.ops[index] = {e, patterns[index].identity};
         }
         return true;
     }
 
-    return false;
-}
-
-bool find_match_single(const vector<AssociativePair> &table, int index, const string &op_x,
-                       const string &op_y, Expr x_part, Expr e, AssociativeOps &assoc_ops) {
-
-    //TODO(psuriana): Find a tighter bound
-    //auto lower = std::lower_bound(table.begin(), table.end(), AssociativePair(e), compare_expr_depths);
-    //auto upper = std::upper_bound(table.begin(), table.end(), AssociativePair(e), compare_expr_depths);
-
-    auto lower = table.begin();
-    auto upper = table.end();
-
-    // We need to convert the variable names into x{tuple_idx}
-    // to match it with the associative ops table.
-    Expr original = e;
-    e = substitute(op_x, Variable::make(x_part.type(), "x0"), e);
-
-    for (; lower < upper; lower++) {
-        AssociativePair pattern = *lower;
-        map<string, Expr> result;
-        if (expr_match(pattern.op, e, result)) {
-            debug(0) << "Find associative ops for " << e << " -> " << pattern.op
-                     << " with identity: " << pattern.identity
-                     << ", y_part: " << result["y0"] << "\n";
-
-            const Variable *xvar = result["x0"].as<Variable>();
-            if ((xvar == nullptr) || (xvar->name != "x0")) {
-                debug(0) << "...Skipping match since the x_part is different than expected "
-                         << result["x0"] << "\n";
-                continue;
-            }
-
-            Expr y_part = result["y0"];
-            // Make sure that y_part should not depend on x
-            if (expr_uses_var(y_part, "x0")) {
-                debug(0) << "...Skipping match since the y_part depends on x\n";
-                continue;
-            }
-
-            Expr var = Variable::make(y_part.type(), op_y);
-            e = substitute(y_part, var, original);
-            assoc_ops.ops[index] = {e, pattern.identity};
-            assoc_ops.x[index] = {op_x, x_part};
-            assoc_ops.y[index] = {op_y, y_part};
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool lookup_single_i32_associative_ops_table(int index, const string &op_x, const string &op_y,
-                                             Expr x_part, Expr e, AssociativeOps &assoc_ops) {
-    Type t = Int(32);
-    internal_assert(e.type() == t);
-
-    if (e.as<Add>()) {
-        return find_match_single(get_single_i32_ops_table_add(), index, op_x, op_y, x_part, e, assoc_ops);
-    } else if (e.as<Sub>()) {
-        return find_match_single(get_single_i32_ops_table_sub(), index, op_x, op_y, x_part, e, assoc_ops);
-    } else if (e.as<Mul>()) {
-        return find_match_single(get_single_i32_ops_table_mul(), index, op_x, op_y, x_part, e, assoc_ops);
-    } else if (e.as<Min>()) {
-        return find_match_single(get_single_i32_ops_table_min(), index, op_x, op_y, x_part, e, assoc_ops);
-    } else if (e.as<Max>()) {
-        return find_match_single(get_single_i32_ops_table_max(), index, op_x, op_y, x_part, e, assoc_ops);
-    }
     return false;
 }
 
@@ -404,7 +350,7 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
     Expr x = Variable::make(t, op_x);
     Expr y = Variable::make(t, op_y);
 
-    debug(0) << "\n\nProving associativity of:  " << e << "\n";
+    debug(5) << "\n\nProving associativity of:  " << e << "\n";
 
     if (!x_part.defined()) { // op(y)
         // Update with no self-recurrence is associative and the identity can be
@@ -416,7 +362,7 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
     }
 
     bool success = false;
-    if (const Add *a = e.as<Add>()) {
+    /*if (const Add *a = e.as<Add>()) {
         assoc_ops.ops[index] = {x + y, make_const(t, 0)};
         success = visit_associative_binary_op<Add>(index, op_x, op_y, x_part, a->a, a->b, assoc_ops);
     } else if (const Sub *s = e.as<Sub>()) {
@@ -439,22 +385,27 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
         success = visit_associative_binary_op<Or>(index, op_x, op_y, x_part, o->a, o->b, assoc_ops);
     } else if (e.as<Let>()) {
         internal_error << "Let should have been substituted before calling this function\n";
-    }
+    }*/
 
     if (!success && t.is_int() && (t.bits() == 32)) {
         // It's non-trivial binary ops. Try looking at the associative ops table for int32
-        debug(0) << "Look-up associativity table for: " << e << "\n";
-        success = lookup_single_i32_associative_ops_table(index, op_x, op_y, x_part, e, assoc_ops);
+        debug(5) << "Look-up associativity table for: " << e << "\n";
+        AssociativeOps temp(1);
+        success = find_match(get_i32_ops_table({e}), {op_x}, {op_y}, {x_part}, {e}, temp);
+        if (success) {
+            // Copy the result over
+            assoc_ops.ops[index] = temp.ops[0];
+            assoc_ops.x[index] = temp.x[0];
+            assoc_ops.y[index] = temp.y[0];
+        }
     }
-    debug(0) << e << " is associative? " << success << "\n";
+    debug(5) << e << " is associative? " << success << "\n";
     return success;
 }
 
 } // anonymous namespace
 
 
-// TODO(psuriana): This does not handle cross-dependencies among tuple elements.
-// It also is not able to handle associative select() (e.g. argmin/argmax)
 AssociativityProverResult prove_associativity(const string &f, vector<Expr> args,
                                               vector<Expr> exprs) {
     AssociativeOps assoc_ops(exprs.size());
@@ -481,7 +432,7 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
 
     // For a Tuple of exprs to be associative, each element of the Tuple
     // has to be associative.
-    for (size_t idx = 0; idx < exprs.size(); ++idx) {
+    for (int idx = exprs.size()-1; idx >= 0; --idx) {
         string op_x = op_x_names[idx];
         string op_y = op_y_names[idx];
 
@@ -506,7 +457,7 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
     }
 
     if (all_independent || (exprs.size() == 1)) {
-        debug(0) << "All tuple elements are independent. Try proving associativity of "
+        debug(5) << "All tuple elements are independent. Try proving associativity of "
                  << "each element separately.\n";
         // Since there is no x-cross-dependencies, check associativity of each tuple
         // element separately.
@@ -520,10 +471,10 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             }
         }
     } else {
-        debug(0) << "There is cross-dependencies. Need to prove associativity in bulk.\n";
+        debug(5) << "There is cross-dependencies. Need to prove associativity in bulk.\n";
         //TODD(psuriana): currently only works for 32-bit integers
         if (!find_match(get_i32_ops_table(exprs), op_x_names, op_y_names, x_parts, exprs, assoc_ops)) {
-            debug(0) << "Cannot find matching associative ops\n";
+            debug(5) << "Cannot find matching associative ops\n";
             return AssociativityProverResult();
         }
 
@@ -568,6 +519,7 @@ void check_associativity(const string &f, vector<Expr> args, vector<Expr> exprs,
         << "  Expect is_associative: " << is_associative << "\n"
         << "  instead of " << result.is_associative << "\n";
     if (is_associative) {
+        map<string, Expr> replacement;
         for (size_t i = 0; i < assoc_ops.size(); ++i) {
             internal_assert(equal(result.ops()[i].identity, assoc_ops.ops[i].identity))
                 << "Checking associativity: " << print_args(f, args, exprs) << "\n"
@@ -584,15 +536,19 @@ void check_associativity(const string &f, vector<Expr> args, vector<Expr> exprs,
                 << "  Index: " << i << "\n"
                 << "  Expect y: " << assoc_ops.x[i].expr << "\n"
                 << "  instead of " << result.y()[i].expr << "\n";
-            Expr expected_op = assoc_ops.ops[i].op;
-            if (result.y()[i].expr.defined()) {
-                expected_op = substitute(
-                    assoc_ops.y[i].var, Variable::make(result.y()[i].expr.type(), result.y()[i].var), expected_op);
-            }
+
             if (result.x()[i].expr.defined()) {
-                expected_op = substitute(
-                    assoc_ops.x[i].var, Variable::make(result.x()[i].expr.type(), result.x()[i].var), expected_op);
+                replacement.emplace(assoc_ops.x[i].var, Variable::make(result.x()[i].expr.type(), result.x()[i].var));
             }
+            if (result.y()[i].expr.defined()) {
+                replacement.emplace(assoc_ops.y[i].var, Variable::make(result.y()[i].expr.type(), result.y()[i].var));
+            }
+        }
+
+        for (size_t i = 0; i < assoc_ops.size(); ++i) {
+            Expr expected_op = assoc_ops.ops[i].op;
+            expected_op = substitute(replacement, expected_op);
+
             internal_assert(equal(result.ops()[i].op, expected_op))
                 << "Checking associativity: " << print_args(f, args, exprs) << "\n"
                 << "  Index: " << i << "\n"
@@ -613,16 +569,24 @@ void check_associativity(const string &f, vector<Expr> args, vector<Expr> exprs,
 void associativity_test() {
     typedef AssociativeOps::Replacement Replacement;
 
-    Expr x = Variable::make(Int(32), "x");
-    Expr y = Variable::make(Int(32), "y");
-    Expr z = Variable::make(Int(32), "z");
-    Expr rx = Variable::make(Int(32), "rx");
+    Type t = Int(32);
+    Expr x = Variable::make(t, "x");
+    Expr y = Variable::make(t, "y");
+    Expr z = Variable::make(t, "z");
+    Expr rx = Variable::make(t, "rx");
 
-    Expr f_call_0 = Call::make(Int(32), "f", {x}, Call::CallType::Halide, nullptr, 0);
-    Expr f_call_1 = Call::make(Int(32), "f", {x}, Call::CallType::Halide, nullptr, 1);
-    Expr f_call_2 = Call::make(Int(32), "f", {x}, Call::CallType::Halide, nullptr, 2);
-    Expr g_call_0 = Call::make(Int(32), "g", {rx}, Call::CallType::Halide, nullptr, 0);
-    Expr g_call_1 = Call::make(Int(32), "g", {rx}, Call::CallType::Halide, nullptr, 1);
+    vector<Expr> xs(3), ys(3), zs(3);
+    for (size_t i = 0; i < 3; ++i) {
+        xs[i] = Variable::make(t, "x" + std::to_string(i));
+        ys[i] = Variable::make(t, "y" + std::to_string(i));
+        zs[i] = Variable::make(t, "z" + std::to_string(i));
+    }
+
+    Expr f_call_0 = Call::make(t, "f", {x}, Call::CallType::Halide, nullptr, 0);
+    Expr f_call_1 = Call::make(t, "f", {x}, Call::CallType::Halide, nullptr, 1);
+    Expr f_call_2 = Call::make(t, "f", {x}, Call::CallType::Halide, nullptr, 2);
+    Expr g_call_0 = Call::make(t, "g", {rx}, Call::CallType::Halide, nullptr, 0);
+    Expr g_call_1 = Call::make(t, "g", {rx}, Call::CallType::Halide, nullptr, 1);
 
     // f(x) = f(x) - g(rx) -> Is associative given that the merging operator is +
     /*check_associativity("f", {x}, {f_call_0 - g_call_0}, true,
@@ -632,7 +596,7 @@ void associativity_test() {
                         });*/
 
     // f(x) = min(f(x), int16(z))
-    /*check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))}, true,
+    check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))}, true,
                         {{AssociativePair(min(x, y), Int(32).max())},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", y + Cast::make(Int(16), z))}
@@ -654,20 +618,20 @@ void associativity_test() {
 
     // f(x) = Tuple(2, 3, f(x)[2] + z)
     check_associativity("f", {x}, {2, 3, f_call_2 + z}, true,
-                        {{AssociativePair(y, make_const(Int(32), 0)),
-                            AssociativePair(y, make_const(Int(32), 0)),
-                            AssociativePair(x + y, make_const(Int(32), 0))},
-                         {Replacement("", Expr()), Replacement("", Expr()), Replacement("x", f_call_2)},
-                         {Replacement("y", 2), Replacement("y", 3), Replacement("y", z)},
+                        {{AssociativePair(ys[0], make_const(Int(32), 0)),
+                            AssociativePair(ys[1], make_const(Int(32), 0)),
+                            AssociativePair(xs[2] + ys[2], make_const(Int(32), 0))},
+                         {Replacement("", Expr()), Replacement("", Expr()), Replacement("x2", f_call_2)},
+                         {Replacement("y0", 2), Replacement("y1", 3), Replacement("y2", z)},
                         });
 
     // f(x) = Tuple(min(f(x)[0], g(rx)), f(x)[1]*g(x)*2, f(x)[2] + z)
     check_associativity("f", {x}, {min(f_call_0, g_call_0), f_call_1*g_call_0*2, f_call_2 + z}, true,
-                        {{AssociativePair(min(x, y), Int(32).max()),
-                            AssociativePair(x * y, make_const(Int(32), 1)),
-                            AssociativePair(x + y, make_const(Int(32), 0))},
-                         {Replacement("x", f_call_0), Replacement("x", f_call_1), Replacement("x", f_call_2)},
-                         {Replacement("y", g_call_0), Replacement("y", g_call_0*2), Replacement("y", z)},
+                        {{AssociativePair(min(xs[0], ys[0]), Int(32).max()),
+                            AssociativePair(xs[1] * ys[1], make_const(Int(32), 1)),
+                            AssociativePair(xs[2] + ys[2], make_const(Int(32), 0))},
+                         {Replacement("x0", f_call_0), Replacement("x1", f_call_1), Replacement("x2", f_call_2)},
+                         {Replacement("y0", g_call_0), Replacement("y1", g_call_0*2), Replacement("y2", z)},
                         });
 
     // f(x) = max(f(x) + g(rx), g(rx)) -> not associative
@@ -703,14 +667,14 @@ void associativity_test() {
                         {{AssociativePair(((min(max((x*y), y), (x*y)) + y) + x), make_const(Int(32), 0))},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", g_call_0)}
-                        });*/
+                        });
 
     // f(x) = Tuple(f(x)[0]*g(r.x)[0] - f(x)[1]*g(r.x)[1], f(x)[0]*g(r.x)[1] + f(x)[1]*g(r.x)[0])
     check_associativity("f", {x}, {f_call_0*g_call_0 - f_call_1*g_call_1, f_call_0*g_call_1 + f_call_1*g_call_0}, true,
-                        {{AssociativePair(y, make_const(Int(32), 1)),
-                            AssociativePair(y, make_const(Int(32), 0))},
-                         {Replacement("x", f_call_0), Replacement("x", f_call_1)},
-                         {Replacement("y", g_call_0), Replacement("y", g_call_1)},
+                        {{AssociativePair(xs[0]*ys[0] - xs[1]*ys[1], make_const(Int(32), 1)),
+                            AssociativePair(xs[1]*ys[0] + xs[0]*ys[1], make_const(Int(32), 0))},
+                         {Replacement("x0", f_call_0), Replacement("x1", f_call_1)},
+                         {Replacement("y0", g_call_0), Replacement("y1", g_call_1)},
                         });
 
     /*Expr x0 = Variable::make(Int(32), "x0");

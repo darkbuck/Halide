@@ -845,6 +845,58 @@ int subtraction_rfactor_test() {
     return 0;
 }
 
+int complex_multiply_rfactor_test() {
+    Func f("f"), g("g"), ref("ref");
+    Var x("x"), y("y");
+
+    f(x, y) = Tuple(x + y, x - y);
+    f.compute_root();
+
+    Param<int> inner_extent, outer_extent;
+    RDom r(10, inner_extent, 30, outer_extent);
+    inner_extent.set(20);
+    outer_extent.set(40);
+
+    ref(x, y) = Tuple(10, 20);
+    ref(x, y) = Tuple(ref(x, y)[0]*f(r.x, r.y)[0] - ref(x, y)[1]*f(r.x, r.y)[1],
+                      ref(x, y)[0]*f(r.x, r.y)[1] + ref(x, y)[1]*f(r.x, r.y)[0]);
+
+    g(x, y) = Tuple(10, 20);
+    g(x, y) = Tuple(g(x, y)[0]*f(r.x, r.y)[0] - g(x, y)[1]*f(r.x, r.y)[1],
+                    g(x, y)[0]*f(r.x, r.y)[1] + g(x, y)[1]*f(r.x, r.y)[0]);
+
+    RVar rxi("rxi"), rxo("rxo");
+    g.update(0).split(r.x, rxo, rxi, 2);
+
+    Var u("u");
+    Func intm = g.update(0).rfactor(rxo, u);
+    intm.compute_root();
+    intm.update(0).vectorize(u, 2);
+
+    Realization ref_rn = ref.realize(80, 80);
+    Image<int> ref_im1(ref_rn[0]);
+    Image<int> ref_im2(ref_rn[1]);
+    Realization rn = g.realize(80, 80);
+    Image<int> im1(rn[0]);
+    Image<int> im2(rn[1]);
+
+    auto func1 = [&ref_im1](int x, int y, int z) {
+        return ref_im1(x, y);
+    };
+    if (check_image(im1, func1)) {
+        return -1;
+    }
+
+    auto func2 = [&ref_im2](int x, int y, int z) {
+        return ref_im2(x, y);
+    };
+    if (check_image(im2, func2)) {
+        return -1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     printf("Running simple rfactor test\n");
     printf("    checking call graphs...\n");
@@ -951,6 +1003,11 @@ int main(int argc, char **argv) {
     if (subtraction_rfactor_test() != 0) {
         return -1;
     }*/
+
+    printf("Running complex multiply rfactor test\n");
+    if (complex_multiply_rfactor_test() != 0) {
+        return -1;
+    }
 
     printf("Success!\n");
     return 0;
