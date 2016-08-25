@@ -463,6 +463,8 @@ void IRPrinter::visit(const Call *op) {
         }
     }
     stream << ")";
+    //TODO(psuriana): remove this (for debugging)
+    stream << "[" << op->value_index << "]";
 }
 
 void IRPrinter::visit(const Let *op) {
