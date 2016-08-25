@@ -28,14 +28,14 @@ void spawn_thread_helper(void *arg) {
 #define STACK_SIZE 256*1024
 
 struct halide_thread *halide_spawn_thread(void (*f)(void *), void *closure) {
-    static volatile int next_id = 0;
+    static volatile int next_id = 2;  // Should be 1.
 
     spawned_thread *t = (spawned_thread *)malloc(sizeof(spawned_thread));
     t->f = f;
     t->closure = closure;
     t->stack = memalign(128, STACK_SIZE);
-    t->handle.id = __sync_add_and_fetch(&next_id, 1);
-    thread_create(f, t->stack, t->handle.id, closure);
+    t->handle.id = __sync_fetch_and_add(&next_id, 1);
+    thread_create(spawn_thread_helper, t->stack, t->handle.id, t);
 
     return (halide_thread *)t;
 }
@@ -48,7 +48,7 @@ void halide_join_thread(struct halide_thread *thread_arg) {
 }
 
 void halide_mutex_init(halide_mutex *mutex) {
-    memset(mutex, 0, sizeof(halide_mutex));
+    *(int *)mutex = 0;
 }
 
 void halide_mutex_lock(halide_mutex *mutex) {
@@ -60,11 +60,10 @@ void halide_mutex_unlock(halide_mutex *mutex) {
 }
 
 void halide_mutex_destroy(halide_mutex *mutex) {
-    memset(mutex, 0, sizeof(halide_mutex));
 }
 
 struct halide_cond {
-    uint64_t _private2[8];
+    uint64_t _private[8];
 };
 
 void halide_cond_init(struct halide_cond *cond) {
@@ -77,6 +76,8 @@ void halide_cond_destroy(struct halide_cond *cond) {
 
 void halide_cond_broadcast(struct halide_cond *cond) {
 }
+
+extern "C" int junk = 0;
 
 void halide_cond_wait(struct halide_cond *cond, struct halide_mutex *mutex) {
     halide_mutex_unlock(mutex);
