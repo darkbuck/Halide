@@ -138,7 +138,7 @@ public:
 
     bool is_solvable = true;
     set<int> x_dependencies; // Contains dependencies on self-reference at different tuple indices
-    Expr x_part;
+    Expr x_part; // Undefined if there is no self-reference at value_index
 };
 
 template<typename T>
@@ -161,16 +161,27 @@ bool visit_associative_binary_op(int index, const string &op_x, const string &op
 
 template <typename T>
 std::ostream &operator<<(std::ostream &out, const std::vector<T> &v) {
-    if (!v.empty()) {
-        out << '[';
-        for (size_t i = 0; i < v.size(); ++i) {
-            out << v[i];
-            if (i < v.size() - 1) {
-                out << ", ";
-            }
+    out << '[';
+    for (size_t i = 0; i < v.size(); ++i) {
+        out << v[i];
+        if (i < v.size() - 1) {
+            out << ", ";
         }
-        out << "]";
     }
+    out << "]";
+    return out;
+}
+
+template <typename T>
+std::ostream &operator<<(std::ostream &out, const std::set<T> &v) {
+    out << '[';
+    for (auto iter = v.begin(); iter != v.end(); ++iter) {
+        out << (*iter);
+        if (iter != (--v.end())) {
+            out << ", ";
+        }
+    }
+    out << "]";
     return out;
 }
 
@@ -421,6 +432,41 @@ Expr find_conflict(Expr e, const string &v) {
     return f.expr;
 }
 
+// Given dependencies of each tuple element, compute the set of subgraphs:
+// all vertices that are reachable from a given vertex. If a subgraph is fully
+// contained in another subgraph, remove it from the final output.
+vector<set<int>> compute_subgraphs(vector<set<int>> dependencies) {
+    vector<set<int>> subgraphs(dependencies.size());
+    for (size_t i = 0; i < dependencies.size(); ++i) {
+        // Check if the current subgraph is a subset of another
+        const auto &current = dependencies[i];
+        if (current.empty()) {
+            continue;
+        }
+        bool should_remove = false;
+        for (size_t j = 0; j < dependencies.size(); ++j) {
+            const auto &other = dependencies[j];
+            if ((i == j) || (current.size() > other.size()) || (j < i && subgraphs[i].empty())) {
+                continue;
+            }
+            vector<int> diff;
+            // Compute the vertices in the current set that are not contained in the other
+            std::set_difference(current.begin(), current.end(), other.begin(), other.end(),
+                                std::inserter(diff, diff.begin()));
+            if (diff.empty()) {
+                // 'current' is fully contained in 'other'
+                should_remove = true;
+                break;
+            }
+        }
+        if (!should_remove) {
+            subgraphs[i] = current;
+        }
+    }
+    return subgraphs;
+}
+
+
 } // anonymous namespace
 
 
@@ -478,6 +524,7 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
     vector<set<int>> dependencies(exprs.size());
     vector<Expr> x_parts(exprs.size());
     bool all_independent = true;
+    bool all_i32 = true;
 
     // For a Tuple of exprs to be associative, each element of the Tuple
     // has to be associative.
@@ -485,6 +532,9 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
         string op_x = op_x_names[idx];
         string op_y = op_y_names[idx];
 
+        if (!exprs[idx].type().is_int() || exprs[idx].type().bits() != 32) {
+            all_i32 = false;
+        }
         exprs[idx] = simplify(exprs[idx]);
 
         // Replace any self-reference to Func 'f' with a Var
@@ -493,11 +543,15 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
         if (!csr.is_solvable) {
             return AssociativityProverResult();
         }
-        dependencies[idx] = csr.x_dependencies;
         if (!csr.x_dependencies.empty()) {
             all_independent = false;
         }
         x_parts[idx] = csr.x_part;
+        dependencies[idx] = csr.x_dependencies;
+        if (csr.x_part.defined()) {
+            // Dependency on itself
+            dependencies[idx].insert(idx);
+        }
 
         exprs[idx] = common_subexpression_elimination(exprs[idx]);
         exprs[idx] = simplify(exprs[idx]);
@@ -521,7 +575,10 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
         }
     } else {
         debug(5) << "There is cross-dependencies. Need to prove associativity in bulk.\n";
-        //TODD(psuriana): currently only works for 32-bit integers
+        //TODO(psuriana): currently only works for 32-bit integers and maximum of 2 tuple elements
+        if (exprs.size() > 2 || !all_i32) {
+            return AssociativityProverResult();
+        }
         if (!find_match(get_i32_ops_table(exprs), op_x_names, op_y_names, x_parts, exprs, assoc_ops)) {
             debug(5) << "Cannot find matching associative ops\n";
             return AssociativityProverResult();
@@ -746,6 +803,25 @@ void associativity_test() {
                          {Replacement("x", f_call_0)},
                          {Replacement("y", xs[0])}
                         });
+
+    {
+        vector<set<int>> dependencies(4);
+        dependencies[0] = {0};
+        dependencies[1] = {1};
+        dependencies[2] = {0, 1, 2};
+        dependencies[3] = {0, 1, 3};
+        vector<set<int>> subgraphs = compute_subgraphs(dependencies);
+        std::cout << "Computing subgraphs of: " << dependencies << "\n";
+        std::cout << "Result: " << subgraphs << "\n";
+    }
+    {
+        vector<set<int>> dependencies(2);
+        dependencies[0] = {0, 1};
+        dependencies[1] = {1, 0};
+        vector<set<int>> subgraphs = compute_subgraphs(dependencies);
+        std::cout << "Computing subgraphs of: " << dependencies << "\n";
+        std::cout << "Result: " << subgraphs << "\n";
+    }
 
     std::cout << "Associativity test passed" << std::endl;
 }

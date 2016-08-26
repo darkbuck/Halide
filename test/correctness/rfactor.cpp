@@ -950,6 +950,12 @@ int argmin_rfactor_test() {
 }
 
 int main(int argc, char **argv) {
+    /*printf("Running subtraction rfactor test\n");
+    printf("    checking output img correctness...\n");
+    if (subtraction_rfactor_test() != 0) {
+        return -1;
+    }*/
+
     printf("Running simple rfactor test\n");
     printf("    checking call graphs...\n");
     if (simple_rfactor_test(true) != 0) {
@@ -1049,12 +1055,6 @@ int main(int argc, char **argv) {
     if (tuple_specialize_rdom_predicate_rfactor_test(false) != 0) {
         return -1;
     }
-
-    /*printf("Running subtraction rfactor test\n");
-    printf("    checking output img correctness...\n");
-    if (subtraction_rfactor_test() != 0) {
-        return -1;
-    }*/
 
     printf("Running complex multiply rfactor test\n");
     if (complex_multiply_rfactor_test() != 0) {
