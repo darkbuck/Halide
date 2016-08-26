@@ -6,6 +6,7 @@
  */
 
 #include "IROperator.h"
+#include "IREquality.h"
 
 #include <iostream>
 #include <vector>
@@ -21,6 +22,13 @@ struct AssociativePair {
 	AssociativePair() {}
 	AssociativePair(Expr op) : op(op) {}
 	AssociativePair(Expr op, Expr id) : op(op), identity(id) {}
+
+	bool operator==(const AssociativePair &other) const {
+      	return equal(op, other.op) && equal(identity, other.identity);
+    }
+    bool operator!=(const AssociativePair &other) const {
+        return !(*this == other);
+    }
 };
 
 const std::vector<std::vector<AssociativePair>> &get_i32_ops_table(const std::vector<Expr> &exprs);

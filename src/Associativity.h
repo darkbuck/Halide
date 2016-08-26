@@ -8,6 +8,7 @@
  */
 
 #include "IR.h"
+#include "IREquality.h"
 #include "AssociativeOpsTable.h"
 
 #include <functional>
@@ -49,6 +50,13 @@ struct AssociativeOps {
 
         Replacement() {}
         Replacement(const std::string &var, Expr expr) : var(var), expr(expr) {}
+
+        bool operator==(const Replacement &other) const {
+            return (var == other.var) && equal(expr, other.expr);
+        }
+        bool operator!=(const Replacement &other) const {
+            return !(*this == other);
+        }
     };
 
     // List of pairs of binary associative op and its identity
