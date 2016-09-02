@@ -143,23 +143,27 @@ int parallel_dot_product_rfactor_test() {
 }
 
 int argmin_rfactor_test() {
-    const int size = 1024;
+    const int size = 32;
 
     Func g("g"), ref("ref");
 
     ImageParam input(Int(32), 2);
 
-    RDom r(0, size, 0, size);
+    RDom r(0, size, 0, size, 0, size, 0, size);
 
-    ref() = Tuple(10, 20, 30);
+    ref() = Tuple(1, 2, 3, 4, 5);
     ref() = Tuple(min(ref()[0], input(r.x, r.y)),
                   select(ref()[0] < input(r.x, r.y), ref()[1], r.x),
-                  select(ref()[0] < input(r.x, r.y), ref()[2], r.y));
+                  select(ref()[0] < input(r.x, r.y), ref()[2], r.y),
+                  select(ref()[0] < input(r.x, r.y), ref()[3], r.z),
+                  select(ref()[0] < input(r.x, r.y), ref()[4], r.w));
 
-    g() = Tuple(10, 20, 30);
+    g() = Tuple(1, 2, 3, 4, 5);
     g() = Tuple(min(g()[0], input(r.x, r.y)),
                 select(g()[0] < input(r.x, r.y), g()[1], r.x),
-                select(g()[0] < input(r.x, r.y), g()[2], r.y));
+                select(g()[0] < input(r.x, r.y), g()[2], r.y),
+                select(g()[0] < input(r.x, r.y), g()[3], r.z),
+                select(g()[0] < input(r.x, r.y), g()[4], r.w));
 
     RVar rxi("rxi"), rxo("rxo");
     g.update(0).split(r.x, rxo, rxi, 128);
@@ -178,27 +182,31 @@ int argmin_rfactor_test() {
 
     const int iterations = 50;
 
-    Image<int32_t> vec(size, size);
-    Image<int32_t> ref_output_0(0), ref_output_1(0), ref_output_2(0);
-    Image<int32_t> output_0(0), output_1(0), output_2(0);
+    Image<int32_t> vec(size, size, size, size);
+    Image<int32_t> ref_output_0(0), ref_output_1(0), ref_output_2(0), ref_output_3(0), ref_output_4(0);
+    Image<int32_t> output_0(0), output_1(0), output_2(0), output_3(0), output_4(0);
 
     // init randomly
-    for (int iy = 0; iy < size; iy++) {
-        for (int ix = 0; ix < size; ix++) {
-            vec(ix, iy) = (rand() % size);
+    for (int iw = 0; iw < size; iw++) {
+        for (int iz = 0; iz < size; iz++) {
+            for (int iy = 0; iy < size; iy++) {
+                for (int ix = 0; ix < size; ix++) {
+                    vec(ix, iy, iz, iw) = (rand() % size);
+                }
+            }
         }
     }
 
     input.set(vec);
 
     double t_ref = benchmark(1, iterations, [&]() {
-        ref.realize(Realization(ref_output_0, ref_output_1, ref_output_2));
+        ref.realize(Realization(ref_output_0, ref_output_1, ref_output_2, ref_output_3, ref_output_4));
     });
     double t = benchmark(1, iterations, [&]() {
-        g.realize(Realization(output_0, output_1, output_2));
+        g.realize(Realization(output_0, output_1, output_2, output_3, output_4));
     });
 
-    float gbits = 32 * size * size/ 1e6; // bits per seconds
+    float gbits = 32 * size * size * size * size/ 1e6; // bits per seconds
 
     printf("Argmin ref: %fms, %f Gbps\n", t_ref * 1e3, (gbits / t_ref));
     printf("Argmin with rfactor: %fms, %f Gbps\n\n", t * 1e3, (gbits / t));
@@ -215,11 +223,11 @@ int complex_multiply_rfactor_test() {
 
     RDom r(0, size);
 
-    ref() = Tuple(10, 20);
+    ref() = Tuple(2, 3);
     ref() = Tuple(ref()[0]*input0(r.x) - ref()[1]*input1(r.x),
                   ref()[0]*input1(r.x) + ref()[1]*input0(r.x));
 
-    g() = Tuple(10, 20);
+    g() = Tuple(2, 3);
     g() = Tuple(g()[0]*input0(r.x) - g()[1]*input1(r.x),
                 g()[0]*input1(r.x) + g()[1]*input0(r.x));
 
@@ -227,10 +235,10 @@ int complex_multiply_rfactor_test() {
     g.update(0).split(r.x, rxo, rxi, 128);
 
     Var u("u");
-    Func intm1 = g.update(0).rfactor(rxo, u);
+    Func intm = g.update(0).rfactor(rxo, u);
     RVar rxio("rxio"), rxii("rxii");
-    intm1.compute_root();
-    intm1.update(0).parallel(u);
+    intm.compute_root();
+    intm.update(0).parallel(u);
 
     const int iterations = 50;
 
@@ -312,10 +320,10 @@ int histogram_rfactor_test() {
 
 int main(int argc, char **argv) {
     //parallel_dot_product_rfactor_test();
-    //argmin_rfactor_test();
+    argmin_rfactor_test();
     //complex_multiply_rfactor_test();
     //histogram_rfactor_test();
-    matrix_multiply();
+    //matrix_multiply();
 
     printf("Success!\n");
     return 0;
