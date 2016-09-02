@@ -899,9 +899,9 @@ int complex_multiply_rfactor_test() {
 
 int argmin_rfactor_test() {
     Func f("f"), g("g"), ref("ref");
-    Var x("x"), y("y");
+    Var x("x"), y("y"), z("z");
 
-    f(x, y) = Tuple(x + y, x - y);
+    f(x, y) = x + y;
     f.compute_root();
 
     Param<int> inner_extent, outer_extent;
@@ -909,13 +909,15 @@ int argmin_rfactor_test() {
     inner_extent.set(20);
     outer_extent.set(40);
 
-    ref(x, y) = Tuple(10, 20);
-    ref(x, y) = Tuple(min(ref(x, y)[0], f(r.x, r.y)[0]),
-                      select(ref(x, y)[0] < f(r.x, r.y)[0], ref(x, y)[1], r.x));
+    ref() = Tuple(10, 20, 30);
+    ref() = Tuple(min(ref()[0], f(r.x, r.y)),
+                  select(ref()[0] < f(r.x, r.y), ref()[1], r.x),
+                  select(ref()[0] < f(r.x, r.y), ref()[2], r.y));
 
-    g(x, y) = Tuple(10, 20);
-    g(x, y) = Tuple(min(g(x, y)[0], f(r.x, r.y)[0]),
-                    select(g(x, y)[0] < f(r.x, r.y)[0], g(x, y)[1], r.x));
+    g() = Tuple(10, 20, 30);
+    g() = Tuple(min(g()[0], f(r.x, r.y)),
+                select(g()[0] < f(r.x, r.y), g()[1], r.x),
+                select(g()[0] < f(r.x, r.y), g()[2], r.y));
 
     RVar rxi("rxi"), rxo("rxo");
     g.update(0).split(r.x, rxo, rxi, 2);
@@ -925,12 +927,14 @@ int argmin_rfactor_test() {
     intm.compute_root();
     intm.update(0).vectorize(u, 2);
 
-    Realization ref_rn = ref.realize(80, 80);
+    Realization ref_rn = ref.realize();
     Image<int> ref_im1(ref_rn[0]);
     Image<int> ref_im2(ref_rn[1]);
-    Realization rn = g.realize(80, 80);
+    Image<int> ref_im3(ref_rn[2]);
+    Realization rn = g.realize();
     Image<int> im1(rn[0]);
     Image<int> im2(rn[1]);
+    Image<int> im3(rn[2]);
 
     auto func1 = [&ref_im1](int x, int y, int z) {
         return ref_im1(x, y);
@@ -946,6 +950,13 @@ int argmin_rfactor_test() {
         return -1;
     }
 
+    auto func3 = [&ref_im3](int x, int y, int z) {
+        return ref_im3(x, y);
+    };
+    if (check_image(im3, func3)) {
+        return -1;
+    }
+
     return 0;
 }
 
@@ -956,7 +967,7 @@ int main(int argc, char **argv) {
         return -1;
     }*/
 
-    printf("Running simple rfactor test\n");
+    /*printf("Running simple rfactor test\n");
     printf("    checking call graphs...\n");
     if (simple_rfactor_test(true) != 0) {
         return -1;
@@ -1059,10 +1070,20 @@ int main(int argc, char **argv) {
     printf("Running complex multiply rfactor test\n");
     if (complex_multiply_rfactor_test() != 0) {
         return -1;
-    }
+    }*/
 
     printf("Running argmin rfactor test\n");
     if (argmin_rfactor_test() != 0) {
+        return -1;
+    }
+
+    printf("Running parallel dot product rfactor test\n");
+    printf("    checking call graphs...\n");
+    if (parallel_dot_product_rfactor_test(true) != 0) {
+        return -1;
+    }
+    printf("    checking output img correctness...\n");
+    if (parallel_dot_product_rfactor_test(false) != 0) {
         return -1;
     }
 
