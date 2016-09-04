@@ -4,6 +4,7 @@
 #include <memory>
 
 using namespace Halide;
+using namespace Halide::Internal;
 
 int matrix_multiply() {
     const int matrix_size = 992, block_size = 32;
@@ -66,18 +67,16 @@ int matrix_multiply() {
 
     float gflops = 2.0f * matrix_size * matrix_size * matrix_size / 1e6;
 
-    printf("Matrix-multipy ref: %fms, %f GFLOP/s\n\n", t_ref * 1e3, (gflops / t_ref));
-    printf("Matrix-multipy: %fms, %f GFLOP/s\n\n", t * 1e3, (gflops / t));
+    printf("Matrix-multipy ref: %fms, %f GFLOP/s\n", t_ref * 1e3, (gflops / t_ref));
+    printf("Matrix-multipy: %fms, %f GFLOP/s\n", t * 1e3, (gflops / t));
+    double improve = t_ref / t;
+    printf("Improvement: %f\n\n", improve);
 
-    printf("Success!\n");
     return 0;
 }
 
 int parallel_dot_product_rfactor_test() {
     const int size = 1024;
-
-    Func f("f"), g("g");
-    Var x("x");
 
     ImageParam A(Int(32), 1);
     ImageParam B(Int(32), 1);
@@ -137,7 +136,9 @@ int parallel_dot_product_rfactor_test() {
     float gbits = 32 * size / 1e6; // bits per seconds
 
     printf("Dot-product ref: %fms, %f Gbps\n", t_ref * 1e3, (gbits / t_ref));
-    printf("Dot-product with rfactor: %fms, %f Gbps\n\n", t * 1e3, (gbits / t));
+    printf("Dot-product with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
+    double improve = t_ref / t;
+    printf("Improvement: %f\n\n", improve);
 
     return 0;
 }
@@ -145,7 +146,7 @@ int parallel_dot_product_rfactor_test() {
 int argmin_rfactor_test() {
     const int size = 32;
 
-    Func g("g"), ref("ref");
+    Func amin("amin"), ref("ref");
 
     ImageParam input(Int(32), 2);
 
@@ -158,18 +159,18 @@ int argmin_rfactor_test() {
                   select(ref()[0] < input(r.x, r.y), ref()[3], r.z),
                   select(ref()[0] < input(r.x, r.y), ref()[4], r.w));
 
-    g() = Tuple(1, 2, 3, 4, 5);
-    g() = Tuple(min(g()[0], input(r.x, r.y)),
-                select(g()[0] < input(r.x, r.y), g()[1], r.x),
-                select(g()[0] < input(r.x, r.y), g()[2], r.y),
-                select(g()[0] < input(r.x, r.y), g()[3], r.z),
-                select(g()[0] < input(r.x, r.y), g()[4], r.w));
+    amin() = Tuple(1, 2, 3, 4, 5);
+    amin() = Tuple(min(amin()[0], input(r.x, r.y)),
+                   select(amin()[0] < input(r.x, r.y), amin()[1], r.x),
+                   select(amin()[0] < input(r.x, r.y), amin()[2], r.y),
+                   select(amin()[0] < input(r.x, r.y), amin()[3], r.z),
+                   select(amin()[0] < input(r.x, r.y), amin()[4], r.w));
 
     RVar rxi("rxi"), rxo("rxo");
-    g.update(0).split(r.x, rxo, rxi, 128);
+    amin.update(0).split(r.x, rxo, rxi, 128);
 
     Var u("u");
-    Func intm1 = g.update(0).rfactor(rxo, u);
+    Func intm1 = amin.update(0).rfactor(rxo, u);
     RVar rxio("rxio"), rxii("rxii");
     intm1.compute_root();
     intm1.update(0).parallel(u);
@@ -183,8 +184,6 @@ int argmin_rfactor_test() {
     const int iterations = 50;
 
     Image<int32_t> vec(size, size, size, size);
-    Image<int32_t> ref_output_0(0), ref_output_1(0), ref_output_2(0), ref_output_3(0), ref_output_4(0);
-    Image<int32_t> output_0(0), output_1(0), output_2(0), output_3(0), output_4(0);
 
     // init randomly
     for (int iw = 0; iw < size; iw++) {
@@ -199,24 +198,30 @@ int argmin_rfactor_test() {
 
     input.set(vec);
 
+    ref.realize();
+    amin.realize();
+
     double t_ref = benchmark(1, iterations, [&]() {
-        ref.realize(Realization(ref_output_0, ref_output_1, ref_output_2, ref_output_3, ref_output_4));
+        ref.realize();
     });
     double t = benchmark(1, iterations, [&]() {
-        g.realize(Realization(output_0, output_1, output_2, output_3, output_4));
+        amin.realize();
     });
 
-    float gbits = 32 * size * size * size * size/ 1e6; // bits per seconds
+    float gbits = 32 * size / 1e6; // bits per seconds
 
     printf("Argmin ref: %fms, %f Gbps\n", t_ref * 1e3, (gbits / t_ref));
-    printf("Argmin with rfactor: %fms, %f Gbps\n\n", t * 1e3, (gbits / t));
+    printf("Argmin with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
+    double improve = t_ref / t;
+    printf("Improvement: %f\n\n", improve);
+
     return 0;
 }
 
 int complex_multiply_rfactor_test() {
     const int size = 1024;
 
-    Func g("g"), ref("ref");
+    Func mult("mult"), ref("ref");
 
     ImageParam input0(Int(32), 1);
     ImageParam input1(Int(32), 1);
@@ -227,15 +232,15 @@ int complex_multiply_rfactor_test() {
     ref() = Tuple(ref()[0]*input0(r.x) - ref()[1]*input1(r.x),
                   ref()[0]*input1(r.x) + ref()[1]*input0(r.x));
 
-    g() = Tuple(2, 3);
-    g() = Tuple(g()[0]*input0(r.x) - g()[1]*input1(r.x),
-                g()[0]*input1(r.x) + g()[1]*input0(r.x));
+    mult() = Tuple(2, 3);
+    mult() = Tuple(mult()[0]*input0(r.x) - mult()[1]*input1(r.x),
+                   mult()[0]*input1(r.x) + mult()[1]*input0(r.x));
 
     RVar rxi("rxi"), rxo("rxo");
-    g.update(0).split(r.x, rxo, rxi, 128);
+    mult.update(0).split(r.x, rxo, rxi, 128);
 
     Var u("u");
-    Func intm = g.update(0).rfactor(rxo, u);
+    Func intm = mult.update(0).rfactor(rxo, u);
     RVar rxio("rxio"), rxii("rxii");
     intm.compute_root();
     intm.update(0).parallel(u);
@@ -243,8 +248,6 @@ int complex_multiply_rfactor_test() {
     const int iterations = 50;
 
     Image<int32_t> vec0(size), vec1(size);
-    Image<int32_t> ref_output_0(0), ref_output_1(0);
-    Image<int32_t> output_0(0), output_1(0);
 
     // init randomly
     for (int ix = 0; ix < size; ix++) {
@@ -255,18 +258,22 @@ int complex_multiply_rfactor_test() {
     input0.set(vec0);
     input1.set(vec1);
 
+    ref.realize();
+    mult.realize();
+
     double t_ref = benchmark(1, iterations, [&]() {
-        ref.realize(Realization(ref_output_0, ref_output_1));
+        ref.realize();
     });
     double t = benchmark(1, iterations, [&]() {
-        g.realize(Realization(output_0, output_1));
+        mult.realize();
     });
 
     float gbits = 32 * size / 1e6; // bits per seconds
 
     printf("Complex-multiply ref: %fms, %f Gbps\n", t_ref * 1e3, (gbits / t_ref));
-    printf("Complex-multiply with rfactor: %fms, %f Gbps\n\n", t * 1e3, (gbits / t));
-    return 0;
+    printf("Complex-multiply with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
+    double improve = t_ref / t;
+    printf("Improvement: %f\n\n", improve);
 
     return 0;
 }
@@ -300,29 +307,94 @@ int histogram_rfactor_test() {
 
     const int iterations = 50;
 
-    Image<int32_t> ref_output(256);
-    Image<int32_t> output(256);
+    ref.realize(256);
+    hist.realize(256);
 
     double t_ref = benchmark(1, iterations, [&]() {
-        ref.realize(ref_output);
+        ref.realize(256);
     });
     double t = benchmark(1, iterations, [&]() {
-        hist.realize(output);
+        hist.realize(256);
     });
 
     float gbits = 32 * W * H / 1e6; // bits per seconds
 
     printf("Histogram ref: %fms, %f Gbps\n", t_ref * 1e3, (gbits / t_ref));
-    printf("Histogram with rfactor: %fms, %f Gbps\n\n", t * 1e3, (gbits / t));
+    printf("Histogram with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
+    double improve = t_ref / t;
+    printf("Improvement: %f\n\n", improve);
+
+    return 0;
+}
+
+int saturating_add_test() {
+    const int size = 1024;
+
+    ImageParam input(UInt(8), 1);
+
+    RDom r(0, size);
+
+    // Reference implementation
+    // Saturating add: clamped to 255
+    // cast<uint8_t>(min(cast<uint16_t>(x) + cast<uint16_t>(y), 255));
+    Func add_ref("add_ref");
+    add_ref() = make_const(UInt(8), 0);
+    add_ref() = cast<uint8_t>(min(cast<uint16_t>(add_ref()) + cast<uint16_t>(input(r.x)), 255));
+
+    // Split into outer dim "rxo" and inner dim "rxi"
+    // Parallelize across "rxo"
+    // Split the inner dimension "rxi" into "rxii" and "rxio" and vectorize across the inner dimension
+
+    Func add("add");
+    add() = make_const(UInt(8), 0);
+    add() = cast<uint8_t>(min(cast<uint16_t>(add()) + cast<uint16_t>(input(r.x)), 255));
+    RVar rxo("rxo"), rxi("rxi");
+    add.update(0).split(r.x, rxo, rxi, 128);
+
+    /*Var u("u");
+    Func intm = add.update(0).rfactor(rxo, u);
+    RVar rxio("rxio"), rxii("rxii");
+    intm.compute_root();
+    intm.update(0).parallel(u);
+    intm.update(0).split(rxi, rxio, rxii, 8);*/
+
+    const int iterations = 50;
+
+    Image<uint8_t> vec(size);
+
+    // init randomly
+    for (int ix = 0; ix < size; ix++) {
+        vec(ix) = (rand() % size);
+    }
+
+    input.set(vec);
+
+    add_ref.realize();
+    add.realize();
+
+    double t_ref = benchmark(1, iterations, [&]() {
+        add_ref.realize();
+    });
+    double t = benchmark(1, iterations, [&]() {
+        add.realize();
+    });
+
+    float gbits = 32 * size / 1e6; // bits per seconds
+
+    printf("Saturating addition ref: %fms, %f Gbps\n", t_ref * 1e3, (gbits / t_ref));
+    printf("Saturating addition with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
+    double improve = t_ref / t;
+    printf("Improvement: %f\n\n", improve);
 
     return 0;
 }
 
 int main(int argc, char **argv) {
-    //parallel_dot_product_rfactor_test();
-    argmin_rfactor_test();
-    //complex_multiply_rfactor_test();
     //histogram_rfactor_test();
+    //argmin_rfactor_test();
+    //complex_multiply_rfactor_test();
+    saturating_add_test();
+    //parallel_dot_product_rfactor_test();
     //matrix_multiply();
 
     printf("Success!\n");

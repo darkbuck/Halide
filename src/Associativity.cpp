@@ -837,9 +837,9 @@ void associativity_test() {
     // f(x) = f(x) -> associative but doesn't really make any sense, so we'll treat it as non-associative
     check_associativity("f", {x}, {f_call_0}, false, AssociativeOps());
 
-    // f(x) = max(max(min(f(x), g(rx) + 2), f(x)), g(rx) + 2)
+    // f(x) = max(max(min(f(x), g(rx) + 2), f(x)), g(rx) + 2) -> can be simplify into max(f(x), g(rx) + 2)
     check_associativity("f", {x}, {max(max(min(f_call_0, g_call_0 + 2), f_call_0), g_call_0 + 2)}, true,
-                        {{AssociativePair(max(max(min(x, y), x), y), t.min())},
+                        {{AssociativePair(max(x, y), t.min())},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", g_call_0 + 2)}
                         });
