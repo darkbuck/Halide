@@ -216,7 +216,7 @@ set(HEADER_FILES
   BoundaryConditions.h
   Bounds.h
   BoundsInference.h
-  Buffer.h
+  BufferPtr.h
   CSE.h
   Closure.h
   CodeGen_ARM.h
@@ -268,7 +268,6 @@ set(HEADER_FILES
   IROperator.h
   IRPrinter.h
   IRVisitor.h
-  Image.h
   ImageParam.h
   Interval.h
   InjectHostDevBufferCopies.h
@@ -336,6 +335,7 @@ set(HEADER_FILES
   VectorizeLoops.h
   WrapCalls.h
   runtime/HalideRuntime.h
+  runtime/HalideBuffer.h
 )
 
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
@@ -354,6 +354,7 @@ configure_file(runtime/HalideRuntimeOpenGL.h "${CMAKE_BINARY_DIR}/include" COPYO
 configure_file(runtime/HalideRuntimeOpenGLCompute.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
 configure_file(runtime/HalideRuntimeQurt.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
 configure_file(runtime/HalideRuntimeRenderscript.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
+configure_file(runtime/HalideBuffer.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
 
 
 set(BITWRITER_FILES
@@ -372,7 +373,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   BoundaryConditions.cpp
   Bounds.cpp
   BoundsInference.cpp
-  Buffer.cpp
+  BufferPtr.cpp
   Closure.cpp
   CodeGen_ARM.cpp
   CodeGen_C.cpp
@@ -422,7 +423,6 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   IROperator.cpp
   IRPrinter.cpp
   IRVisitor.cpp
-  Image.cpp
   ImageParam.cpp
   Interval.cpp
   InjectHostDevBufferCopies.cpp
@@ -590,7 +590,13 @@ set(LLVM_CONFIG ${LLVM_BIN}/llvm-config)
 if(MSVC)
   file(GLOB LIBS "${LLVM_LIB}/LLVM*.lib")
 else()
-  execute_process(COMMAND "${LLVM_CONFIG}" --libfiles ${LLVM_COMPONENTS} OUTPUT_VARIABLE LIBS_UNSTRIPPED)
+  execute_process(COMMAND "${LLVM_CONFIG}" --libfiles ${LLVM_COMPONENTS} 
+                  RESULT_VARIABLE LLVM_CONFIG_RESULT
+                  OUTPUT_VARIABLE LIBS_UNSTRIPPED
+                  ERROR_VARIABLE LLVM_CONFIG_ERROR)
+  if (${LLVM_CONFIG_RESULT})
+    message(FATAL_ERROR "llvm-config failed: ${LLVM_CONFIG_ERROR}")
+  endif()
   string(STRIP "${LIBS_UNSTRIPPED}" LIBS_SPACES)
   string(REPLACE " " ";" LIBS "${LIBS_SPACES}")
 endif()

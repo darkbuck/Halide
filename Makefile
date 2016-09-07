@@ -276,7 +276,7 @@ SOURCE_FILES = \
   BoundaryConditions.cpp \
   Bounds.cpp \
   BoundsInference.cpp \
-  Buffer.cpp \
+  BufferPtr.cpp \
   Closure.cpp \
   CodeGen_ARM.cpp \
   CodeGen_C.cpp \
@@ -318,7 +318,6 @@ SOURCE_FILES = \
   Generator.cpp \
   HexagonOffload.cpp \
   HexagonOptimize.cpp \
-  Image.cpp \
   ImageParam.cpp \
   Interval.cpp \
   InjectHostDevBufferCopies.cpp \
@@ -405,7 +404,7 @@ HEADER_FILES = \
   BoundaryConditions.h \
   Bounds.h \
   BoundsInference.h \
-  Buffer.h \
+  BufferPtr.h \
   Closure.h \
   CodeGen_ARM.h \
   CodeGen_C.h \
@@ -450,7 +449,7 @@ HEADER_FILES = \
   HexagonOffload.h \
   HexagonOptimize.h \
   runtime/HalideRuntime.h \
-  Image.h \
+  runtime/HalideBuffer.h \
   ImageParam.h \
   Interval.h \
   InjectHostDevBufferCopies.h \
@@ -623,7 +622,8 @@ RUNTIME_EXPORTED_INCLUDES = $(INCLUDE_DIR)/HalideRuntime.h \
                             $(INCLUDE_DIR)/HalideRuntimeOpenGLCompute.h \
                             $(INCLUDE_DIR)/HalideRuntimeMetal.h	\
                             $(INCLUDE_DIR)/HalideRuntimeQurt.h \
-                            $(INCLUDE_DIR)/HalideRuntimeRenderscript.h
+                            $(INCLUDE_DIR)/HalideRuntimeRenderscript.h \
+                            $(INCLUDE_DIR)/HalideBuffer.h
 
 INITIAL_MODULES = $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_32.o) \
                   $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_64.o) \
@@ -683,6 +683,11 @@ $(INCLUDE_DIR)/Halide.h: $(HEADERS) $(SRC_DIR)/HalideFooter.h $(BIN_DIR)/build_h
 	$(BIN_DIR)/build_halide_h $(HEADERS) $(SRC_DIR)/HalideFooter.h > $(INCLUDE_DIR)/Halide.h
 
 $(INCLUDE_DIR)/HalideRuntime%: $(SRC_DIR)/runtime/HalideRuntime%
+	echo Copying $<
+	mkdir -p $(INCLUDE_DIR)
+	cp $< $(INCLUDE_DIR)/
+
+$(INCLUDE_DIR)/HalideBuffer.h: $(SRC_DIR)/runtime/HalideBuffer.h
 	echo Copying $<
 	mkdir -p $(INCLUDE_DIR)
 	cp $< $(INCLUDE_DIR)/
@@ -1053,7 +1058,7 @@ performance_%: $(BIN_DIR)/performance_%
 
 error_%: $(BIN_DIR)/error_%
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$< 2>&1 | egrep --q "terminating with uncaught exception|^terminate called|^Error"
+	cd $(TMP_DIR) ; $(CURDIR)/$< 2>&1 | egrep --q "terminating with uncaught exception|^terminate called|^Error|Assertion.*failed"
 	@-echo
 
 warning_%: $(BIN_DIR)/warning_%
@@ -1113,7 +1118,7 @@ time_compilation_generator_tiled_blur_interleaved: $(BIN_DIR)/tiled_blur.generat
 	$(TIME_COMPILATION) compile_times_generator.csv make -f $(THIS_MAKEFILE) $(FILTERS_DIR)/tiled_blur_interleaved.a
 
 .PHONY: test_apps
-test_apps: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(INCLUDE_DIR)/HalideRuntime.h
+test_apps: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(RUNTIME_EXPORTED_INCLUDES)
 	mkdir -p apps
 	# Make a local copy of the apps if we're building out-of-tree,
 	# because the app Makefiles are written to build in-tree
@@ -1236,6 +1241,7 @@ install: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR
 	mkdir -p $(PREFIX)/include $(PREFIX)/bin $(PREFIX)/lib $(PREFIX)/share/halide/tutorial/images $(PREFIX)/share/halide/tools $(PREFIX)/share/halide/tutorial/figures
 	cp $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_EXT) $(PREFIX)/lib
 	cp $(INCLUDE_DIR)/Halide.h $(PREFIX)/include
+	cp $(INCLUDE_DIR)/HalideBuffer.h $(PREFIX)/include
 	cp $(INCLUDE_DIR)/HalideRuntim*.h $(PREFIX)/include
 	cp $(ROOT_DIR)/tutorial/images/*.png $(PREFIX)/share/halide/tutorial/images
 	cp $(ROOT_DIR)/tutorial/figures/*.gif $(PREFIX)/share/halide/tutorial/figures
@@ -1246,7 +1252,6 @@ install: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR
 	cp $(ROOT_DIR)/tutorial/*.sh $(PREFIX)/share/halide/tutorial
 	cp $(ROOT_DIR)/tools/mex_halide.m $(PREFIX)/share/halide/tools
 	cp $(ROOT_DIR)/tools/GenGen.cpp $(PREFIX)/share/halide/tools
-	cp $(ROOT_DIR)/tools/halide_image.h $(PREFIX)/share/halide/tools
 	cp $(ROOT_DIR)/tools/halide_image_io.h $(PREFIX)/share/halide/tools
 	cp $(ROOT_DIR)/tools/halide_image_info.h $(PREFIX)/share/halide/tools
 
@@ -1255,6 +1260,7 @@ $(DISTRIB_DIR)/halide.tgz: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_
 	cp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(DISTRIB_DIR)/bin
 	cp $(LIB_DIR)/libHalide.a $(DISTRIB_DIR)/lib
 	cp $(INCLUDE_DIR)/Halide.h $(DISTRIB_DIR)/include
+	cp $(INCLUDE_DIR)/HalideBuffer.h $(DISTRIB_DIR)/include
 	cp $(INCLUDE_DIR)/HalideRuntim*.h $(DISTRIB_DIR)/include
 	cp $(ROOT_DIR)/tutorial/images/*.png $(DISTRIB_DIR)/tutorial/images
 	cp $(ROOT_DIR)/tutorial/figures/*.gif $(DISTRIB_DIR)/tutorial/figures
@@ -1265,12 +1271,11 @@ $(DISTRIB_DIR)/halide.tgz: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_
 	cp $(ROOT_DIR)/tutorial/*.sh $(DISTRIB_DIR)/tutorial
 	cp $(ROOT_DIR)/tools/mex_halide.m $(DISTRIB_DIR)/tools
 	cp $(ROOT_DIR)/tools/GenGen.cpp $(DISTRIB_DIR)/tools
-	cp $(ROOT_DIR)/tools/halide_image.h $(DISTRIB_DIR)/tools
 	cp $(ROOT_DIR)/tools/halide_image_io.h $(DISTRIB_DIR)/tools
 	cp $(ROOT_DIR)/tools/halide_image_info.h $(DISTRIB_DIR)/tools
 	cp $(ROOT_DIR)/README.md $(DISTRIB_DIR)
 	ln -sf $(DISTRIB_DIR) halide
-	tar -czf $(DISTRIB_DIR)/halide.tgz halide/bin halide/lib halide/include halide/tutorial halide/README.md halide/tools/mex_halide.m halide/tools/GenGen.cpp halide/tools/halide_image.h halide/tools/halide_image_io.h halide/tools/halide_image_info.h
+	tar -czf $(DISTRIB_DIR)/halide.tgz halide/bin halide/lib halide/include halide/tutorial halide/README.md halide/tools/mex_halide.m halide/tools/GenGen.cpp halide/tools/halide_image_io.h halide/tools/halide_image_info.h
 	rm -rf halide
 
 .PHONY: distrib
