@@ -284,47 +284,47 @@ void IRPrinter::visit(const Variable *op) {
 }
 
 void IRPrinter::visit(const Add *op) {
-    stream << '(';
+    stream << "Add::make(";
     print(op->a);
-    stream << " + ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Sub *op) {
-    stream << '(';
+    stream << "Sub::make(";
     print(op->a);
-    stream << " - ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Mul *op) {
-    stream << '(';
+    stream << "Mul::make(";
     print(op->a);
-    stream << "*";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Div *op) {
-    stream << '(';
+    stream << "Div::make(";
     print(op->a);
-    stream << "/";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Mod *op) {
-    stream << '(';
+    stream << "Mod::make(";
     print(op->a);
-    stream << " % ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Min *op) {
-    stream << "min(";
+    stream << "Min::make(";
     print(op->a);
     stream << ", ";
     print(op->b);
@@ -332,7 +332,7 @@ void IRPrinter::visit(const Min *op) {
 }
 
 void IRPrinter::visit(const Max *op) {
-    stream << "max(";
+    stream << "Max::make(";
     print(op->a);
     stream << ", ";
     print(op->b);
@@ -340,76 +340,77 @@ void IRPrinter::visit(const Max *op) {
 }
 
 void IRPrinter::visit(const EQ *op) {
-    stream << '(';
+    stream << "EQ::make(";
     print(op->a);
-    stream << " == ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const NE *op) {
-    stream << '(';
+    stream << "NE::make(";
     print(op->a);
-    stream << " != ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const LT *op) {
-    stream << '(';
+    stream << "LT::make(";
     print(op->a);
-    stream << " < ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const LE *op) {
-    stream << '(';
+    stream << "LE::make(";
     print(op->a);
-    stream << " <= ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const GT *op) {
-    stream << '(';
+    stream << "GT::make(";
     print(op->a);
-    stream << " > ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const GE *op) {
-    stream << '(';
+    stream << "GE::make(";
     print(op->a);
-    stream << " >= ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const And *op) {
-    stream << '(';
+    stream << "And::make(";
     print(op->a);
-    stream << " && ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Or *op) {
-    stream << '(';
+    stream << "Or::make(";
     print(op->a);
-    stream << " || ";
+    stream << ", ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Not *op) {
-    stream << '!';
+    stream << "Not::make(";
     print(op->a);
+    stream << ")";
 }
 
 void IRPrinter::visit(const Select *op) {
-    stream << "select(";
+    stream << "Select::make(";
     print(op->condition);
     stream << ", ";
     print(op->true_value);
