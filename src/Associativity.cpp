@@ -284,10 +284,15 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
         pattern_x_scope.push(pattern_x_names[i], 0);
         pattern_y_names[i] = "y" + std::to_string(i);
         for (size_t j = 0; j < sub_exprs.size(); ++j) {
-            sub_exprs[j] = substitute(op_x_names[i], Variable::make(x_parts[i].type(),
-                                      pattern_x_names[i]), sub_exprs[j]);
+            if (!x_parts[i].defined()) {
+                continue;
+            }
+            debug(5) << "Substituting " << op_x_names[i] << " with " << x_parts[i] << " in " << sub_exprs[j] << "\n";
+            sub_exprs[j] = substitute(op_x_names[i],
+                                      Variable::make(x_parts[i].type(), pattern_x_names[i]),
+                                      sub_exprs[j]);
         }
-        debug(5) << "**** expr: " << exprs[i] << " -> " << sub_exprs[i] << "\n";
+        debug(0) << "**** expr: " << exprs[i] << " -> " << sub_exprs[i] << "\n";
     }
 
     for (; lower < upper; lower++) {
@@ -476,6 +481,29 @@ vector<T> get_subvector(const vector<T> &v, const set<int> &indices) {
     return sub;
 }
 
+void add_implicit_dependencies(vector<set<int>> &dependencies) {
+    //TODO(psuriana): there might be a better way to find all the intrinsic dependencies
+    bool change = true;
+    while (change) {
+        change = false;
+        for (size_t i = 0; i < dependencies.size(); ++i) {
+            for (size_t j = 0; j < dependencies.size(); ++j) {
+                if (i == j) {
+                    continue;
+                }
+                if (dependencies[i].find(j) != dependencies[i].end()) {
+                    for (const auto &idx : dependencies[j]) {
+                        if (dependencies[i].find(idx) == dependencies[i].end()) {
+                            dependencies[i].insert(idx);
+                            change = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 } // anonymous namespace
 
 
@@ -568,6 +596,9 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
         exprs[idx] = substitute_in_all_lets(exprs[idx]);
     }
 
+    // Find all implicit dependencies and add them to the graph
+    add_implicit_dependencies(dependencies);
+
     if (all_independent || (exprs.size() == 1)) {
         debug(5) << "All tuple elements are independent. Try proving associativity of "
                  << "each element separately.\n";
@@ -592,6 +623,8 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
 
         // Decompose the tuple into subgraphs and solve for each separately
         vector<set<int>> subgraphs = compute_subgraphs(dependencies);
+        std::cout << "Computing subgraphs of dependencies: " << dependencies << "\n";
+        std::cout << "Subgraphs: " << subgraphs << "\n";
         internal_assert(subgraphs.size() == exprs.size());
         for (size_t i = 0; i < subgraphs.size(); ++i) {
             if (subgraphs[i].empty()) {
@@ -600,11 +633,11 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             }
             if (subgraphs[i].size() > 2) {
                 //TODO(psuriana): currently only support max of 2 tuple elements
-                //std::cout << "Subgraph bigger than 2: " << subgraphs[i] << "\n";
+                std::cout << "Subgraph bigger than 2: " << subgraphs[i] << "\n";
                 return AssociativityProverResult();
             }
 
-            //std::cout << "Solving for subgraph " << i << ": " << subgraphs[i] << "\n";
+            std::cout << "Solving for subgraph " << i << ": " << subgraphs[i] << "\n";
 
             vector<Expr> sub_exprs = get_subvector(exprs, subgraphs[i]);
             vector<string> sub_op_x_names = get_subvector(op_x_names, subgraphs[i]);
@@ -612,10 +645,10 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             vector<Expr> sub_x_parts = get_subvector(x_parts, subgraphs[i]);
             AssociativeOps sub_assoc_ops(sub_exprs.size());
 
-            /*std::cout << "Subgraph exprs: " << sub_exprs << "\n";
+            std::cout << "Subgraph exprs: " << sub_exprs << "\n";
             std::cout << "Subgraph op x names: " << sub_op_x_names << "\n";
             std::cout << "Subgraph op y names: " << sub_op_y_names << "\n";
-            std::cout << "Subgraph x parts: " << sub_x_parts << "\n";*/
+            std::cout << "Subgraph x parts: " << sub_x_parts << "\n";
 
             if (!find_match(get_i32_ops_table(sub_exprs), sub_op_x_names, sub_op_y_names,
                             sub_x_parts, sub_exprs, sub_assoc_ops)) {
@@ -905,7 +938,7 @@ void associativity_test() {
         dependencies[2] = {0, 1, 2};
         dependencies[3] = {0, 1, 3};
         vector<set<int>> subgraphs = compute_subgraphs(dependencies);
-        std::cout << "Computing subgraphs of: " << dependencies << "\n";
+        std::cout << "\nComputing subgraphs of: " << dependencies << "\n";
         std::cout << "Result: " << subgraphs << "\n";
     }
     {
@@ -913,7 +946,26 @@ void associativity_test() {
         dependencies[0] = {1, 0};
         dependencies[1] = {1, 0};
         vector<set<int>> subgraphs = compute_subgraphs(dependencies);
-        std::cout << "Computing subgraphs of: " << dependencies << "\n";
+        std::cout << "\nComputing subgraphs of: " << dependencies << "\n";
+        std::cout << "Result: " << subgraphs << "\n";
+    }
+    {
+        vector<set<int>> dependencies(3);
+        dependencies[0] = {1};
+        dependencies[1] = {2};
+        dependencies[2] = {0, 2};
+        vector<set<int>> subgraphs = compute_subgraphs(dependencies);
+        std::cout << "\nComputing subgraphs of: " << dependencies << "\n";
+        std::cout << "Result: " << subgraphs << "\n";
+    }
+    {
+        vector<set<int>> dependencies(4);
+        dependencies[0] = {1};
+        dependencies[1] = {2};
+        dependencies[2] = {3};
+        dependencies[3] = {0};
+        vector<set<int>> subgraphs = compute_subgraphs(dependencies);
+        std::cout << "\nComputing subgraphs of: " << dependencies << "\n";
         std::cout << "Result: " << subgraphs << "\n";
     }
 
