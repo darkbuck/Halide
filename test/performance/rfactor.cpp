@@ -328,7 +328,7 @@ int histogram_rfactor_test() {
     return 0;
 }
 
-//TODO(psuriana): Has to add table for the cast
+//TODO(psuriana): Has to add table for the cast (not working yet)
 int saturating_add_test() {
     const int size = 1024;
 
@@ -392,8 +392,8 @@ int saturating_add_test() {
 }
 
 int main(int argc, char **argv) {
-    histogram_rfactor_test();
-    //argmin_rfactor_test();
+    //histogram_rfactor_test();
+    argmin_rfactor_test();
     //complex_multiply_rfactor_test();
     //saturating_add_test();
     //parallel_dot_product_rfactor_test();

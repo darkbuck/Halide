@@ -540,7 +540,7 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
                                       Variable::make(x_parts[i].type(), pattern_x_names[i]),
                                       sub_exprs[j]);
         }
-        debug(0) << "**** expr: " << exprs[i] << " -> " << sub_exprs[i] << "\n";
+        debug(5) << "**** expr: " << exprs[i] << " -> " << sub_exprs[i] << "\n";
     }
 
     for (; lower < upper; lower++) {
@@ -871,8 +871,8 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
 
         // Decompose the tuple into subgraphs and solve for each separately
         vector<set<int>> subgraphs = compute_subgraphs(dependencies);
-        std::cout << "Computing subgraphs of dependencies: " << dependencies << "\n";
-        std::cout << "Subgraphs: " << subgraphs << "\n";
+        //std::cout << "Computing subgraphs of dependencies: " << dependencies << "\n";
+        //std::cout << "Subgraphs: " << subgraphs << "\n";
         internal_assert(subgraphs.size() == exprs.size());
         for (size_t i = 0; i < subgraphs.size(); ++i) {
             if (subgraphs[i].empty()) {
@@ -881,11 +881,11 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             }
             if (subgraphs[i].size() > 2) {
                 //TODO(psuriana): currently only support max of 2 tuple elements
-                std::cout << "Subgraph bigger than 2: " << subgraphs[i] << "\n";
+                //std::cout << "Subgraph bigger than 2: " << subgraphs[i] << "\n";
                 return AssociativityProverResult();
             }
 
-            std::cout << "Solving for subgraph " << i << ": " << subgraphs[i] << "\n";
+            //std::cout << "Solving for subgraph " << i << ": " << subgraphs[i] << "\n";
 
             vector<Expr> sub_exprs = get_subvector(exprs, subgraphs[i]);
             vector<string> sub_op_x_names = get_subvector(op_x_names, subgraphs[i]);
@@ -893,10 +893,10 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             vector<Expr> sub_x_parts = get_subvector(x_parts, subgraphs[i]);
             AssociativeOps sub_assoc_ops(sub_exprs.size());
 
-            std::cout << "Subgraph exprs: " << sub_exprs << "\n";
+            /*std::cout << "Subgraph exprs: " << sub_exprs << "\n";
             std::cout << "Subgraph op x names: " << sub_op_x_names << "\n";
             std::cout << "Subgraph op y names: " << sub_op_y_names << "\n";
-            std::cout << "Subgraph x parts: " << sub_x_parts << "\n";
+            std::cout << "Subgraph x parts: " << sub_x_parts << "\n";*/
 
             if (!find_match(get_i32_ops_table(sub_exprs), sub_op_x_names, sub_op_y_names,
                             sub_x_parts, sub_exprs, sub_assoc_ops)) {
