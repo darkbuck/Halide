@@ -24,6 +24,32 @@ using std::vector;
 
 namespace {
 
+template <typename T>
+std::ostream &operator<<(std::ostream &out, const set<T> &v) {
+    out << '[';
+    for (auto iter = v.begin(); iter != v.end(); ++iter) {
+        out << (*iter);
+        if (iter != (--v.end())) {
+            out << ", ";
+        }
+    }
+    out << "]";
+    return out;
+}
+
+template <typename T>
+std::ostream &operator<<(std::ostream &out, const vector<T> &v) {
+    out << '[';
+    for (size_t i = 0; i < v.size(); ++i) {
+        out << v[i];
+        if (i < v.size() - 1) {
+            out << ", ";
+        }
+    }
+    out << "]";
+    return out;
+}
+
 class GetExprOpcode : public IRVisitor {
 public:
     vector<int> opcode;
@@ -78,14 +104,14 @@ class ConvertSelfRef : public IRMutator {
             internal_assert(args.size() == op->args.size())
                 << "Self-reference should have the same number of args as the original\n";
             if (is_conditional && (op->value_index == value_index)) {
-                debug(4) << "Self-reference of " << op->name
+                debug(5) << "Self-reference of " << op->name
                          << " inside a conditional. Operation is not associative\n";
                 is_solvable = false;
                 return;
             }
             for (size_t i = 0; i < op->args.size(); i++) {
                 if (!equal(op->args[i], args[i])) {
-                    debug(4) << "Self-reference of " << op->name
+                    debug(5) << "Self-reference of " << op->name
                              << " with different args from the LHS. Operation is not associative\n";
                     is_solvable = false;
                     return;
@@ -96,12 +122,12 @@ class ConvertSelfRef : public IRMutator {
             if (iter != x_subs->end()) {
                 const Variable *v = iter->second.as<Variable>();
                 internal_assert(v && (v->type == op->type));
-                debug(4) << "   Substituting Call " << op->name << " at value index "
+                debug(5) << "   Substituting Call " << op->name << " at value index "
                          << op->value_index << " with " << v->name << "\n";
                 expr = iter->second;
             } else {
                 internal_assert(op->value_index < (int)op_x_names.size());
-                debug(4) << "   Substituting Call " << op->name << " at value index "
+                debug(5) << "   Substituting Call " << op->name << " at value index "
                          << op->value_index << " with " << op_x_names[op->value_index] << "\n";
                 expr = Variable::make(op->type, op_x_names[op->value_index]);
                 x_subs->emplace(op->value_index, expr);
@@ -393,10 +419,10 @@ bool visit_associative_binary_op(int index, const string &op_x, const string &op
                                  Expr x_part, Expr lhs, Expr rhs, AssociativeOps &assoc_ops) {
     const Variable *var_a = lhs.as<Variable>();
     if (!var_a || (var_a->name != op_x)) {
-        debug(4) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
+        debug(5) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
         return false;
     } else if (expr_uses_var(rhs, op_x)) {
-        debug(4) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
+        debug(5) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
         return false;
     } else {
         // op(x, y)
@@ -404,32 +430,6 @@ bool visit_associative_binary_op(int index, const string &op_x, const string &op
         assoc_ops.y[index] = {op_y, rhs};
     }
     return true;
-}
-
-template <typename T>
-std::ostream &operator<<(std::ostream &out, const set<T> &v) {
-    out << '[';
-    for (auto iter = v.begin(); iter != v.end(); ++iter) {
-        out << (*iter);
-        if (iter != (--v.end())) {
-            out << ", ";
-        }
-    }
-    out << "]";
-    return out;
-}
-
-template <typename T>
-std::ostream &operator<<(std::ostream &out, const vector<T> &v) {
-    out << '[';
-    for (size_t i = 0; i < v.size(); ++i) {
-        out << v[i];
-        if (i < v.size() - 1) {
-            out << ", ";
-        }
-    }
-    out << "]";
-    return out;
 }
 
 bool compare_expr_opcode(const vector<AssociativePair>& lhs, const vector<AssociativePair>& rhs) {
@@ -821,6 +821,10 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             all_i32 = false;
         }
         exprs[idx] = simplify(exprs[idx]);
+        exprs[idx] = common_subexpression_elimination(exprs[idx]);
+        // Simplify or the original expr might already have let exprs,
+        // so we should substitutes in all lets first
+        exprs[idx] = substitute_in_all_lets(exprs[idx]);
 
         // Replace any self-reference to Func 'f' with a Var
         ConvertSelfRef csr(f, args, idx, op_x_names, &x_subs);
@@ -1019,11 +1023,11 @@ void check_associativity(const string &f, vector<Expr> args, vector<Expr> exprs,
                 << "  Expect bin op: " << expected_op << "\n"
                 << "  instead of " << result.ops()[i].op << "\n";
 
-            debug(4) << "\nExpected op: " << expected_op << "\n";
-            debug(4) << "Operator: " << result.ops()[i].op << "\n";
-            debug(4) << "   identity: " << result.ops()[i].identity << "\n";
-            debug(4) << "   x: " << result.x()[i].var << " -> " << result.x()[i].expr << "\n";
-            debug(4) << "   y: " << result.y()[i].var << " -> " << result.y()[i].expr << "\n";
+            debug(5) << "\nExpected op: " << expected_op << "\n";
+            debug(5) << "Operator: " << result.ops()[i].op << "\n";
+            debug(5) << "   identity: " << result.ops()[i].identity << "\n";
+            debug(5) << "   x: " << result.x()[i].var << " -> " << result.x()[i].expr << "\n";
+            debug(5) << "   y: " << result.y()[i].var << " -> " << result.y()[i].expr << "\n";
         }
     }
 }
