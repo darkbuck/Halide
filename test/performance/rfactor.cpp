@@ -6,6 +6,7 @@
 using namespace Halide;
 using namespace Halide::Internal;
 
+// TODO(psuriana): implement the rfactor test
 int matrix_multiply() {
     const int matrix_size = 992, block_size = 32;
 
@@ -327,6 +328,7 @@ int histogram_rfactor_test() {
     return 0;
 }
 
+//TODO(psuriana): Has to add table for the cast
 int saturating_add_test() {
     const int size = 1024;
 
@@ -390,12 +392,11 @@ int saturating_add_test() {
 }
 
 int main(int argc, char **argv) {
-    //histogram_rfactor_test();
+    histogram_rfactor_test();
     //argmin_rfactor_test();
     //complex_multiply_rfactor_test();
-    saturating_add_test();
+    //saturating_add_test();
     //parallel_dot_product_rfactor_test();
-    //matrix_multiply();
 
     printf("Success!\n");
     return 0;

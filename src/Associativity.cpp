@@ -140,6 +140,254 @@ public:
     Expr x_part; // Undefined if there is no self-reference at value_index
 };
 
+// Given an update definition of a Func of the form: update(_x, ...), where '_x'
+// is the self-reference to the Func, try to infer a single Var '_y' that is the
+// remainder of the op not including '_x'. For example, min(_x, 2*g(r.x) + 4)
+// is converted into min(_x, _y), where '_y' is 2*g(r.x) + 4. If there is no
+// single Var that satisfies requirement, set 'is_solvable' to false.
+class ExtractBinaryOp : public IRMutator {
+    using IRMutator::visit;
+
+    const string func;
+    const vector<Expr> args;
+    map<int, Expr> self_ref_subs;
+    string op_y;
+    map<Expr, string, ExprCompare> y_subs;
+
+    enum OpType {
+        OP_X,       // x only or mixed of x/constant
+        OP_Y,       // y only
+        OP_MIXED,   // mixed of x/y
+    };
+
+    OpType type;
+
+    bool is_x(const string &name) {
+        for (const auto &iter : self_ref_subs) {
+            const Variable *v = iter.second.as<Variable>();
+            internal_assert(v);
+            if (v->name == name) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    template<typename T>
+    void visit_unary_op(const T *op) {
+        type = OP_Y;
+        current_y = Expr(op);
+        expr = Variable::make(op->type, op_y);
+    }
+
+    void visit(const IntImm *op)    { visit_unary_op<IntImm>(op); }
+    void visit(const UIntImm *op)   { visit_unary_op<UIntImm>(op); }
+    void visit(const FloatImm *op)  { visit_unary_op<FloatImm>(op); }
+    void visit(const StringImm *op) { visit_unary_op<StringImm>(op); }
+
+    void visit(const Variable *op) {
+        if (!is_solvable) {
+            return;
+        }
+        if (is_x(op->name)) {
+            type = OP_X;
+            expr = op;
+            return;
+        }
+        type = OP_Y;
+        current_y = Expr(op);
+        expr = Variable::make(op->type, op_y);
+    }
+
+    void visit(const Cast *op) {
+        if (!is_solvable) {
+            return;
+        }
+        Expr val = mutate(op->value);
+        if (type == OP_Y) {
+            current_y = Expr(op);
+            expr = Variable::make(op->type, op_y);
+        } else {
+            // Either x or pair of x/y
+            expr = Cast::make(op->type, val);
+        }
+    }
+
+    template<typename T, typename Opp>
+    void visit_binary_op(const T *op) {
+        if (!is_solvable) {
+            return;
+        }
+        Expr a = mutate(op->a);
+        OpType a_type = type;
+        Expr b = mutate(op->b);
+        OpType b_type = type;
+
+        internal_assert(a.type() == b.type());
+        if ((a_type == OP_MIXED) || (b_type == OP_MIXED)) {
+            is_solvable = false;
+            return;
+        }
+        if ((a_type == OP_X) && (b_type == OP_X)) {
+            is_solvable = false;
+            return;
+        }
+
+        if ((a_type == OP_X) || (b_type == OP_X)) {
+            // Pair of x and y
+            type = OP_MIXED;
+            expr = Opp::make(a, b);
+        } else {
+            internal_assert((a_type == OP_Y) && (b_type == OP_Y));
+            type = OP_Y;
+            current_y = Expr(op);
+            expr = Variable::make(op->type, op_y);
+        }
+    }
+
+    void visit(const Add *op) { visit_binary_op<Add, Add>(op); }
+    void visit(const Sub *op) { visit_binary_op<Sub, Sub>(op); }
+    void visit(const Mul *op) { visit_binary_op<Mul, Mul>(op); }
+    void visit(const Div *op) { visit_binary_op<Div, Div>(op); }
+    void visit(const Mod *op) { visit_binary_op<Mod, Mod>(op); }
+    void visit(const Min *op) { visit_binary_op<Min, Min>(op); }
+    void visit(const Max *op) { visit_binary_op<Max, Max>(op); }
+    void visit(const And *op) { visit_binary_op<And, And>(op); }
+    void visit(const Or *op) { visit_binary_op<Or, Or>(op); }
+    void visit(const LE *op) { visit_binary_op<LE, LE>(op); }
+    void visit(const LT *op) { visit_binary_op<LT, LT>(op); }
+    void visit(const GE *op) { visit_binary_op<GE, GE>(op); }
+    void visit(const GT *op) { visit_binary_op<GT, GT>(op); }
+    void visit(const EQ *op) { visit_binary_op<EQ, EQ>(op); }
+    void visit(const NE *op) { visit_binary_op<NE, NE>(op); }
+
+    void visit(const Load *op) {
+        internal_error << "Can't handle Load\n";
+    }
+
+    void visit(const Ramp *op) {
+        internal_error << "Can't handle Ramp\n";
+    }
+
+    void visit(const Broadcast *op) {
+        internal_error << "Can't handle Broadcast\n";
+    }
+
+    void visit(const Let *op) {
+        internal_error << "Let should have been substituted before calling this mutator\n";
+    }
+
+    void visit(const Select *op) {
+        if (!is_solvable) {
+            return;
+        }
+
+        Expr old_y;
+
+        Expr cond = mutate(op->condition);
+        if ((type != OP_X)) {
+            if (y_subs.count(current_y) == 0) {
+                old_y = current_y;
+            } else {
+                // We already have substitute for 'current_y' (e.g. Var 'y' from
+                // other Tuple element), use that instead of creating a new
+                // Var
+                cond = substitute(op_y, Variable::make(current_y.type(), y_subs[current_y]), cond);
+            }
+        }
+        if (!is_solvable) {
+            return;
+        }
+
+        Expr true_value = mutate(op->true_value);
+        if (!is_solvable) {
+            return;
+        }
+        if (type == OP_MIXED) {
+            // select(x + g(y1), x + g(y2), ...) is not solvable (it's not associative)
+            is_solvable = false;
+            return;
+        } else if (type == OP_Y) {
+            if (old_y.defined()) {
+                if (!equal(old_y, current_y)) {
+                    if (is_const(current_y)) {
+                        current_y = old_y;
+                    } else if (!is_const(old_y)) {
+                        is_solvable = false;
+                        return;
+                    }
+                }
+            }
+            old_y = current_y;
+        }
+
+        Expr false_value = mutate(op->false_value);
+        if (!is_solvable) {
+            return;
+        }
+        if (type == OP_MIXED) {
+            is_solvable = false;
+            return;
+        } else if (type == OP_Y) {
+            if (old_y.defined()) {
+                if (!equal(old_y, current_y)) {
+                    if (is_const(current_y)) {
+                        current_y = old_y;
+                    } else if (!is_const(old_y)) {
+                        is_solvable = false;
+                        return;
+                    }
+                }
+            }
+            old_y = current_y;
+        }
+        expr = Select::make(cond, true_value, false_value);
+    }
+
+    void visit(const Not *op) {
+        if (!is_solvable) {
+            return;
+        }
+        Expr a = mutate(op->a);
+        if (type == OP_Y) {
+            current_y = Expr(op);
+            expr = Variable::make(op->type, op_y);
+        } else {
+            expr = Not::make(a);
+        }
+    }
+
+    void visit(const Call *op) {
+        if (!is_solvable) {
+            return;
+        }
+        if (op->call_type != Call::Halide) {
+            is_solvable = false;
+            return;
+        }
+
+        // Mutate the args
+        for (size_t i = 0; i < op->args.size(); i++) {
+            Expr new_args = mutate(op->args[i]);
+            if (type != OP_Y) {
+                is_solvable = false;
+                return;
+            }
+        }
+        internal_assert(type == OP_Y);
+        current_y = Expr(op);
+        expr = Variable::make(op->type, op_y);
+    }
+
+public:
+    ExtractBinaryOp(const string &f, const vector<Expr> &args, const map<int, Expr> &x_subs,
+                      const string &y, const map<Expr, string, ExprCompare> &y_subs) :
+        func(f), args(args), self_ref_subs(x_subs), op_y(y), y_subs(y_subs), is_solvable(true) {}
+
+    bool is_solvable;
+    Expr current_y;
+};
+
 template<typename T>
 bool visit_associative_binary_op(int index, const string &op_x, const string &op_y,
                                  Expr x_part, Expr lhs, Expr rhs, AssociativeOps &assoc_ops) {
