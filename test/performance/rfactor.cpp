@@ -6,6 +6,10 @@
 using namespace Halide;
 using namespace Halide::Internal;
 
+// Controls the size of the input data
+#define N1 4
+#define N2 4
+
 // TODO(psuriana): implement the rfactor test
 int matrix_multiply() {
     const int matrix_size = 992, block_size = 32;
@@ -77,7 +81,7 @@ int matrix_multiply() {
 }
 
 int parallel_dot_product_rfactor_test() {
-    const int size = 1024 * 1024 * 16;
+    const int size = 1024 * 1024 * N1 * N2;
 
     ImageParam A(Int(8), 1);
     ImageParam B(Int(8), 1);
@@ -148,7 +152,7 @@ int parallel_dot_product_rfactor_test() {
 }
 
 int max_test() {
-    const int size = 1024 * 1024 * 16;
+    const int size = 1024 * 1024 * N1 * N2;
 
     ImageParam A(Int(32), 1);
 
@@ -200,7 +204,7 @@ int max_test() {
     // maxf.compile_to_assembly("/dev/stdout", {A}, Target("host-no_asserts-no_runtime-no_bounds_query"));
     // max_ref.compile_to_assembly("/dev/stdout", {A}, Target("host-no_asserts-no_runtime-no_bounds_query"));
 
-    float gbits = 32 * size / 1e9; // bits per seconds
+    float gbits = 32.0 * size / 1e9; // bits per seconds
 
     printf("Max ref: %fms, %f Gbps\n", t_ref * 1e3, (gbits / t_ref));
     printf("Max with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
@@ -212,7 +216,7 @@ int max_test() {
 
 
 int kitchen_sink_test() {
-    const int size = 1024 * 1024 * 16;
+    const int size = 1024 * 1024 * N1 * N2;
 
     ImageParam A(Int(32), 1);
 
@@ -285,6 +289,56 @@ int kitchen_sink_test() {
     printf("Kitchen sink with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
     double improve = t_ref / t;
     printf("Improvement: %f\n\n", improve);
+
+    return 0;
+}
+
+int bandwidth_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    Image<int> A(size);
+
+    RDom r(0, size);
+
+    Func dot("dot");
+    dot() = 0;
+    dot() += A(r.x);
+    RVar rxo, rxi, rxio, rxii;
+    dot.update().split(r.x, rxo, rxi, 64*8192);
+
+    Var u, v;
+    Func intm = dot.update().rfactor(rxo, u);
+    intm.compute_root()
+        .update()
+        .parallel(u)
+        .split(rxi, rxio, rxii, 128)
+        .rfactor(rxii, v)
+        .compute_at(intm, u)
+        .vectorize(v)
+        .update()
+        .vectorize(v);
+
+    const int trials = 10;
+    const int iterations = 10;
+
+    Image<int32_t> output = Image<int32_t>::make_scalar();
+
+    // init randomly
+    for (int ix = 0; ix < size; ix++) {
+        A(ix) = rand();
+    }
+
+    double t = benchmark(trials, iterations, [&]() {
+        dot.realize(output);
+    });
+
+    // Note that LLVM autovectorizes the reference!
+
+    //dot.compile_to_assembly("/dev/stdout", {A}, Target("host-no_asserts-no_runtime-no_bounds_query"));
+
+    float gbits = 32.0 * size / 1e9; // Gbits
+
+    printf("Bandwidth test: %fms, %f Gbps\n", t * 1e3, (gbits / t));
 
     return 0;
 }
@@ -362,7 +416,7 @@ int argmin_rfactor_test() {
 }
 
 int complex_multiply_rfactor_test() {
-    const int size = 1024*1024*16;
+    const int size = 1024*1024*N1 * N2;
 
     Func mult("mult"), ref("ref");
 
@@ -435,7 +489,7 @@ int complex_multiply_rfactor_test() {
 }
 
 int histogram_rfactor_test() {
-    int W = 1024*4, H = 1024*4;
+    int W = 1024*N1, H = 1024*N2;
 
     Image<uint8_t> in(W, H);
     for (int y = 0; y < H; y++) {
@@ -554,12 +608,12 @@ int saturating_add_test() {
 }
 
 void memcpy_test() {
-    int size = 16 * 1024 * 1024;
+    int size = N1 * N2 * 1024 * 1024;
     Image<int> a(size), b(size);
     double t = benchmark(10, 10, [&]() {
             memcpy(a.data(), b.data(), size * sizeof(int));
         });
-    printf("Serial Bandwidth: %f\n\n", (32 * size / 1e9) / t);
+    printf("Serial Bandwidth: %f\n\n", (32.0 * size / 1e9) / t);
 
     Func f;
     Var x;
@@ -570,7 +624,7 @@ void memcpy_test() {
     t = benchmark(10, 10, [&]() {
             f.realize(b);
         });
-    printf("Parallel in->out Bandwidth: %f\n\n", (32 * size / 1e9) / t);
+    printf("Parallel in->out Bandwidth: %f\n\n", (32.0 * size / 1e9) / t);
 
     Func g, h;
     RDom r(0, size/512);
@@ -585,11 +639,12 @@ void memcpy_test() {
     t = benchmark(10, 10, [&]() {
             h.realize(8, 64);
         });
-    printf("Parallel in only Bandwidth: %f\n\n", (32 * size / 1e9) / t);
+    printf("Parallel in only Bandwidth: %f\n\n", (32.0 * size / 1e9) / t);
 }
 
 int main(int argc, char **argv) {
-    memcpy_test();
+    bandwidth_test();
+    //memcpy_test();
     histogram_rfactor_test();
     argmin_rfactor_test();
     complex_multiply_rfactor_test();
