@@ -109,8 +109,9 @@ const vector<vector<AssociativePair>> &get_double_i32_ops_table_mul() {
 
 const vector<vector<AssociativePair>> &get_double_i32_ops_table_max() {
     static bool init = false;
-    static vector<vector<AssociativePair>> exprs(0);
+    static vector<vector<AssociativePair>> exprs(1);
     if (!init) {
+        exprs[0] = {{i32_max_x0y0, i32_tmin}, {Select::make(i32_y0 < i32_x0, i32_x1, i32_y1), i32_zero}};
         init = true;
     }
     return exprs;
