@@ -1130,12 +1130,12 @@ void associativity_test() {
                         });
 
     // f(x) = ((min(max((f(x)*g(rx)), g(rx)), (f(x)*g(rx))) + g(rx)) + f(x))
-    check_associativity("f", {x}, {((min(max((g_call_0*f_call_0), g_call_0), (f_call_0*g_call_0)) + g_call_0) + f_call_0)},
+    /*check_associativity("f", {x}, {((min(max((g_call_0*f_call_0), g_call_0), (f_call_0*g_call_0)) + g_call_0) + f_call_0)},
                         true,
                         {{AssociativePair(((min(max((x*y), y), (x*y)) + y) + x), make_const(t, 0))},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", g_call_0)}
-                        });
+                        });*/
 
     // f(x) = Tuple(f(x)[0]*g(r.x)[0] - f(x)[1]*g(r.x)[1], f(x)[0]*g(r.x)[1] + f(x)[1]*g(r.x)[0])
     check_associativity("f", {x}, {f_call_0*g_call_0 - f_call_1*g_call_1, f_call_0*g_call_1 + f_call_1*g_call_0}, true,

@@ -16,15 +16,15 @@ namespace Internal {
 
 // Pair of associative op and its identity
 struct AssociativePair {
-	Expr op;
-	Expr identity;
+    Expr op;
+    Expr identity;
 
-	AssociativePair() {}
-	AssociativePair(Expr op) : op(op) {}
-	AssociativePair(Expr op, Expr id) : op(op), identity(id) {}
+    AssociativePair() {}
+    AssociativePair(Expr op) : op(op) {}
+    AssociativePair(Expr op, Expr id) : op(op), identity(id) {}
 
-	bool operator==(const AssociativePair &other) const {
-      	return equal(op, other.op) && equal(identity, other.identity);
+    bool operator==(const AssociativePair &other) const {
+        return equal(op, other.op) && equal(identity, other.identity);
     }
     bool operator!=(const AssociativePair &other) const {
         return !(*this == other);
