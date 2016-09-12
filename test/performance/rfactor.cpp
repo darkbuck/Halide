@@ -293,6 +293,83 @@ int kitchen_sink_test() {
     return 0;
 }
 
+int kitchen_sink_ref_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    ImageParam A(Int(32), 1);
+
+    RDom r(0, size);
+
+    Func sink_ref("sink_ref");
+    sink_ref() = {0, 0, int(0x80000000), 0, int(0x7fffffff), 0, 0, 0};
+    sink_ref() = {sink_ref()[0] * A(r), // Product
+                  sink_ref()[1] + A(r), // Sum
+                  max(sink_ref()[2], A(r)), // Max
+                  select(sink_ref()[2] > A(r), sink_ref()[3], r), // Argmax
+                  min(sink_ref()[4], A(r)), // Min
+                  select(sink_ref()[4] < A(r), sink_ref()[5], r), // Argmin
+                  sink_ref()[6] + A(r)*A(r), // Sum of squares
+                  sink_ref()[7] + select(A(r) % 2 == 0, 1, 0) // Number of even items
+    };
+
+    Image<int32_t> vec_A(size);
+
+    // init randomly
+    for (int ix = 0; ix < size; ix++) {
+        vec_A(ix) = rand();
+    }
+    A.set(vec_A);
+
+    sink_ref.compile_jit();
+    return 0;
+}
+
+int kitchen_sink_rfactor_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    ImageParam A(Int(32), 1);
+
+    RDom r(0, size);
+
+    Func sink("sink");
+    sink() = {0, 0, int(0x80000000), 0, int(0x7fffffff), 0, 0, 0};
+    sink() = {sink()[0] * A(r), // Product
+              sink()[1] + A(r), // Sum
+              max(sink()[2], A(r)), // Max
+              select(sink()[2] > A(r), sink()[3], r), // Argmax
+              min(sink()[4], A(r)), // Min
+              select(sink()[4] < A(r), sink()[5], r), // Argmin
+              sink()[6] + A(r)*A(r), // Sum of squares
+              sink()[7] + select(A(r) % 2 == 0, 1, 0) // Number of even items
+    };
+
+    RVar rxo, rxi, rxio, rxii;
+    sink.update().split(r.x, rxo, rxi, 8192);
+
+    Var u, v;
+    Func intm = sink.update().rfactor(rxo, u);
+    intm.compute_root()
+        .update()
+        .parallel(u)
+        .split(rxi, rxio, rxii, 8)
+        .rfactor(rxii, v)
+        .compute_at(intm, u)
+        .vectorize(v)
+        .update()
+        .vectorize(v);
+
+    Image<int32_t> vec_A(size);
+
+    // init randomly
+    for (int ix = 0; ix < size; ix++) {
+        vec_A(ix) = rand();
+    }
+    A.set(vec_A);
+
+    sink.compile_jit();
+    return 0;
+}
+
 int bandwidth_test() {
     const int size = 1024 * 1024 * N1 * N2;
 
@@ -643,15 +720,21 @@ void memcpy_test() {
 }
 
 int main(int argc, char **argv) {
-    bandwidth_test();
+    //bandwidth_test();
     //memcpy_test();
-    histogram_rfactor_test();
+    /*histogram_rfactor_test();
     argmin_rfactor_test();
     complex_multiply_rfactor_test();
-    max_test();
+    max_test();*/
     //saturating_add_test();
-    parallel_dot_product_rfactor_test();
-    kitchen_sink_test();
+    /*parallel_dot_product_rfactor_test();
+    kitchen_sink_test();*/
+
+    double t = benchmark(10, 10, [&]() {kitchen_sink_rfactor_test();});
+    printf("Kitchen-sink rfactor compile time: %fms\n", t * 1e3);
+
+    double t_ref = benchmark(10, 10, [&]() {kitchen_sink_ref_test();});
+    printf("Kitchen-sink ref compile time: %fms\n", t_ref * 1e3);
 
     printf("Success!\n");
     return 0;
