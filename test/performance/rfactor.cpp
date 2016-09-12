@@ -151,6 +151,53 @@ int parallel_dot_product_rfactor_test() {
     return 0;
 }
 
+int parallel_dot_product_with_rfactor_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    ImageParam A(Int(8), 1);
+    ImageParam B(Int(8), 1);
+
+    Param<int> p;
+
+    RDom r(0, size);
+
+    Func dot("dot");
+    dot() = 0;
+    dot() += cast<int>(A(r.x))*B(r.x);
+    RVar rxo, rxi, rxio, rxii;
+    dot.update().split(r.x, rxo, rxi, 4*8192);
+
+    Var u, v;
+    Func intm = dot.update().rfactor(rxo, u);
+    intm.compute_root()
+        .update()
+        .parallel(u)
+        .split(rxi, rxio, rxii, 8)
+        .rfactor(rxii, v)
+        .compute_at(intm, u)
+        .vectorize(v)
+        .update()
+        .vectorize(v);
+    return 0;
+}
+
+int parallel_dot_product_no_rfactor_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    ImageParam A(Int(8), 1);
+    ImageParam B(Int(8), 1);
+
+    Param<int> p;
+
+    RDom r(0, size);
+
+    // Reference implementation
+    Func dot_ref("dot_ref");
+    dot_ref() = 0;
+    dot_ref() += cast<int>(A(r.x))*B(r.x);
+    return 0;
+}
+
 int max_test() {
     const int size = 1024 * 1024 * N1 * N2;
 
@@ -214,6 +261,59 @@ int max_test() {
     return 0;
 }
 
+int max_with_rfactor_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    ImageParam A(Int(32), 1);
+
+    RDom r(0, size);
+
+    Func maxf("maxf");
+    maxf() = 0;
+    RVar rxo, rxi, rxio, rxii;
+    maxf() = max(maxf(), A(r));
+    maxf.update().split(r.x, rxo, rxi, 4*8192);
+
+    Var u, v;
+    Func intm = maxf.update().rfactor(rxo, u);
+    intm.compute_root()
+        .update()
+        .parallel(u)
+        .split(rxi, rxio, rxii, 8)
+        .rfactor(rxii, v)
+        .compute_at(intm, u)
+        .vectorize(v)
+        .update()
+        .vectorize(v);
+    return 0;
+}
+
+int max_no_rfactor_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    ImageParam A(Int(32), 1);
+
+    RDom r(0, size);
+
+    Func maxf("maxf");
+    maxf() = 0;
+    RVar rxo, rxi, rxio, rxii;
+    maxf() = max(maxf(), A(r));
+    maxf.update().split(r.x, rxo, rxi, 4*8192);
+
+    Var u, v;
+    Func intm = maxf.update().rfactor(rxo, u);
+    intm.compute_root()
+        .update()
+        .parallel(u)
+        .split(rxi, rxio, rxii, 8)
+        .rfactor(rxii, v)
+        .compute_at(intm, u)
+        .vectorize(v)
+        .update()
+        .vectorize(v);
+    return 0;
+}
 
 int kitchen_sink_test() {
     const int size = 1024 * 1024 * N1 * N2;
@@ -289,65 +389,6 @@ int kitchen_sink_test() {
     printf("Kitchen sink with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
     double improve = t_ref / t;
     printf("Improvement: %f\n\n", improve);
-
-    return 0;
-}
-
-int kitchen_sink_ref_test() {
-    const int size = 1024 * 1024 * N1 * N2;
-
-    ImageParam A(Int(32), 1);
-
-    RDom r(0, size);
-
-    Func sink_ref("sink_ref");
-    sink_ref() = {0, 0, int(0x80000000), 0, int(0x7fffffff), 0, 0, 0};
-    sink_ref() = {sink_ref()[0] * A(r), // Product
-                  sink_ref()[1] + A(r), // Sum
-                  max(sink_ref()[2], A(r)), // Max
-                  select(sink_ref()[2] > A(r), sink_ref()[3], r), // Argmax
-                  min(sink_ref()[4], A(r)), // Min
-                  select(sink_ref()[4] < A(r), sink_ref()[5], r), // Argmin
-                  sink_ref()[6] + A(r)*A(r), // Sum of squares
-                  sink_ref()[7] + select(A(r) % 2 == 0, 1, 0) // Number of even items
-    };
-
-    return 0;
-}
-
-int kitchen_sink_rfactor_test() {
-    const int size = 1024 * 1024 * N1 * N2;
-
-    ImageParam A(Int(32), 1);
-
-    RDom r(0, size);
-
-    Func sink("sink");
-    sink() = {0, 0, int(0x80000000), 0, int(0x7fffffff), 0, 0, 0};
-    sink() = {sink()[0] * A(r), // Product
-              sink()[1] + A(r), // Sum
-              max(sink()[2], A(r)), // Max
-              select(sink()[2] > A(r), sink()[3], r), // Argmax
-              min(sink()[4], A(r)), // Min
-              select(sink()[4] < A(r), sink()[5], r), // Argmin
-              sink()[6] + A(r)*A(r), // Sum of squares
-              sink()[7] + select(A(r) % 2 == 0, 1, 0) // Number of even items
-    };
-
-    RVar rxo, rxi, rxio, rxii;
-    sink.update().split(r.x, rxo, rxi, 8192);
-
-    Var u, v;
-    Func intm = sink.update().rfactor(rxo, u);
-    intm.compute_root()
-        .update()
-        .parallel(u)
-        .split(rxi, rxio, rxii, 8)
-        .rfactor(rxii, v)
-        .compute_at(intm, u)
-        .vectorize(v)
-        .update()
-        .vectorize(v);
 
     return 0;
 }
@@ -474,6 +515,53 @@ int argmin_rfactor_test() {
     return 0;
 }
 
+int argmin_with_rfactor_test() {
+    const int size = 64;
+
+    Func amin("amin"), ref("ref");
+
+    ImageParam input(UInt(8), 4);
+
+    RDom r(0, size, 0, size, 0, size, 0, size);
+
+    amin() = Tuple(255, 0, 0, 0, 0);
+    amin() = Tuple(min(amin()[0], input(r.x, r.y, r.z, r.w)),
+                   select(amin()[0] < input(r.x, r.y, r.z, r.w), amin()[1], r.x),
+                   select(amin()[0] < input(r.x, r.y, r.z, r.w), amin()[2], r.y),
+                   select(amin()[0] < input(r.x, r.y, r.z, r.w), amin()[3], r.z),
+                   select(amin()[0] < input(r.x, r.y, r.z, r.w), amin()[4], r.w));
+
+    Var u;
+    Func intm1 = amin.update(0).rfactor(r.w, u);
+    intm1.compute_root();
+    intm1.update(0).parallel(u);
+
+    Var v;
+    RVar rxo, rxi;
+    Func intm2 = intm1.update(0).split(r.x, rxo, rxi, 16).rfactor(rxi, v);
+    intm2.compute_at(intm1, u);
+    intm2.update(0).vectorize(v);
+    return 0;
+}
+
+int argmin_no_rfactor_test() {
+    const int size = 64;
+
+    Func amin("amin"), ref("ref");
+
+    ImageParam input(UInt(8), 4);
+
+    RDom r(0, size, 0, size, 0, size, 0, size);
+
+    ref() = Tuple(255, 0, 0, 0, 0);
+    ref() = Tuple(min(ref()[0], input(r.x, r.y, r.y, r.z)),
+                  select(ref()[0] < input(r.x, r.y, r.y, r.z), ref()[1], r.x),
+                  select(ref()[0] < input(r.x, r.y, r.y, r.z), ref()[2], r.y),
+                  select(ref()[0] < input(r.x, r.y, r.z, r.w), ref()[3], r.z),
+                  select(ref()[0] < input(r.x, r.y, r.z, r.w), ref()[4], r.w));
+    return 0;
+}
+
 int complex_multiply_rfactor_test() {
     const int size = 1024*1024*N1 * N2;
 
@@ -542,10 +630,59 @@ int complex_multiply_rfactor_test() {
     double improve = t_ref / t;
     printf("Improvement: %f\n\n", improve);
 
-
-
     return 0;
 }
+
+int complex_multiply_with_rfactor_test() {
+    const int size = 1024*1024*N1 * N2;
+
+    Func mult("mult"), ref("ref");
+
+    // TODO: change to float
+    ImageParam input0(Int(32), 1);
+    ImageParam input1(Int(32), 1);
+
+    RDom r(0, size);
+
+    mult() = Tuple(1, 0);
+    mult() = Tuple(mult()[0]*input0(r.x) - mult()[1]*input1(r.x),
+                   mult()[0]*input1(r.x) + mult()[1]*input0(r.x));
+
+    RVar rxi, rxo, rxii, rxio;
+    mult.update(0).split(r.x, rxo, rxi, 2*8192);
+
+    Var u, v;
+    Func intm = mult.update().rfactor(rxo, u);
+    intm.compute_root()
+        .vectorize(u, 8)
+        .update()
+        .parallel(u)
+        .split(rxi, rxio, rxii, 8)
+        .rfactor(rxii, v)
+        .compute_at(intm, u)
+        .vectorize(v)
+        .update()
+        .vectorize(v);
+    return 0;
+}
+
+int complex_multiply_no_rfactor_test() {
+    const int size = 1024*1024*N1 * N2;
+
+    Func mult("mult"), ref("ref");
+
+    // TODO: change to float
+    ImageParam input0(Int(32), 1);
+    ImageParam input1(Int(32), 1);
+
+    RDom r(0, size);
+
+    ref() = Tuple(1, 0);
+    ref() = Tuple(ref()[0]*input0(r.x) - ref()[1]*input1(r.x),
+                  ref()[0]*input1(r.x) + ref()[1]*input0(r.x));
+    return 0;
+}
+
 
 int histogram_rfactor_test() {
     int W = 1024*N1, H = 1024*N2;
@@ -701,6 +838,104 @@ void memcpy_test() {
     printf("Parallel in only Bandwidth: %f\n\n", (32.0 * size / 1e9) / t);
 }
 
+int kitchen_sink_no_rfactor_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    ImageParam A(Int(32), 1);
+
+    RDom r(0, size);
+
+    Func sink_ref("sink_ref");
+    sink_ref() = {0, 0, int(0x80000000), 0, int(0x7fffffff), 0, 0, 0};
+    sink_ref() = {sink_ref()[0] * A(r), // Product
+                  sink_ref()[1] + A(r), // Sum
+                  max(sink_ref()[2], A(r)), // Max
+                  select(sink_ref()[2] > A(r), sink_ref()[3], r), // Argmax
+                  min(sink_ref()[4], A(r)), // Min
+                  select(sink_ref()[4] < A(r), sink_ref()[5], r), // Argmin
+                  sink_ref()[6] + A(r)*A(r), // Sum of squares
+                  sink_ref()[7] + select(A(r) % 2 == 0, 1, 0) // Number of even items
+    };
+
+    return 0;
+}
+
+int kitchen_sink_with_rfactor_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    ImageParam A(Int(32), 1);
+
+    RDom r(0, size);
+
+    Func sink("sink");
+    sink() = {0, 0, int(0x80000000), 0, int(0x7fffffff), 0, 0, 0};
+    sink() = {sink()[0] * A(r), // Product
+              sink()[1] + A(r), // Sum
+              max(sink()[2], A(r)), // Max
+              select(sink()[2] > A(r), sink()[3], r), // Argmax
+              min(sink()[4], A(r)), // Min
+              select(sink()[4] < A(r), sink()[5], r), // Argmin
+              sink()[6] + A(r)*A(r), // Sum of squares
+              sink()[7] + select(A(r) % 2 == 0, 1, 0) // Number of even items
+    };
+
+    RVar rxo, rxi, rxio, rxii;
+    sink.update().split(r.x, rxo, rxi, 8192);
+
+    Var u, v;
+    Func intm = sink.update().rfactor(rxo, u);
+    intm.compute_root()
+        .update()
+        .parallel(u)
+        .split(rxi, rxio, rxii, 8)
+        .rfactor(rxii, v)
+        .compute_at(intm, u)
+        .vectorize(v)
+        .update()
+        .vectorize(v);
+
+    return 0;
+}
+
+int histogram_no_rfactor_test() {
+    int W = 1024*N1, H = 1024*N2;
+
+    Image<uint8_t> in(W, H);
+    Func hist("hist"), ref("ref");
+    Var x, y;
+
+    RDom r(0, W, 0, H);
+
+    ref(x) = 0;
+    ref(in(r.x, r.y)) += 1;
+    return 0;
+}
+
+int histogram_with_rfactor_test() {
+    int W = 1024*N1, H = 1024*N2;
+
+    Image<uint8_t> in(W, H);
+    Func hist("hist"), ref("ref");
+    Var x, y;
+
+    RDom r(0, W, 0, H);
+
+    hist(x) = 0;
+    hist(in(r.x, r.y)) += 1;
+
+    Var u;
+    RVar ryo, ryi;
+    hist
+        .update()
+        .split(r.y, ryo, ryi, 16)
+        .rfactor(ryo, u)
+        .compute_root()
+        .vectorize(x, 8)
+        .update().parallel(u);
+    hist.update().vectorize(x, 8);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     //bandwidth_test();
     //memcpy_test();
@@ -712,11 +947,53 @@ int main(int argc, char **argv) {
     /*parallel_dot_product_rfactor_test();
     kitchen_sink_test();*/
 
-    double t = benchmark(10, 10, [&]() {kitchen_sink_rfactor_test();});
-    printf("Kitchen-sink rfactor compile time: %fms\n", t * 1e3);
+    {
+        double t = benchmark(10, 10, [&]() {max_with_rfactor_test();});
+        printf("Max rfactor compile time: %fms\n", t * 1e3);
 
-    double t_ref = benchmark(10, 10, [&]() {kitchen_sink_ref_test();});
-    printf("Kitchen-sink ref compile time: %fms\n", t_ref * 1e3);
+        double t_ref = benchmark(10, 10, [&]() {max_no_rfactor_test();});
+        printf("Max ref compile time: %fms\n", t_ref * 1e3);
+    }
+
+    {
+        double t = benchmark(10, 10, [&]() {histogram_with_rfactor_test();});
+        printf("Histogram rfactor compile time: %fms\n", t * 1e3);
+
+        double t_ref = benchmark(10, 10, [&]() {histogram_no_rfactor_test();});
+        printf("Histogram ref compile time: %fms\n", t_ref * 1e3);
+    }
+
+    {
+        double t = benchmark(10, 10, [&]() {argmin_with_rfactor_test();});
+        printf("Argmin rfactor compile time: %fms\n", t * 1e3);
+
+        double t_ref = benchmark(10, 10, [&]() {argmin_no_rfactor_test();});
+        printf("Argmin ref compile time: %fms\n", t_ref * 1e3);
+    }
+
+    {
+        double t = benchmark(10, 10, [&]() {complex_multiply_with_rfactor_test();});
+        printf("Complex-multiply rfactor compile time: %fms\n", t * 1e3);
+
+        double t_ref = benchmark(10, 10, [&]() {complex_multiply_no_rfactor_test();});
+        printf("Complex-multiply ref compile time: %fms\n", t_ref * 1e3);
+    }
+
+    {
+        double t = benchmark(10, 10, [&]() {parallel_dot_product_with_rfactor_test();});
+        printf("Dot-product rfactor compile time: %fms\n", t * 1e3);
+
+        double t_ref = benchmark(10, 10, [&]() {parallel_dot_product_no_rfactor_test();});
+        printf("Dot-product ref compile time: %fms\n", t_ref * 1e3);
+    }
+
+    {
+        double t = benchmark(10, 10, [&]() {kitchen_sink_with_rfactor_test();});
+        printf("Kitchen-sink rfactor compile time: %fms\n", t * 1e3);
+
+        double t_ref = benchmark(10, 10, [&]() {kitchen_sink_no_rfactor_test();});
+        printf("Kitchen-sink ref compile time: %fms\n", t_ref * 1e3);
+    }
 
     printf("Success!\n");
     return 0;
