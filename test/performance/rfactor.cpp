@@ -312,15 +312,6 @@ int kitchen_sink_ref_test() {
                   sink_ref()[7] + select(A(r) % 2 == 0, 1, 0) // Number of even items
     };
 
-    Image<int32_t> vec_A(size);
-
-    // init randomly
-    for (int ix = 0; ix < size; ix++) {
-        vec_A(ix) = rand();
-    }
-    A.set(vec_A);
-
-    sink_ref.compile_jit();
     return 0;
 }
 
@@ -358,15 +349,6 @@ int kitchen_sink_rfactor_test() {
         .update()
         .vectorize(v);
 
-    Image<int32_t> vec_A(size);
-
-    // init randomly
-    for (int ix = 0; ix < size; ix++) {
-        vec_A(ix) = rand();
-    }
-    A.set(vec_A);
-
-    sink.compile_jit();
     return 0;
 }
 
