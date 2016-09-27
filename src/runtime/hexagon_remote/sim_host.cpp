@@ -92,6 +92,15 @@ int init_sim() {
         }
     }
 
+    char *pa_file = getenv("HL_PACKET_ANALYSIS_FILE");
+    if (pa_file && (pa_file[0] != 0)) {
+        status = sim->ConfigurePacketAnalysis(pa_file);
+        if (status != HEX_STAT_SUCCESS) {
+            printf("HexagonWrapper: ConfigurePacketAnalysis failed: %d\n", status);
+            return -1;
+        }
+    }
+
     status = sim->EndOfConfiguration();
     if (status != HEX_STAT_SUCCESS) {
         printf("HexagonWrapper::EndOfConfiguration failed: %d\n", status);
