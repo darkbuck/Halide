@@ -267,7 +267,9 @@ bool var_name_match(string candidate, string var) {
 }
 }
 
-const std::string &Stage::name() const {
+std::string Stage::name() const {
+    std::string stage_name =
+        (stage == 0) ? func.name() : func.name() + ".update(" + std::to_string(stage - 1) + ")";
     return stage_name;
 }
 
@@ -283,7 +285,7 @@ void Stage::set_dim_type(VarOrRVar var, ForType t) {
             // validate that this doesn't introduce a race condition.
             if (!dims[i].is_pure() && var.is_rvar && (t == ForType::Vectorized || t == ForType::Parallel)) {
                 user_assert(definition.schedule().allow_race_conditions())
-                    << "In schedule for " << stage_name
+                    << "In schedule for " << name()
                     << ", marking var " << var.name()
                     << " as parallel or vectorized may introduce a race"
                     << " condition resulting in incorrect output."
@@ -298,14 +300,14 @@ void Stage::set_dim_type(VarOrRVar var, ForType t) {
 
         } else if (t == ForType::Vectorized) {
             user_assert(dims[i].for_type != ForType::Vectorized)
-                << "In schedule for " << stage_name
+                << "In schedule for " << name()
                 << ", can't vectorize across " << var.name()
                 << " because Func is already vectorized across " << dims[i].var << "\n";
         }
     }
 
     if (!found) {
-        user_error << "In schedule for " << stage_name
+        user_error << "In schedule for " << name()
                    << ", could not find dimension "
                    << var.name()
                    << " to mark as " << t
@@ -325,7 +327,7 @@ void Stage::set_dim_device_api(VarOrRVar var, DeviceAPI device_api) {
     }
 
     if (!found) {
-        user_error << "In schedule for " << stage_name
+        user_error << "In schedule for " << name()
                    << ", could not find dimension "
                    << var.name()
                    << " to set to device API " << static_cast<int>(device_api)
@@ -470,13 +472,7 @@ Func Stage::rfactor(RVar r, Var v) {
 Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     user_assert(!definition.is_init()) << "rfactor() must be called on an update definition\n";
 
-    string func_name;
-    {
-        vector<std::string> tmp = split_string(stage_name, ".update(");
-        internal_assert(!tmp.empty() && !tmp[0].empty());
-        func_name = tmp[0];
-    }
-
+    const string &func_name = func.name();
     vector<Expr> &args = definition.args();
     vector<Expr> &values = definition.values();
 
@@ -486,7 +482,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     vector<AssociativeOp> ops;
     std::tie(is_assoc, ops) = prove_associativity(func_name, args, values);
     user_assert(is_assoc)
-        << "Failed to call rfactor() on " << stage_name
+        << "Failed to call rfactor() on " << name()
         << " since it can't prove associativity of the operator\n";
     internal_assert(ops.size() == values.size());
 
@@ -504,7 +500,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
             const auto iter = std::find_if(dims.begin(), dims.end(),
                 [&rv](const Dim& dim) { return var_name_match(dim.var, rv.name()); });
             user_assert((iter != dims.end()) && (*iter).is_rvar())
-                << "In schedule for " << stage_name
+                << "In schedule for " << name()
                 << ", can't perform rfactor() on " << rv.name()
                 << " since it is not in the reduction domain\n"
                 << dump_argument_list();
@@ -514,7 +510,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
             const auto &iter = std::find_if(dims.begin(), dims.end(),
                 [&v](const Dim& dim) { return var_name_match(dim.var, v.name()); });
             user_assert(iter == dims.end())
-                << "In schedule for " << stage_name
+                << "In schedule for " << name()
                 << ", can't rename the rvars " << rv.name() << " into " << v.name()
                 << ", since it is already used in this Func's schedule elsewhere.\n"
                 << dump_argument_list();
@@ -664,9 +660,9 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     // Copy over the storage order of the original pure dims
     vector<StorageDim> &intm_storage_dims = intm.function().schedule().storage_dims();
-    internal_assert(intm_storage_dims.size() == storage_dims.size() + vars_rename.size());
-    for (size_t i = 0; i < storage_dims.size(); ++i) {
-        intm_storage_dims[i] = storage_dims[i];
+    internal_assert(intm_storage_dims.size() == storage_dims().size() + vars_rename.size());
+    for (size_t i = 0; i < storage_dims().size(); ++i) {
+        intm_storage_dims[i] = storage_dims()[i];
     }
 
     for (size_t i = 0; i < rvars_kept.size(); ++i) {
@@ -723,7 +719,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
             if (!op.x.first.empty()) {
                 val = substitute(op.x.first, prev_val, val);
             } else {
-                user_warning << "Update definition of " << stage_name << " at index " << i
+                user_warning << "Update definition of " << name() << " at index " << i
                              << " doesn't depend on the previous value. This isn't a"
                              << " reduction operation\n";
             }
@@ -737,7 +733,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         if (!op.x.first.empty()) {
             val = substitute(op.x.first, prev_val, val);
         } else {
-            user_warning << "Update definition of " << stage_name
+            user_warning << "Update definition of " << name()
                          << " doesn't depend on the previous value. This isn't a"
                          << " reduction operation\n";
         }
@@ -752,7 +748,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 }
 
 void Stage::split(const string &old, const string &outer, const string &inner, Expr factor, bool exact, TailStrategy tail) {
-    debug(4) << "In schedule for " << stage_name << ", split " << old << " into "
+    debug(4) << "In schedule for " << name() << ", split " << old << " into "
              << outer << " and " << inner << " with factor of " << factor << "\n";
     vector<Dim> &dims = definition.schedule().dims();
 
@@ -761,7 +757,7 @@ void Stage::split(const string &old, const string &outer, const string &inner, E
         string new_names[2] = {inner, outer};
         for (int j = 0; j < 2; j++) {
             if (var_name_match(dims[i].var, new_names[j]) && new_names[j] != old) {
-                user_error << "In schedule for " << stage_name
+                user_error << "In schedule for " << name()
                            << ", can't create var " << new_names[j]
                            << " using a split or tile, because " << new_names[j]
                            << " is already used in this Func's schedule elsewhere.\n"
@@ -787,7 +783,7 @@ void Stage::split(const string &old, const string &outer, const string &inner, E
     }
 
     if (!found) {
-        user_error << "In schedule for " << stage_name
+        user_error << "In schedule for " << name()
                    << ", could not find split dimension: "
                    << old
                    << "\n"
@@ -824,7 +820,7 @@ Stage &Stage::fuse(VarOrRVar inner, VarOrRVar outer, VarOrRVar fused) {
                                     << "into RVar " << fused.name() << "\n";
     }
 
-    debug(4) << "In schedule for " << stage_name << ", fuse " << outer.name()
+    debug(4) << "In schedule for " << name() << ", fuse " << outer.name()
              << " and " << inner.name() << " into " << fused.name() << "\n";
 
     // Replace the old dimensions with the new dimension in the dims list
@@ -842,7 +838,7 @@ Stage &Stage::fuse(VarOrRVar inner, VarOrRVar outer, VarOrRVar fused) {
         }
     }
     if (!found_outer) {
-        user_error << "In schedule for " << stage_name
+        user_error << "In schedule for " << name()
                    << ", could not find outer fuse dimension: "
                    << outer.name()
                    << "\n"
@@ -869,7 +865,7 @@ Stage &Stage::fuse(VarOrRVar inner, VarOrRVar outer, VarOrRVar fused) {
     }
 
     if (!found_inner) {
-        user_error << "In schedule for " << stage_name
+        user_error << "In schedule for " << name()
                    << ", could not find inner fuse dimension: "
                    << inner.name()
                    << "\n"
@@ -903,7 +899,7 @@ Stage Stage::specialize(Expr condition) {
     Internal::CheckForFreeVars check;
     condition.accept(&check);
     if (!check.offending_var.empty()) {
-        user_error << "Specialization condition " << condition << " for " << stage_name
+        user_error << "Specialization condition " << condition << " for " << name()
                    << " depends on Var or RVar " << check.offending_var << ". "
                    << "Specialization conditions may not depend on any Vars or RVars.\n";
     }
@@ -913,22 +909,22 @@ Stage Stage::specialize(Expr condition) {
     const vector<Specialization> &specializations = definition.specializations();
     for (size_t i = 0; i < specializations.size(); i++) {
         if (equal(condition, specializations[i].condition)) {
-            return Stage(specializations[i].definition, stage_name, dim_vars, storage_dims);
+            return Stage(func, specializations[i].definition, stage, dim_vars);
         }
     }
     const Specialization &s = definition.add_specialization(condition);
 
-    return Stage(s.definition, stage_name, dim_vars, storage_dims);
+    return Stage(func, s.definition, stage, dim_vars);
 }
 
 Stage &Stage::purify(VarOrRVar old_var, VarOrRVar new_var) {
     user_assert(old_var.is_rvar && !new_var.is_rvar)
-        << "In schedule for " << stage_name
+        << "In schedule for " << name()
         << ", can't rename " << (old_var.is_rvar ? "RVar " : "Var ") << old_var.name()
         << " to " << (new_var.is_rvar ? "RVar " : "Var ") << new_var.name()
         << "; purify must take a RVar as old_Var and a Var as new_var\n";
 
-    debug(4) << "In schedule for " << stage_name << ", purify RVar "
+    debug(4) << "In schedule for " << name() << ", purify RVar "
              << old_var.name() << " to Var " << new_var.name() << "\n";
 
     Schedule &schedule = definition.schedule();
@@ -948,7 +944,7 @@ Stage &Stage::purify(VarOrRVar old_var, VarOrRVar new_var) {
 
     if (!found) {
         user_error
-            << "In schedule for " << stage_name
+            << "In schedule for " << name()
             << ", could not find rename dimension: "
             << old_var.name()
             << "\n"
@@ -961,7 +957,7 @@ Stage &Stage::purify(VarOrRVar old_var, VarOrRVar new_var) {
 }
 
 void Stage::remove(const string &var) {
-    debug(4) << "In schedule for " << stage_name << ", remove " << var << "\n";
+    debug(4) << "In schedule for " << name() << ", remove " << var << "\n";
 
     Schedule &schedule = definition.schedule();
 
@@ -979,7 +975,7 @@ void Stage::remove(const string &var) {
 
     if (!found) {
         user_error
-            << "In schedule for " << stage_name
+            << "In schedule for " << name()
             << ", could not find remove dimension: "
             << var
             << "\n"
@@ -1006,7 +1002,7 @@ void Stage::remove(const string &var) {
             if (splits[i-1].inner == old_name ||
                 splits[i-1].outer == old_name) {
                 user_error
-                    << "In schedule for " << stage_name
+                    << "In schedule for " << name()
                     << ", can't remove variable " << old_name
                     << " because it has already been fused into "
                     << splits[i-1].old_var << "\n"
@@ -1029,7 +1025,7 @@ void Stage::remove(const string &var) {
             }
             if (splits[i-1].old_var == old_name) {
                 user_error
-                    << "In schedule for " << stage_name
+                    << "In schedule for " << name()
                     << ", can't remove a variable " << old_name
                     << " because it has already been renamed or split.\n"
                     << dump_argument_list();
@@ -1043,7 +1039,7 @@ void Stage::remove(const string &var) {
             }
             if (splits[i-1].old_var == old_name) {
                 user_error
-                    << "In schedule for " << stage_name
+                    << "In schedule for " << name()
                     << ", can't remove a variable " << old_name
                     << " because it has already been renamed or split.\n"
                     << dump_argument_list();
@@ -1059,17 +1055,17 @@ void Stage::remove(const string &var) {
 Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
     if (old_var.is_rvar) {
         user_assert(new_var.is_rvar)
-            << "In schedule for " << stage_name
+            << "In schedule for " << name()
             << ", can't rename RVar " << old_var.name()
             << " to Var " << new_var.name() << "\n";
     } else {
         user_assert(!new_var.is_rvar)
-            << "In schedule for " << stage_name
+            << "In schedule for " << name()
             << ", can't rename Var " << old_var.name()
             << " to RVar " << new_var.name() << "\n";
     }
 
-    debug(4) << "In schedule for " << stage_name << ", rename " << old_var.name()
+    debug(4) << "In schedule for " << name() << ", rename " << old_var.name()
              << " to " << new_var.name() << "\n";
 
     Schedule &schedule = definition.schedule();
@@ -1090,7 +1086,7 @@ Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
 
     if (!found) {
         user_error
-            << "In schedule for " << stage_name
+            << "In schedule for " << name()
             << ", could not find rename dimension: "
             << old_var.name()
             << "\n"
@@ -1105,7 +1101,7 @@ Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
             if (splits[i-1].inner == old_name ||
                 splits[i-1].outer == old_name) {
                 user_error
-                    << "In schedule for " << stage_name
+                    << "In schedule for " << name()
                     << ", can't rename variable " << old_name
                     << " because it has already been fused into "
                     << splits[i-1].old_var << "\n"
@@ -1129,7 +1125,7 @@ Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
             }
             if (splits[i-1].old_var == old_name) {
                 user_error
-                    << "In schedule for " << stage_name
+                    << "In schedule for " << name()
                     << ", can't rename a variable " << old_name
                     << " because it has already been renamed or split.\n"
                     << dump_argument_list();
@@ -1447,6 +1443,40 @@ Stage &Stage::prefetch(VarOrRVar var, Expr offset) {
     return *this;
 }
 
+Stage &Stage::compute_with(LoopLevel loop_level) {
+    user_assert(!loop_level.is_inline() && !loop_level.is_root())
+        << "Undefined loop level to compute with\n";
+    user_assert((loop_level.func().name() != func.name()) || (loop_level.stage() == (int)stage-1))
+        << "Cannot schedule " << name() << " to be computed with " << loop_level.to_string()
+        << ". Can only schedule an update to be computed with its immediate previous stage\n";
+
+    // We have to mark the fuse level on the "original" definition (the one
+    // without the specialization) to ensure there is no competing compute_with.
+    Definition &original_def = (stage == 0) ? func.definition() : func.update(stage - 1);
+    LoopLevel &fuse_level = original_def.schedule().fuse_level();
+    if (!fuse_level.is_inline()) {
+        user_warning << name() << " already has a compute_with at " << fuse_level.to_string()
+                     << ". Replacing it with a new compute_with at " << loop_level.to_string() << "\n";
+    }
+    fuse_level = loop_level;
+
+    FusedPair pair(loop_level.func().name(), loop_level.stage(), func.name(), stage, loop_level.var().name());
+    if (loop_level.stage() == 0) {
+        loop_level.func().definition().schedule().fused_pairs().push_back(pair);
+    } else {
+        loop_level.func().update(loop_level.stage()-1).schedule().fused_pairs().push_back(pair);
+    }
+    return *this;
+}
+
+Stage &Stage::compute_with(Stage s, Var var) {
+    return compute_with(LoopLevel(s.func, var, s.stage));
+}
+
+Stage &Stage::compute_with(Stage s, RVar var) {
+    return compute_with(LoopLevel(s.func, var, s.stage));
+}
+
 void Func::invalidate_cache() {
     if (pipeline_.defined()) {
         pipeline_.invalidate_cache();
@@ -1557,24 +1587,24 @@ Func Func::in() {
 
 Func &Func::split(VarOrRVar old, VarOrRVar outer, VarOrRVar inner, Expr factor, TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).split(old, outer, inner, factor, tail);
+    Stage(func, func.definition(), 0, args()).split(old, outer, inner, factor, tail);
     return *this;
 }
 
 Func &Func::fuse(VarOrRVar inner, VarOrRVar outer, VarOrRVar fused) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).fuse(inner, outer, fused);
+    Stage(func, func.definition(), 0, args()).fuse(inner, outer, fused);
     return *this;
 }
 
 Func &Func::rename(VarOrRVar old_name, VarOrRVar new_name) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).rename(old_name, new_name);
+    Stage(func, func.definition(), 0, args()).rename(old_name, new_name);
     return *this;
 }
 
 Func &Func::allow_race_conditions() {
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).allow_race_conditions();
+    Stage(func, func.definition(), 0, args()).allow_race_conditions();
     return *this;
 }
 
@@ -1586,48 +1616,48 @@ Func &Func::memoize() {
 
 Stage Func::specialize(Expr c) {
     invalidate_cache();
-    return Stage(func.definition(), name(), args(), func.schedule().storage_dims()).specialize(c);
+    return Stage(func, func.definition(), 0, args()).specialize(c);
 }
 
 Func &Func::serial(VarOrRVar var) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).serial(var);
+    Stage(func, func.definition(), 0, args()).serial(var);
     return *this;
 }
 
 Func &Func::parallel(VarOrRVar var) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).parallel(var);
+    Stage(func, func.definition(), 0, args()).parallel(var);
     return *this;
 }
 
 Func &Func::vectorize(VarOrRVar var) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).vectorize(var);
+    Stage(func, func.definition(), 0, args()).vectorize(var);
     return *this;
 }
 
 Func &Func::unroll(VarOrRVar var) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).unroll(var);
+    Stage(func, func.definition(), 0, args()).unroll(var);
     return *this;
 }
 
 Func &Func::parallel(VarOrRVar var, Expr factor, TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).parallel(var, factor, tail);
+    Stage(func, func.definition(), 0, args()).parallel(var, factor, tail);
     return *this;
 }
 
 Func &Func::vectorize(VarOrRVar var, int factor, TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).vectorize(var, factor, tail);
+    Stage(func, func.definition(), 0, args()).vectorize(var, factor, tail);
     return *this;
 }
 
 Func &Func::unroll(VarOrRVar var, int factor, TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).unroll(var, factor, tail);
+    Stage(func, func.definition(), 0, args()).unroll(var, factor, tail);
     return *this;
 }
 
@@ -1700,7 +1730,7 @@ Func &Func::tile(VarOrRVar x, VarOrRVar y,
                  Expr xfactor, Expr yfactor,
                  TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).tile(x, y, xo, yo, xi, yi, xfactor, yfactor, tail);
+    Stage(func, func.definition(), 0, args()).tile(x, y, xo, yo, xi, yi, xfactor, yfactor, tail);
     return *this;
 }
 
@@ -1709,79 +1739,79 @@ Func &Func::tile(VarOrRVar x, VarOrRVar y,
                  Expr xfactor, Expr yfactor,
                  TailStrategy tail) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).tile(x, y, xi, yi, xfactor, yfactor, tail);
+    Stage(func, func.definition(), 0, args()).tile(x, y, xi, yi, xfactor, yfactor, tail);
     return *this;
 }
 
 Func &Func::reorder(const std::vector<VarOrRVar> &vars) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).reorder(vars);
+    Stage(func, func.definition(), 0, args()).reorder(vars);
     return *this;
 }
 
 Func &Func::gpu_threads(VarOrRVar tx, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_threads(tx, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_threads(tx, device_api);
     return *this;
 }
 
 Func &Func::gpu_threads(VarOrRVar tx, VarOrRVar ty, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_threads(tx, ty, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_threads(tx, ty, device_api);
     return *this;
 }
 
 Func &Func::gpu_threads(VarOrRVar tx, VarOrRVar ty, VarOrRVar tz, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_threads(tx, ty, tz, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_threads(tx, ty, tz, device_api);
     return *this;
 }
 
 Func &Func::gpu_blocks(VarOrRVar bx, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_blocks(bx, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_blocks(bx, device_api);
     return *this;
 }
 
 Func &Func::gpu_blocks(VarOrRVar bx, VarOrRVar by, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_blocks(bx, by, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_blocks(bx, by, device_api);
     return *this;
 }
 
 Func &Func::gpu_blocks(VarOrRVar bx, VarOrRVar by, VarOrRVar bz, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_blocks(bx, by, bz, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_blocks(bx, by, bz, device_api);
     return *this;
 }
 
 Func &Func::gpu_single_thread(DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_single_thread(device_api);
+    Stage(func, func.definition(), 0, args()).gpu_single_thread(device_api);
     return *this;
 }
 
 Func &Func::gpu(VarOrRVar bx, VarOrRVar tx, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu(bx, tx, device_api);
+    Stage(func, func.definition(), 0, args()).gpu(bx, tx, device_api);
     return *this;
 }
 
 Func &Func::gpu(VarOrRVar bx, VarOrRVar by, VarOrRVar tx, VarOrRVar ty, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu(bx, by, tx, ty, device_api);
+    Stage(func, func.definition(), 0, args()).gpu(bx, by, tx, ty, device_api);
     return *this;
 }
 
 Func &Func::gpu(VarOrRVar bx, VarOrRVar by, VarOrRVar bz, VarOrRVar tx, VarOrRVar ty, VarOrRVar tz, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu(bx, by, bz, tx, ty, tz, device_api);
+    Stage(func, func.definition(), 0, args()).gpu(bx, by, bz, tx, ty, tz, device_api);
     return *this;
 }
 
 Func &Func::gpu_tile(VarOrRVar x, int x_size, TailStrategy tail, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_tile(x, x_size, tail, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_tile(x, x_size, tail, device_api);
     return *this;
 }
 
@@ -1790,7 +1820,7 @@ Func &Func::gpu_tile(VarOrRVar x, VarOrRVar y,
                      TailStrategy tail,
                      DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_tile(x, y, x_size, y_size, tail, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_tile(x, y, x_size, y_size, tail, device_api);
     return *this;
 }
 
@@ -1799,7 +1829,7 @@ Func &Func::gpu_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
                      TailStrategy tail,
                      DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_tile(x, y, z, x_size, y_size, z_size, tail, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_tile(x, y, z, x_size, y_size, z_size, tail, device_api);
     return *this;
 }
 
@@ -1812,7 +1842,7 @@ Func &Func::shader(Var x, Var y, Var c, DeviceAPI device_api) {
 
     // TODO: Set appropriate constraints if this is the output buffer?
 
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_blocks(x, y, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_blocks(x, y, device_api);
 
     bool constant_bounds = false;
     Schedule &sched = func.schedule();
@@ -1834,13 +1864,13 @@ Func &Func::glsl(Var x, Var y, Var c) {
 
 Func &Func::hexagon(VarOrRVar x) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).hexagon(x);
+    Stage(func, func.definition(), 0, args()).hexagon(x);
     return *this;
 }
 
 Func &Func::prefetch(VarOrRVar var, Expr offset) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).prefetch(var, offset);
+    Stage(func, func.definition(), 0, args()).prefetch(var, offset);
     return *this;
 }
 
@@ -1931,6 +1961,25 @@ Func &Func::compute_at(Func f, Var var) {
     return compute_at(LoopLevel(f, var));
 }
 
+
+Func &Func::compute_with(LoopLevel loop_level) {
+    invalidate_cache();
+    Stage(func, func.definition(), 0, args()).compute_with(loop_level);
+    return *this;
+}
+
+Func &Func::compute_with(Stage s, Var var) {
+    invalidate_cache();
+    Stage(func, func.definition(), 0, args()).compute_with(s, var);
+    return *this;
+}
+
+Func &Func::compute_with(Stage s, RVar var) {
+    invalidate_cache();
+    Stage(func, func.definition(), 0, args()).compute_with(s, var);
+    return *this;
+}
+
 Func &Func::compute_root() {
     return compute_at(LoopLevel::root());
 }
@@ -1985,14 +2034,11 @@ Stage Func::update(int idx) {
       "Call to update with index larger than last defined update stage for Func \"" <<
       name() << "\".\n";
     invalidate_cache();
-    return Stage(func.update(idx),
-                 name() + ".update(" + std::to_string(idx) + ")",
-                 args(),
-                 func.schedule().storage_dims());
+    return Stage(func, func.update(idx), idx+1, args());
 }
 
 Func::operator Stage() const {
-    return Stage(func.definition(), name(), args(), func.schedule().storage_dims());
+    return Stage(func, func.definition(), 0, args());
 }
 
 namespace {
@@ -2113,16 +2159,13 @@ Stage FuncRef::operator=(const Tuple &e) {
             expanded_args_str[i] = v->name;
         }
         func.define(expanded_args_str, e.as_vector());
-        return Stage(func.definition(), func.name(), func.args(), func.schedule().storage_dims());
+        return Stage(func, func.definition(), 0, func.args());
 
     } else {
         func.define_update(args, e.as_vector());
 
         size_t update_stage = func.updates().size() - 1;
-        return Stage(func.update(update_stage),
-                     func.name() + ".update(" + std::to_string(update_stage) + ")",
-                     func.args(),
-                     func.schedule().storage_dims());
+        return Stage(func, func.update(update_stage), update_stage, func.args());
     }
 }
 

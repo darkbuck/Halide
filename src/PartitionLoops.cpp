@@ -455,7 +455,7 @@ class PartitionLoops : public IRMutator {
             in_gpu_loop = old_in_gpu_loop;
             return;
         }
-        
+
         // Find simplifications in this loop body
         FindSimplifications finder(op->name);
         body.accept(&finder);
@@ -728,7 +728,7 @@ class RenormalizeGPULoops : public IRMutator {
             stmt = op;
             return;
         }
-        
+
         if (ends_with(op->name, Var::gpu_threads().name())) {
             in_thread_loop = true;
             IRMutator::visit(op);

@@ -69,32 +69,44 @@ enum class TailStrategy {
  * function is done by generating a loop nest that spans its
  * dimensions. We schedule the inputs to that function by
  * recursively injecting realizations for them at particular sites
- * in this loop nest. A LoopLevel identifies such a site. */
+ * in this loop nest. A LoopLevel identifies such a site. The site
+ * can either be a specific loopness within all stages of a function
+ * or it can refer to a loopness within a particular function's
+ * stage (initial definition or updates).
+ */
 class LoopLevel {
     // Note: func_ is nullptr for inline or root.
     Internal::IntrusivePtr<Internal::FunctionContents> function_contents;
+    // If set to -1, this loop level does not refer to a particular stage of the
+    // function. 0 refers to initial stage, 1 refers to the 1st update stage, etc.
+    int stage_index;
     // TODO: these two fields should really be VarOrRVar,
     // but cyclical include dependencies make this challenging.
     std::string var_name;
     bool is_rvar;
 
-    EXPORT LoopLevel(Internal::IntrusivePtr<Internal::FunctionContents> f, const std::string &var_name, bool is_rvar);
+    EXPORT LoopLevel(Internal::IntrusivePtr<Internal::FunctionContents> f,
+                     const std::string &var_name, bool is_rvar, int stage);
     EXPORT std::string func_name() const;
 
 public:
+    /** Return the function stage associated with this loop level.
+     * Asserts if undefined */
+    EXPORT int stage() const;
+
     /** Identify the loop nest corresponding to some dimension of some function */
     // @{
-    EXPORT LoopLevel(Internal::Function f, VarOrRVar v);
-    EXPORT LoopLevel(Func f, VarOrRVar v);
+    EXPORT LoopLevel(Internal::Function f, VarOrRVar v, int stage = -1);
+    EXPORT LoopLevel(Func f, VarOrRVar v, int stage = -1);
     // @}
 
     /** Construct an empty LoopLevel, which is interpreted as
      * 'inline'. This is a special LoopLevel value that implies
      * that a function should be inlined away */
-    LoopLevel() : function_contents(nullptr), var_name(""), is_rvar(false) {}
+    LoopLevel() : function_contents(nullptr), stage_index(-1), var_name(""), is_rvar(false) {}
 
-    /** Return the Func. Asserts if the LoopLevel is_root() or is_inline(). */
-    EXPORT Func func() const;
+    /** Return the Function. Asserts if the LoopLevel is_root() or is_inline(). */
+    EXPORT Internal::Function func() const;
 
     /** Return the VarOrRVar. Asserts if the LoopLevel is_root() or is_inline(). */
     EXPORT VarOrRVar var() const;
@@ -172,6 +184,12 @@ struct Dim {
 
     bool is_pure() const {return (dim_type == PureVar) || (dim_type == PureRVar);}
     bool is_rvar() const {return (dim_type == PureRVar) || (dim_type == ImpureRVar);}
+
+    bool operator==(const Dim &other) const {
+        return (var == other.var) && (for_type == other.for_type) &&
+               (device_api == other.device_api) && (dim_type == other.dim_type);
+    }
+    bool operator!=(const Dim &other) const { return !(*this == other); }
 };
 
 struct Bound {
@@ -186,6 +204,44 @@ struct StorageDim {
     Expr alignment;
     Expr fold_factor;
     bool fold_forward;
+};
+
+/** This indicates two function stages which loopness are fused from outermost
+ * to a specific loop level: "func_1" at stage "stage_1" is fused with "func_2"
+ * at stage "stage_2" from outermost to loop level "var_name", and "func_1" is
+ * to be computed before "func_2". */
+struct FusedPair {
+    std::string func_1;
+    std::string func_2;
+    size_t stage_1;
+    size_t stage_2;
+    std::string var_name;
+
+    FusedPair() {}
+    FusedPair(const std::string &f1, size_t s1, const std::string &f2,
+              size_t s2, const std::string &var)
+        : func_1(f1), func_2(f2), stage_1(s1), stage_2(s2), var_name(var) {}
+
+    bool operator==(const FusedPair &other) const {
+        return (func_1 == other.func_1) && (func_2 == other.func_2) &&
+               (stage_1 == other.stage_1) && (stage_2 == other.stage_2) &&
+               (var_name == other.var_name);
+    }
+    bool operator<(const FusedPair &other) const {
+        if (func_1 != other.func_1) {
+            return func_1 < other.func_1;
+        }
+        if (func_2 != other.func_2) {
+            return func_2 < other.func_2;
+        }
+        if (var_name != other.var_name) {
+            return var_name < other.var_name;
+        }
+        if (stage_1 != other.stage_1) {
+            return stage_1 < other.stage_1;
+        }
+        return stage_2 < other.stage_2;
+    }
 };
 
 struct Prefetch {
@@ -305,6 +361,25 @@ public:
     const LoopLevel &compute_level() const;
     LoopLevel &store_level();
     LoopLevel &compute_level();
+    // @}
+
+    /** Until which loop level (starting from outermost) we should fuse
+     * computation of this function stage with another function stage? The
+     * function we are fusing this function with and this function should
+     * be independent of each other. See \ref Func::compute_with and
+     * \ref Stage::compute_with */
+    // @{
+    const LoopLevel &fuse_level() const;
+    LoopLevel &fuse_level();
+    // @}
+
+    /** List of function stages that are to be fused with this function stage
+     * from the outermost loop to a certain loop level. Those function stages
+     * are to be computed AFTER this function stage at the last fused loop level.
+     * See \ref Func::compute_with and \ref Stage::compute_with */
+    // @{
+    const std::vector<FusedPair> &fused_pairs() const;
+    std::vector<FusedPair> &fused_pairs();
     // @}
 
     /** Are race conditions permitted? */

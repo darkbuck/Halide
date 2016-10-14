@@ -154,8 +154,11 @@ string print_loop_nest(const vector<Function> &outputs) {
         env.insert(more_funcs.begin(), more_funcs.end());
     }
 
-    // Compute a realization order
-    vector<string> order = realization_order(outputs, env);
+    // Compute a realization order and determine group of functions which loops
+    // are to be fused together
+    vector<string> order;
+    vector<vector<string>> fused_groups;
+    std::tie(order, fused_groups) = realization_order(outputs, env);
 
     // For the purposes of printing the loop nest, we don't want to
     // worry about which features are and aren't enabled.
@@ -166,7 +169,7 @@ string print_loop_nest(const vector<Function> &outputs) {
 
     bool any_memoized = false;
     // Schedule the functions.
-    Stmt s = schedule_functions(outputs, order, env, target, any_memoized);
+    Stmt s = schedule_functions(outputs, order, fused_groups, env, target, any_memoized);
 
     // Now convert that to pseudocode
     std::ostringstream sstr;

@@ -190,11 +190,13 @@ const Specialization &Definition::add_specialization(Expr condition) {
     // The sub-schedule inherits everything about its parent except for its specializations.
     s.definition.contents->schedule.store_level()      = contents->schedule.store_level();
     s.definition.contents->schedule.compute_level()    = contents->schedule.compute_level();
+    s.definition.contents->schedule.fuse_level()       = contents->schedule.fuse_level();
     s.definition.contents->schedule.rvars()            = contents->schedule.rvars();
     s.definition.contents->schedule.splits()           = contents->schedule.splits();
     s.definition.contents->schedule.dims()             = contents->schedule.dims();
     s.definition.contents->schedule.storage_dims()     = contents->schedule.storage_dims();
     s.definition.contents->schedule.bounds()           = contents->schedule.bounds();
+    s.definition.contents->schedule.fused_pairs()      = contents->schedule.fused_pairs();
     s.definition.contents->schedule.memoized()         = contents->schedule.memoized();
     s.definition.contents->schedule.touched()          = contents->schedule.touched();
     s.definition.contents->schedule.allow_race_conditions() = contents->schedule.allow_race_conditions();

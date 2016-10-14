@@ -48,10 +48,10 @@ struct StorageDim;
 
 /** A single definition of a Func. May be a pure or update definition. */
 class Stage {
+    Internal::Function func; // Pointer to the Func this stage or the definition belongs to
     Internal::Definition definition;
-    std::string stage_name;
+    size_t stage;
     std::vector<Var> dim_vars; // Pure Vars of the Function (from the init definition)
-    std::vector<Internal::StorageDim> storage_dims;
 
     void set_dim_type(VarOrRVar var, Internal::ForType t);
     void set_dim_device_api(VarOrRVar var, DeviceAPI device_api);
@@ -60,17 +60,17 @@ class Stage {
     void remove(const std::string &var);
     Stage &purify(VarOrRVar old_name, VarOrRVar new_name);
 
+    const std::vector<Internal::StorageDim> &storage_dims() const { return func.schedule().storage_dims(); }
+
 public:
-    Stage(Internal::Definition d, const std::string &n, const std::vector<Var> &args,
-          const std::vector<Internal::StorageDim> &sdims)
-            : definition(d), stage_name(n), dim_vars(args), storage_dims(sdims) {
+    Stage(Internal::Function f, Internal::Definition d, size_t stage, const std::vector<Var> &args)
+            : func(f), definition(d), stage(stage), dim_vars(args) {
         internal_assert(definition.args().size() == dim_vars.size());
         definition.schedule().touched() = true;
     }
 
-    Stage(Internal::Definition d, const std::string &n, const std::vector<std::string> &args,
-          const std::vector<Internal::StorageDim> &sdims)
-            : definition(d), stage_name(n), storage_dims(sdims) {
+    Stage(Internal::Function f, Internal::Definition d, int stage, const std::vector<std::string> &args)
+            : func(f), definition(d), stage(stage) {
         definition.schedule().touched() = true;
 
         std::vector<Var> dim_vars(args.size());
@@ -90,7 +90,7 @@ public:
     EXPORT std::string dump_argument_list() const;
 
     /** Return the name of this stage, e.g. "f.update(2)" */
-    EXPORT const std::string &name() const;
+    EXPORT std::string name() const;
 
     /** Calling rfactor() on an associative update definition a Func will split
      * the update into an intermediate which computes the partial results and
@@ -162,6 +162,104 @@ public:
     // @{
     EXPORT Func rfactor(std::vector<std::pair<RVar, Var>> preserved);
     EXPORT Func rfactor(RVar r, Var v);
+    // @}
+
+    /** Schedule the iteration over this stage to be fused with another
+     * stage 's' from outermost loop to a given LoopLevel. 'this' stage will
+     * be computed AFTER 's' in the innermost fused dimension. There should not
+     * be any dependencies between those two fused stages. They should not have
+     * extern definitions either. An update stage can be computed with its
+     * immediate preceeding stage given that there is no loop-carried
+     * dependencies across stages. For example, the following schedule is legal:
+     \code
+     f(x) = x;
+     f(x) += 10;
+     f.update(0).compute_with(f, x);
+     \endcode
+     * The generated loop is the following:
+     \code
+     for x:
+       f(x) = x
+       f(x) += 10
+     \endcode
+     *
+     * However, the following is illegal since there is loop-carried dependence
+     * across stages:
+     \code
+     f(x) = x;
+     f(x) = f(x - 1) + 10;
+     f.update(0).compute_with(f, x);
+     \endcode
+     *
+     * The following is also illegal since the update is not computed with
+     * its immediate preceeding stage:
+     \code
+     f(x) = x;
+     f(x) += 10;
+     f(x) += 20;
+     f.update(1).compute_with(f, x);
+     \endcode
+     *
+     * Note that the two stages that are fused together should have the same
+     * exact schedule from the outermost to the innermost fused dimension, and
+     * the stage we are calling compute_with on should not have specializations,
+     * e.g. f2.compute_with(f1, x) is allowed only if f2 has no specializations.
+     *
+     * Given the constraints, this has a variety of uses. Consider the
+     * following code:
+     \code
+     f(x, y) = x + y;
+     g(x, y) = x - y;
+     h(x, y) = f(x, y) + g(x, y);
+     f.compute_root();
+     g.compute_root();
+     f.split(x, xo, xi, 8);
+     g.split(x, xo, xi, 8);
+     g.compute_with(f, xo);
+     \endcode
+     *
+     * This is equivalent to:
+     \code
+     for y:
+       for xo:
+         for xi:
+           f(8*xo + xi) = (8*xo + xi) + y
+         for xi:
+           g(8*xo + xi) = (8*xo + xi) - y
+     for y:
+       for x:
+         h(x, y) = f(x, y) + g(x, y)
+     \endcode
+     *
+     * The size of the dimensions of the stages computed_with do not have
+     * to match. Consider the following code where 'g' is half the size of 'f':
+     \code
+     Image<int> f_im(size, size), g_im(size/2, size/2);
+     input(x, y) = x + y;
+     f(x, y) = input(x, y);
+     g(x, y) = input(2*x, 2*y);
+     g.compute_with(f, y);
+     input.compute_at(f, y);
+     Pipeline({f, g}).realize({f_im, g_im});
+     \endcode
+     *
+     * This is equivalent to:
+     \code
+     for y = 0 to size-1:
+       for x = 0 to size-1:
+         input(x, y) = x + y;
+       for x = 0 to size-1:
+         f(x, y) = input(x, y)
+       for x = 0 to size/2-1:
+         if (y < size/2-1):
+           g(x, y) = input(2*x, 2*y)
+     \endcode
+     *
+     */
+    // @{
+    EXPORT Stage &compute_with(LoopLevel loop_level);
+    EXPORT Stage &compute_with(Stage s, Var var);
+    EXPORT Stage &compute_with(Stage s, RVar var);
     // @}
 
     /** Scheduling calls that control how the domain of this stage is
@@ -1607,6 +1705,14 @@ public:
     /** Schedule a function to be computed within the iteration over
      * a given LoopLevel. */
     EXPORT Func &compute_at(LoopLevel loop_level);
+
+    /** Schedule the iteration over the initial definition of this function
+     *  to be fused with another stage 's' from outermost loop to a
+     * given LoopLevel. See \ref Stage::compute_with */
+    // @{
+    EXPORT Func &compute_with(Stage s, Var var);
+    EXPORT Func &compute_with(Stage s, RVar var);
+    EXPORT Func &compute_with(LoopLevel loop_level);
 
     /** Compute all of this function once ahead of time. Reusing
      * the example in \ref Func::compute_at :

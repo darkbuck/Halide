@@ -80,8 +80,11 @@ Stmt lower(vector<Function> outputs, const string &pipeline_name, const Target &
     // Substitute in wrapper Funcs
     env = wrap_func_calls(env);
 
-    // Compute a realization order
-    vector<string> order = realization_order(outputs, env);
+    // Compute a realization order and determine group of functions which loops
+    // are to be fused together
+    vector<string> order;
+    vector<vector<string>> fused_groups;
+    std::tie(order, fused_groups) = realization_order(outputs, env);
 
     // Try to simplify the RHS/LHS of a function definition by propagating its
     // specializations' conditions
@@ -90,7 +93,7 @@ Stmt lower(vector<Function> outputs, const string &pipeline_name, const Target &
     bool any_memoized = false;
 
     debug(1) << "Creating initial loop nests...\n";
-    Stmt s = schedule_functions(outputs, order, env, t, any_memoized);
+    Stmt s = schedule_functions(outputs, order, fused_groups, env, t, any_memoized);
     debug(2) << "Lowering after creating initial loop nests:\n" << s << '\n';
 
     if (any_memoized) {
@@ -128,7 +131,7 @@ Stmt lower(vector<Function> outputs, const string &pipeline_name, const Target &
     // can't simplify statements from here until we fix them up. (We
     // can still simplify Exprs).
     debug(1) << "Performing computation bounds inference...\n";
-    s = bounds_inference(s, outputs, order, env, func_bounds, t);
+    s = bounds_inference(s, outputs, order, fused_groups, env, func_bounds, t);
     debug(2) << "Lowering after computation bounds inference:\n" << s << '\n';
 
     debug(1) << "Performing sliding window optimization...\n";

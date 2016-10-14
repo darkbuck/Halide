@@ -7,12 +7,13 @@
 
 namespace Halide {
 
-LoopLevel::LoopLevel(Internal::IntrusivePtr<Internal::FunctionContents> f, 
-                     const std::string &var_name, 
-                     bool is_rvar) 
-    : function_contents(f), var_name(var_name), is_rvar(is_rvar) {}
-LoopLevel::LoopLevel(Internal::Function f, VarOrRVar v) : LoopLevel(f.get_contents(), v.name(), v.is_rvar) {}
-LoopLevel::LoopLevel(Func f, VarOrRVar v) : LoopLevel(f.function().get_contents(), v.name(), v.is_rvar) {}
+LoopLevel::LoopLevel(Internal::IntrusivePtr<Internal::FunctionContents> f,
+                     const std::string &var_name,
+                     bool is_rvar,
+                     int stage)
+    : function_contents(f), stage_index(stage), var_name(var_name), is_rvar(is_rvar) {}
+LoopLevel::LoopLevel(Internal::Function f, VarOrRVar v, int stage) : LoopLevel(f.get_contents(), v.name(), v.is_rvar, stage) {}
+LoopLevel::LoopLevel(Func f, VarOrRVar v, int stage) : LoopLevel(f.function().get_contents(), v.name(), v.is_rvar, stage) {}
 
 std::string LoopLevel::func_name() const {
     if (function_contents.defined()) {
@@ -21,10 +22,16 @@ std::string LoopLevel::func_name() const {
     return "";
 }
 
-Func LoopLevel::func() const {
+Internal::Function LoopLevel::func() const {
     internal_assert(!is_inline() && !is_root());
     internal_assert(function_contents.defined());
-    return Func(Internal::Function(function_contents));
+    return Internal::Function(function_contents);
+}
+
+int LoopLevel::stage() const {
+    internal_assert(stage_index >= 0);
+    internal_assert(function_contents.defined());
+    return stage_index;
 }
 
 VarOrRVar LoopLevel::var() const {
@@ -38,7 +45,7 @@ bool LoopLevel::is_inline() const {
 
 /*static*/
 LoopLevel LoopLevel::root() {
-    return LoopLevel(nullptr, "__root", false);
+    return LoopLevel(nullptr, "__root", false, -1);
 }
 
 bool LoopLevel::is_root() const {
@@ -46,12 +53,21 @@ bool LoopLevel::is_root() const {
 }
 
 std::string LoopLevel::to_string() const {
-    return (function_contents.defined() ? Internal::Function(function_contents).name() : "") + "." + var_name;
+    if (stage_index == -1) {
+        return func_name() + "." + var_name;
+    } else {
+        return func_name() + ".s" + std::to_string(stage_index) + "." + var_name;
+    }
 }
 
 bool LoopLevel::match(const std::string &loop) const {
-    return Internal::starts_with(loop, func_name() + ".") && 
-           Internal::ends_with(loop, "." + var_name);
+    if (stage_index == -1) {
+        return Internal::starts_with(loop, func_name() + ".") &&
+               Internal::ends_with(loop, "." + var_name);
+    } else {
+        return Internal::starts_with(loop, func_name() + ".s" + std::to_string(stage_index)) &&
+               Internal::ends_with(loop, "." + var_name);
+    }
 }
 
 bool LoopLevel::match(const LoopLevel &other) const {
@@ -60,13 +76,15 @@ bool LoopLevel::match(const LoopLevel &other) const {
     return (func_name() == other.func_name() &&
             (var_name == other.var_name ||
              Internal::ends_with(var_name, "." + other.var_name) ||
-             Internal::ends_with(other.var_name, "." + var_name)));
+             Internal::ends_with(other.var_name, "." + var_name)) &&
+            (stage_index == other.stage_index));
 }
 
 bool LoopLevel::operator==(const LoopLevel &other) const {
     // Must compare by name, not by pointer, since in() can make copies
     // that we need to consider equivalent
-    return func_name() == other.func_name() && var_name == other.var_name;
+    return (func_name() == other.func_name()) && (stage_index == other.stage_index) &&
+           (var_name == other.var_name);
 }
 
 namespace Internal {
@@ -82,12 +100,13 @@ IntrusivePtr<FunctionContents> deep_copy_function_contents_helper(
 struct ScheduleContents {
     mutable RefCount ref_count;
 
-    LoopLevel store_level, compute_level;
+    LoopLevel store_level, compute_level, fuse_level;
     std::vector<ReductionVariable> rvars;
     std::vector<Split> splits;
     std::vector<Dim> dims;
     std::vector<StorageDim> storage_dims;
     std::vector<Bound> bounds;
+    std::vector<FusedPair> fused_pairs;
     std::vector<Prefetch> prefetches;
     std::map<std::string, IntrusivePtr<Internal::FunctionContents>> wrappers;
     bool memoized;
@@ -153,11 +172,13 @@ Schedule Schedule::deep_copy(
     Schedule copy;
     copy.contents->store_level = contents->store_level;
     copy.contents->compute_level = contents->compute_level;
+    copy.contents->fuse_level = contents->fuse_level;
     copy.contents->rvars = contents->rvars;
     copy.contents->splits = contents->splits;
     copy.contents->dims = contents->dims;
     copy.contents->storage_dims = contents->storage_dims;
     copy.contents->bounds = contents->bounds;
+    copy.contents->fused_pairs = contents->fused_pairs;
     copy.contents->prefetches = contents->prefetches;
     copy.contents->memoized = contents->memoized;
     copy.contents->touched = contents->touched;
@@ -243,6 +264,14 @@ const std::vector<ReductionVariable> &Schedule::rvars() const {
     return contents->rvars;
 }
 
+std::vector<FusedPair> &Schedule::fused_pairs() {
+    return contents->fused_pairs;
+}
+
+const std::vector<FusedPair> &Schedule::fused_pairs() const {
+    return contents->fused_pairs;
+}
+
 std::map<std::string, IntrusivePtr<Internal::FunctionContents>> &Schedule::wrappers() {
     return contents->wrappers;
 }
@@ -272,12 +301,20 @@ LoopLevel &Schedule::compute_level() {
     return contents->compute_level;
 }
 
+LoopLevel &Schedule::fuse_level() {
+    return contents->fuse_level;
+}
+
 const LoopLevel &Schedule::store_level() const {
     return contents->store_level;
 }
 
 const LoopLevel &Schedule::compute_level() const {
     return contents->compute_level;
+}
+
+const LoopLevel &Schedule::fuse_level() const {
+    return contents->fuse_level;
 }
 
 bool &Schedule::allow_race_conditions() {
@@ -331,4 +368,3 @@ void Schedule::mutate(IRMutator *mutator) {
 
 }  // namespace Internal
 }  // namespace Halide
-
