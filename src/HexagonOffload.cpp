@@ -301,8 +301,11 @@ public:
         #endif
 
         // Dump the llvm module to a temp file as .ll
-        TemporaryFile tmp_bitcode("hex", ".ll");
-        TemporaryFile tmp_shared_object("hex", ".o");
+        bool save = false;
+        if (getenv("HL_HEX_OFFLOAD_SAVE_OBJ"))
+            save = true;
+        TemporaryFile tmp_bitcode("hex", ".ll", save);
+        TemporaryFile tmp_shared_object("hex", ".o", save);
         std::unique_ptr<llvm::raw_fd_ostream> ostream =
             make_raw_fd_ostream(tmp_bitcode.pathname());
         compile_llvm_module_to_llvm_assembly(*llvm_module, *ostream);

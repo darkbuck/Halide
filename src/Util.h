@@ -205,11 +205,12 @@ EXPORT FileStat file_stat(const std::string &name);
  */
 class TemporaryFile final {
 public:
-    TemporaryFile(const std::string &prefix, const std::string &suffix)
-        : temp_path(file_make_temp(prefix, suffix)) {}
+    TemporaryFile(const std::string &prefix, const std::string &suffix, bool save = false)
+        : save_file(save), temp_path(file_make_temp(prefix, suffix)) {}
     const std::string &pathname() const { return temp_path; }
-    ~TemporaryFile() { file_unlink(temp_path); }
+    ~TemporaryFile() { if (!save_file) file_unlink(temp_path); }
 private:
+    bool save_file;
     const std::string temp_path;
     TemporaryFile(const TemporaryFile &) = delete;
     void operator=(const TemporaryFile &) = delete;
