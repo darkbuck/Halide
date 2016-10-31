@@ -1,16 +1,18 @@
-#include "../HalideRuntime.h"
-#include "HexagonWrapper.h"
-#include "sim_protocol.h"
-
 #include <vector>
 #include <sstream>
 #include <cassert>
 #include <memory>
 
+#include <HalideRuntime.h>
+#include <HexagonWrapper.h>
+
+#include "sim_protocol.h"
+
 typedef unsigned int handle_t;
 
 std::unique_ptr<HexagonWrapper> sim;
 
+bool debug_mode = false;
 int init_sim() {
     if (sim) return 0;
 
@@ -85,6 +87,8 @@ int init_sim() {
         if (status != HEX_STAT_SUCCESS) {
             printf("HexagonWrapper::ConfigureRemoteDebug failed: %d\n", status);
             return -1;
+        } else {
+            debug_mode = true;
         }
     }
 
@@ -212,7 +216,9 @@ int send_message(int msg, const std::vector<int> &arguments) {
     }
 
     HEXAPI_CoreState state;
-    if (msg == Message::Break) {
+    // If we are debugging using LLDB, then we cannot use sim->Step, but
+    // we need to use sim->Run to allow LLDB to take over.
+    if (msg == Message::Break || (debug_mode && (msg == Message::Run))) {
         // If we're trying to end the remote simulation, just run
         // until completion.
         HEX_4u_t result;

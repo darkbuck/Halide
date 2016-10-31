@@ -128,7 +128,7 @@ public:
 class InjectBufferCopies : public IRMutator {
     using IRMutator::visit;
 
-    // BufferInfo tracks the state of a givven buffer over an IR scope.
+    // BufferInfo tracks the state of a given buffer over an IR scope.
     // Generally the scope is a ProducerConsumer. The data herein is mutable.
     struct BufferInfo {
         bool host_touched,  // Is there definitely a host-side allocation?
@@ -232,6 +232,8 @@ class InjectBufferCopies : public IRMutator {
     // Prepend code to the statement that copies everything marked as
     // a dev read to host or dev.
     Stmt do_copies(Stmt s) {
+        internal_assert(s.defined());
+
         // Cannot do any sort of buffer copying in device code yet.
         if (device_api != DeviceAPI::Host) {
             return s;
@@ -349,6 +351,7 @@ class InjectBufferCopies : public IRMutator {
             buf.devices_writing.clear();
 
             if (direction != NoCopy && touching_device != DeviceAPI::Host) {
+                internal_assert(s.defined());
                 s = Block::make(make_buffer_copy(direction, i.first, touching_device), s);
             }
 
@@ -359,6 +362,7 @@ class InjectBufferCopies : public IRMutator {
                 debug(4) << "Injecting device malloc for " << i.first << " on " <<
                     static_cast<int>(buf.device_first_touched) << "\n";
                 Stmt dev_malloc = make_dev_malloc(i.first, buf.device_first_touched, false);
+                internal_assert(s.defined());
                 s = Block::make(dev_malloc, s);
                 buf.dev_allocated = true;
             }
@@ -405,7 +409,7 @@ class InjectBufferCopies : public IRMutator {
             if (l->index.same_as(new_index)) {
                 expr = op;
             } else {
-                Expr new_load = Load::make(l->type, l->name, new_index, Buffer(), Parameter());
+                Expr new_load = Load::make(l->type, l->name, new_index, BufferPtr(), Parameter());
                 expr = Call::make(op->type, op->name, {new_load}, Call::Intrinsic);
             }
         } else if (op->is_intrinsic(Call::image_load)) {
@@ -439,49 +443,39 @@ class InjectBufferCopies : public IRMutator {
             return;
         }
 
-        bool is_output = true;
-        // The buffers associated with this pipeline should get this loop level
-        for (pair<const string, BufferInfo> &i : state) {
-            const string &buf_name = i.first;
-            if (buf_name == op->name || starts_with(buf_name, op->name + ".")) {
-                i.second.loop_level = loop_level;
-                is_output = false;
-           }
-        }
-
-        Stmt produce = mutate(op->produce);
-        produce = do_copies(produce);
-
-        Stmt update;
-        if (op->update.defined()) {
-            update = mutate(op->update);
-            update = do_copies(update);
-        }
-
-        Stmt consume = mutate(op->consume);
-        consume = do_copies(consume);
-
-        if (produce.same_as(op->produce) &&
-            update.same_as(op->update) &&
-            consume.same_as(op->consume)) {
+        Stmt body = mutate(op->body);
+        body = do_copies(body);
+        if (body.same_as(op->body)) {
             stmt = op;
         } else {
-            stmt = ProducerConsumer::make(op->name, produce, update, consume);
+            stmt = ProducerConsumer::make(op->name, op->is_producer, body);
         }
 
-        // Need to make all output buffers touched on device valid
-        if (is_output) {
+        if (op->is_producer) {
+            bool is_output = true;
+            // The buffers associated with this pipeline should get this loop level
             for (pair<const string, BufferInfo> &i : state) {
                 const string &buf_name = i.first;
-                if ((buf_name == op->name || starts_with(buf_name, op->name + ".")) &&
-                    i.second.dev_touched && i.second.current_device != DeviceAPI::Host) {
-                    // Inject a device copy, which will make sure the device buffer is allocated
-                    // on the right device and that the host dirty bit is false so the device
-                    // can write. (Which will involve copying to the device if host was dirty
-                    // for the passed in buffer.)
-                    debug(4) << "Injecting device copy for output " << buf_name << " on " <<
-                        static_cast<int>(i.second.current_device) << "\n";
-                    stmt = Block::make(make_buffer_copy(ToDevice, buf_name, i.second.current_device), stmt);
+                if (buf_name == op->name || starts_with(buf_name, op->name + ".")) {
+                    i.second.loop_level = loop_level;
+                    is_output = false;
+               }
+            }
+
+            // Need to make all output buffers touched on device valid
+            if (is_output) {
+                for (pair<const string, BufferInfo> &i : state) {
+                    const string &buf_name = i.first;
+                    if ((buf_name == op->name || starts_with(buf_name, op->name + ".")) &&
+                        i.second.dev_touched && i.second.current_device != DeviceAPI::Host) {
+                        // Inject a device copy, which will make sure the device buffer is allocated
+                        // on the right device and that the host dirty bit is false so the device
+                        // can write. (Which will involve copying to the device if host was dirty
+                        // for the passed in buffer.)
+                        debug(4) << "Injecting device copy for output " << buf_name << " on " <<
+                            static_cast<int>(i.second.current_device) << "\n";
+                        stmt = Block::make(make_buffer_copy(ToDevice, buf_name, i.second.current_device), stmt);
+                    }
                 }
             }
         }
@@ -636,7 +630,9 @@ class InjectBufferCopies : public IRMutator {
 
         copy.swap(state);
         Stmt else_case = mutate(op->else_case);
-        else_case = do_copies(else_case);
+        if (else_case.defined()) {
+            else_case = do_copies(else_case);
+        }
 
         for (const pair<string, BufferInfo> &i : copy) {
             const string &buf_name = i.first;

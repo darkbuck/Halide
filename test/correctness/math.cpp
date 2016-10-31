@@ -63,7 +63,7 @@ uint32_t absd(uint32_t a, uint32_t b) { return a < b ? b - a : a - b; }
         Var x("x");                                                           \
         ImageParam input(type_of<type>(), 1);                                 \
         test_##name(x) = name(input(x));                                      \
-        Buffer in_buffer(type_of<type>(), in_buf);                            \
+        Image<type> in_buffer(*in_buf);                                       \
         input.set(in_buffer);                                                 \
         if (target.has_gpu_feature()) {                                       \
             test_##name.gpu_tile(x, 8);                                       \
@@ -91,7 +91,7 @@ uint32_t absd(uint32_t a, uint32_t b) { return a < b ? b - a : a - b; }
         Var x("x");                                                                 \
         ImageParam input(type_of<type>(), 2);                                       \
         test_##name(x) = name(input(0, x), input(1, x));                            \
-        Buffer in_buffer(type_of<type>(), in_buf);                                  \
+        Image<type> in_buffer(*in_buf);                                             \
         input.set(in_buffer);                                                       \
         if (target.has_gpu_feature()) {                                             \
             test_##name.gpu_tile(x, 8);                                             \
@@ -197,14 +197,15 @@ struct TestArgs {
 #define call_1(type, name, steps, start, end)                     \
     {                                                             \
     printf("Testing " #name "(" #type ")\n");                     \
-    TestArgs<type> args(steps, start, end);                       \
+    TestArgs<type> args(steps, (type)(start), (type)(end));       \
     test_##type##_##name(args);                                   \
     }
 
 #define call_2(type, name, steps, start1, end1, start2, end2)     \
     {                                                             \
     printf("Testing " #name "(" #type ")\n");                     \
-    TestArgs<type> args(steps, start1, end1, start2, end2);       \
+    TestArgs<type> args(steps, (type)(start1), (type)(end1),      \
+                               (type)(start2), (type)(end2));     \
     test_##type##_##name(args);                                   \
     }
 

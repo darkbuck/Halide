@@ -6,12 +6,11 @@ using Halide::Argument;
 using Halide::Expr;
 using Halide::Func;
 using Halide::Image;
-using Halide::Internal::GeneratorParamValues;
 
 const int kSize = 32;
 
 template<typename Type>
-Image<Type> MakeImage() {
+Image<Type> make_image() {
     Image<Type> im(kSize, kSize, 3);
     for (int x = 0; x < kSize; x++) {
         for (int y = 0; y < kSize; y++) {
@@ -79,7 +78,7 @@ int main(int argc, char **argv) {
         // the input (otherwise we'll get a buffer type mismatch error).
         Halide::Pipeline p = gen.build();
 
-        Image<float> src = MakeImage<float>();
+        Image<float> src = make_image<float>();
         gen.input.set(src);
         gen.float_arg.set(1.234f);
         gen.int_arg.set(33);
@@ -87,78 +86,6 @@ int main(int argc, char **argv) {
         Halide::Realization r = p.outputs()[0].realize(kSize, kSize, 3, gen.get_target());
         Image<int16_t> dst = r[1];
         verify(src, 1.234f, 33, dst);
-    }
-
-
-    // Test Generator::get_generator_param_values() and Generator::set_generator_param_values()
-    {
-        ParamTest gen;
-        GeneratorParamValues v = gen.get_generator_param_values();
-        if (v.size() != 6) {
-            fprintf(stderr, "Wrong number of GeneratorParamValues %d\n", (int) v.size());
-            exit(-1);
-        }
-        // Verify that the default values are what we expect.
-        // Note that we deliberately ignore v["target"] since that will
-        // depend on the test machine, and we don't really care what the value is.
-        if (v["input_type"] != "uint8") {
-            fprintf(stderr, "Wrong default value for %s (%s)\n", "target", v["target"].c_str());
-            exit(-1);
-        }
-        if (v["output_type"] != "float32") {
-            fprintf(stderr, "Wrong default value for %s (%s)\n", "target", v["target"].c_str());
-            exit(-1);
-        }
-        // Now change the values, then verify get_generator_param_values() reflects that
-        gen.set_generator_param_values({ { "input_type", "float32" },
-                                         { "output_type", "int16" } });
-        v = gen.get_generator_param_values();
-        if (v["input_type"] != "float32") {
-            fprintf(stderr, "Wrong updated value for %s (%s)\n", "target", v["target"].c_str());
-            exit(-1);
-        }
-        if (v["output_type"] != "int16") {
-            fprintf(stderr, "Wrong updated value for %s (%s)\n", "target", v["target"].c_str());
-            exit(-1);
-        }
-    }
-
-    // Test Generator::get_filter_arguments()
-    {
-        ParamTest gen;
-        std::vector<Argument> args = gen.get_filter_arguments();
-        if (args.size() != 3 ||
-            args[0].name != "input" || args[1].name != "float_arg" || args[2].name != "int_arg" ||
-            !args[0].is_buffer() || !args[1].is_scalar() || !args[2].is_scalar() ||
-            !args[0].is_input() || !args[1].is_input() || !args[2].is_input()) {
-            fprintf(stderr, "get_filter_arguments is incorrect\n");
-            exit(-1);
-        }
-        if (!constant_expr_equals<float>(args[1].def, 1.f) ||
-            !constant_expr_equals<float>(args[1].min, 0.f) ||
-            !constant_expr_equals<float>(args[1].max, 100.f)) {
-            fprintf(stderr, "constraints for float_arg are incorrect\n");
-            exit(-1);
-        }
-        if (!constant_expr_equals<int32_t>(args[2].def, 1) ||
-            args[2].min.defined() ||
-            args[2].max.defined()) {
-            fprintf(stderr, "constraints for int_arg are incorrect\n");
-            exit(-1);
-        }
-    }
-
-    // Test Generator::get_filter_output_types()
-    {
-        ParamTest gen;
-        std::vector<Argument> args = gen.get_filter_output_types();
-        if (args.size() != 3 ||
-            args[0] != Halide::Argument("result_0", Halide::Argument::OutputBuffer, Halide::UInt(8), 3) ||
-            args[1] != Halide::Argument("result_1", Halide::Argument::OutputBuffer, Halide::Float(32), 3) ||
-            args[2] != Halide::Argument("result_2", Halide::Argument::OutputBuffer, Halide::Int(16), 2)) {
-            fprintf(stderr, "get_filter_output_types is incorrect\n");
-            exit(-1);
-        }
     }
 
     printf("Success!\n");
