@@ -80,7 +80,7 @@ inline int check_call_graphs(CallGraphs &result, CallGraphs &expected) {
     return 0;
 }
 
-inline int check_image(const Halide::Image<int> &im, const std::function<int(int)> &func) {
+inline int check_image(const Halide::Buffer<int> &im, const std::function<int(int)> &func) {
     for (int x = 0; x < im.width(); x++) {
         int correct = func(x);
         if (im(x) != correct) {
@@ -92,7 +92,7 @@ inline int check_image(const Halide::Image<int> &im, const std::function<int(int
     return 0;
 }
 
-inline int check_image(const Halide::Image<int> &im, const std::function<int(int,int)> &func) {
+inline int check_image(const Halide::Buffer<int> &im, const std::function<int(int,int)> &func) {
     for (int y = 0; y < im.height(); y++) {
         for (int x = 0; x < im.width(); x++) {
             int correct = func(x, y);
@@ -106,7 +106,7 @@ inline int check_image(const Halide::Image<int> &im, const std::function<int(int
     return 0;
 }
 
-inline int check_image(const Halide::Image<int> &im, const std::function<int(int,int,int)> &func) {
+inline int check_image(const Halide::Buffer<int> &im, const std::function<int(int,int,int)> &func) {
     for (int z = 0; z < im.channels(); z++) {
         for (int y = 0; y < im.height(); y++) {
             for (int x = 0; x < im.width(); x++) {
