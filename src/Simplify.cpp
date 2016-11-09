@@ -402,6 +402,7 @@ private:
         const Broadcast *broadcast_value = value.as<Broadcast>();
         const Ramp *ramp_value = value.as<Ramp>();
         const Add *add = value.as<Add>();
+        const Call *call = value.as<Call>();
         double f = 0.0;
         int64_t i = 0;
         uint64_t u = 0;
@@ -478,6 +479,20 @@ private:
             // In the interest of moving constants outwards so they
             // can cancel, pull the addition outside of the cast.
             expr = mutate(Cast::make(op->type, add->a) + add->b);
+        } else if (call &&
+                   call->is_intrinsic(Call::slice_vector)) {
+            int lanes = call->args[0].type().lanes();
+            expr = mutate(Call::make(op->type, Call::slice_vector,
+                                     {Cast::make(op->type.with_lanes(lanes), call->args[0]), call->args[1], call->args[2], call->args[3]},
+                                     Call::PureIntrinsic));
+        } else if (call &&
+                   call->is_intrinsic(Call::concat_vectors)) {
+            vector<Expr> new_exprs;
+            for (const Expr e : call->args) {
+                int lanes = e.type().lanes();
+                new_exprs.push_back(mutate(Cast::make(op->type.with_lanes(lanes), e)));
+            }
+            expr = Call::make(op->type, Call::concat_vectors, new_exprs, Call::PureIntrinsic);
         } else if (value.same_as(op->value)) {
             expr = op;
         } else {
@@ -610,6 +625,22 @@ private:
             } else {
                 expr = hoist_slice_vector<Add>(Add::make(a, b));
             }
+        } else if (call_a && call_a->is_intrinsic(Call::slice_vector)
+                   && is_simple_const(op->b)) {
+            internal_assert(op->type.is_vector() && broadcast_b);
+            Expr bc = Broadcast::make(broadcast_b->value, call_a->args[0].type().lanes());
+            expr = mutate(Call::make(op->type, Call::slice_vector,
+                                     {call_a->args[0] + bc, call_a->args[1], call_a->args[2], call_a->args[3]}, Call::PureIntrinsic));
+        } else if (call_a && call_a->is_intrinsic(Call::concat_vectors) &&
+                   is_simple_const(op->b)) {
+            internal_assert(op->type.is_vector() && broadcast_b);
+            vector<Expr> new_exprs;
+            for (const Expr e : call_a->args) {
+                int lanes = e.type().lanes();
+                Expr bc = Broadcast::make(broadcast_b->value, lanes);
+                new_exprs.push_back(mutate(e + bc));
+            }
+            expr = Call::make(op->type, Call::concat_vectors, new_exprs, Call::PureIntrinsic);
         } else if (ramp_a &&
                    ramp_b) {
             // Ramp + Ramp
@@ -1426,7 +1457,23 @@ private:
             } else {
                 expr = hoist_slice_vector<Mul>(Mul::make(a, b));
             }
-        }else if (broadcast_a && broadcast_b) {
+        } else if (call_a && call_a->is_intrinsic(Call::slice_vector) &&
+                   is_simple_const(op->b)) {
+            internal_assert(op->type.is_vector() && broadcast_b);
+            Expr bc = Broadcast::make(broadcast_b->value, call_a->args[0].type().lanes());
+            expr = mutate(Call::make(op->type, Call::slice_vector,
+                                     {call_a->args[0] * bc, call_a->args[1], call_a->args[2], call_a->args[3]}, Call::PureIntrinsic));
+        } else if (call_a && call_a->is_intrinsic(Call::concat_vectors) &&
+                    is_simple_const(op->b)) {
+            internal_assert(op->type.is_vector() && broadcast_b);
+            vector<Expr> new_exprs;
+            for (const Expr e : call_a->args) {
+                int lanes = e.type().lanes();
+                Expr bc = Broadcast::make(broadcast_b->value, lanes);
+                new_exprs.push_back(mutate(e * bc));
+            }
+            expr = Call::make(op->type, Call::concat_vectors, new_exprs, Call::PureIntrinsic);
+        } else if (broadcast_a && broadcast_b) {
             expr = Broadcast::make(mutate(broadcast_a->value * broadcast_b->value), broadcast_a->lanes);
         } else if (ramp_a && broadcast_b) {
             Expr m = broadcast_b->value;
