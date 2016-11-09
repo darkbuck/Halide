@@ -551,10 +551,6 @@ int rgb_yuv420_test() {
         u_part(x, y) = (( -38 * rgb(2*x, 2*y, 0) -  74 * rgb(2*x, 2*y, 1) + 112 * rgb(2*x, 2*y, 2) + 128) >> 8) + 128;
         v_part(x, y) = (( 112 * rgb(2*x, 2*y, 0) -  94 * rgb(2*x, 2*y, 1) -  18 * rgb(2*x, 2*y, 2) + 128) >> 8) + 128;
 
-        y_part.realize(y_im_ref);
-        u_part.realize(u_im_ref);
-        v_part.realize(v_im_ref);
-
         u_part.compute_with(y_part, y);
         v_part.compute_with(u_part, y);
         rgb.compute_at(y_part, y);
