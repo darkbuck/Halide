@@ -1672,14 +1672,16 @@ class BalanceExpressionTrees : public IRMutator {
     template<typename NodeType, typename LetType>
     void visit_let(NodeType &result, const LetType *op) {
         NodeType body = op->body;
-        if (op->value.type().is_vector()) {
-            op->value.accept(&h);
-            int ht = h.height(op->value);
+        Expr value = op->value;
+        if (value.type().is_vector()) {
+            value = mutate(value);
+            value.accept(&h);
+            int ht = h.height(value);
             h.push(op->name, ht);
             body = mutate(op->body);
             h.pop(op->name);
         }
-        result = LetType::make(op->name, op->value, body);
+        result = LetType::make(op->name, value, body);
     }
     void visit(const Let *op) { visit_let(expr, op); }
     void visit(const LetStmt *op) { visit_let(stmt, op); }
