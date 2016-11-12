@@ -657,7 +657,7 @@ public:
         internal_assert(stage <= (int)f.updates().size());
 
         const Definition &def = (stage == 0) ? f.definition() : f.update(stage - 1);
-        const LoopLevel &fuse_level = def.schedule().fuse_level();
+        const LoopLevel &fuse_level = def.schedule().fuse_level().level;
         if (fuse_level.is_inline() || fuse_level.is_root()) {
             // It isn't fused to anyone
             return true;
@@ -1047,6 +1047,9 @@ private:
             }
         }
 
+        // Shifts the loops according to the alignment strategies.
+
+
         return Block::make(produce, consume);
     }
 
@@ -1056,7 +1059,7 @@ private:
         produce = inject_stmt(produce,
                               build_produce_definition(skip, f, prefix, f.definition(),
                                                        false, bounds, replacements, add_lets),
-                              f.definition().schedule().fuse_level());
+                              f.definition().schedule().fuse_level().level);
 
         for (size_t j = 0; j < f.updates().size(); ++j) {
             const Definition &def = f.updates()[j];
@@ -1064,7 +1067,7 @@ private:
             produce = inject_stmt(produce,
                                   build_produce_definition(skip, f, prefix, def, true,
                                                            bounds, replacements, add_lets),
-                                  def.schedule().fuse_level());
+                                  def.schedule().fuse_level().level);
         }
         return produce;
     }
@@ -1075,7 +1078,7 @@ private:
                                   map<string, Expr> &replacements,
                                   vector<pair<string, Expr>> &add_lets) {
         const vector<Dim> &dims = def.schedule().dims(); // From inner to outer
-        const LoopLevel &fuse_level = def.schedule().fuse_level();
+        const LoopLevel &fuse_level = def.schedule().fuse_level().level;
 
         size_t start_fuse = dims.size();
         if (!fuse_level.is_inline() && !fuse_level.is_root()) {

@@ -100,7 +100,8 @@ IntrusivePtr<FunctionContents> deep_copy_function_contents_helper(
 struct ScheduleContents {
     mutable RefCount ref_count;
 
-    LoopLevel store_level, compute_level, fuse_level;
+    LoopLevel store_level, compute_level;
+    FuseLoopLevel fuse_level;
     std::vector<ReductionVariable> rvars;
     std::vector<Split> splits;
     std::vector<Dim> dims;
@@ -301,7 +302,7 @@ LoopLevel &Schedule::compute_level() {
     return contents->compute_level;
 }
 
-LoopLevel &Schedule::fuse_level() {
+FuseLoopLevel &Schedule::fuse_level() {
     return contents->fuse_level;
 }
 
@@ -313,7 +314,7 @@ const LoopLevel &Schedule::compute_level() const {
     return contents->compute_level;
 }
 
-const LoopLevel &Schedule::fuse_level() const {
+const FuseLoopLevel &Schedule::fuse_level() const {
     return contents->fuse_level;
 }
 

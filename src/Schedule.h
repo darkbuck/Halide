@@ -64,6 +64,23 @@ enum class TailStrategy {
     Auto
 };
 
+/** Different ways to handle the case when the start/end of the loops of stages
+ * computed with (fused) are not aligned. */
+enum class AlignStrategy {
+    /** Shift the start of the fused loops to align. */
+    AlignStart,
+
+    /** Shift the end of the fused loops to align. */
+    AlignEnd,
+
+    /** compute_with will make no attemp to align the start/end of the
+     * fused loops. */
+    NoAlign,
+
+    /** By default, AlignStrategy is set to NoAlign. */
+    Auto
+};
+
 /** A reference to a site in a Halide statement at the top of the
  * body of a particular for loop. Evaluating a region of a halide
  * function is done by generating a loop nest that spans its
@@ -137,6 +154,11 @@ public:
     EXPORT bool operator==(const LoopLevel &other) const;
 
     bool operator!=(const LoopLevel &other) const { return !(*this == other); }
+};
+
+struct FuseLoopLevel {
+    LoopLevel level;
+    std::map<std::string, AlignStrategy> align;
 };
 
 namespace Internal {
@@ -369,8 +391,8 @@ public:
      * be independent of each other. See \ref Func::compute_with and
      * \ref Stage::compute_with */
     // @{
-    const LoopLevel &fuse_level() const;
-    LoopLevel &fuse_level();
+    const FuseLoopLevel &fuse_level() const;
+    FuseLoopLevel &fuse_level();
     // @}
 
     /** List of function stages that are to be fused with this function stage

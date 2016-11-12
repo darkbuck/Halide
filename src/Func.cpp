@@ -1590,7 +1590,7 @@ Stage &Stage::prefetch(VarOrRVar var, Expr offset) {
     return *this;
 }
 
-Stage &Stage::compute_with(LoopLevel loop_level) {
+Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy> &align) {
     user_assert(!loop_level.is_inline() && !loop_level.is_root())
         << "Undefined loop level to compute with\n";
     user_assert((loop_level.func().name() != func.name()) || (loop_level.stage() == (int)stage-1))
@@ -1600,12 +1600,13 @@ Stage &Stage::compute_with(LoopLevel loop_level) {
     // We have to mark the fuse level on the "original" definition (the one
     // without the specialization) to ensure there is no competing compute_with.
     Definition &original_def = (stage == 0) ? func.definition() : func.update(stage - 1);
-    LoopLevel &fuse_level = original_def.schedule().fuse_level();
-    if (!fuse_level.is_inline()) {
-        user_warning << name() << " already has a compute_with at " << fuse_level.to_string()
+    FuseLoopLevel &fuse_level = original_def.schedule().fuse_level();
+    if (!fuse_level.level.is_inline()) {
+        user_warning << name() << " already has a compute_with at " << fuse_level.level.to_string()
                      << ". Replacing it with a new compute_with at " << loop_level.to_string() << "\n";
     }
-    fuse_level = loop_level;
+    fuse_level.level = loop_level;
+    fuse_level.align = align;
 
     FusedPair pair(loop_level.func().name(), loop_level.stage(), func.name(), stage, loop_level.var().name());
     if (loop_level.stage() == 0) {
@@ -1616,12 +1617,25 @@ Stage &Stage::compute_with(LoopLevel loop_level) {
     return *this;
 }
 
-Stage &Stage::compute_with(Stage s, Var var) {
-    return compute_with(LoopLevel(s.func, var, s.stage));
+Stage &Stage::compute_with(LoopLevel loop_level, const map<VarOrRVar, AlignStrategy> &align) {
+    map<string, AlignStrategy> align_str;
+    for (const auto &iter: align) {
+        align_str.emplace(iter.first.name(), iter.second);
+    }
+    return compute_with(loop_level, align_str);
 }
 
-Stage &Stage::compute_with(Stage s, RVar var) {
-    return compute_with(LoopLevel(s.func, var, s.stage));
+Stage &Stage::compute_with(LoopLevel loop_level, AlignStrategy align) {
+    map<string, AlignStrategy> align_str = {{loop_level.var().name(), align}};
+    return compute_with(loop_level, align_str);
+}
+
+Stage &Stage::compute_with(Stage s, VarOrRVar var, const map<VarOrRVar, AlignStrategy> &align) {
+    return compute_with(LoopLevel(s.func, var, s.stage), align);
+}
+
+Stage &Stage::compute_with(Stage s, VarOrRVar var, AlignStrategy align) {
+    return compute_with(LoopLevel(s.func, var, s.stage), align);
 }
 
 void Func::invalidate_cache() {
@@ -2108,22 +2122,15 @@ Func &Func::compute_at(Func f, Var var) {
     return compute_at(LoopLevel(f, var));
 }
 
-
-Func &Func::compute_with(LoopLevel loop_level) {
+Func &Func::compute_with(Stage s, VarOrRVar var, std::map<VarOrRVar, AlignStrategy> align) {
     invalidate_cache();
-    Stage(func, func.definition(), 0, args()).compute_with(loop_level);
+    Stage(func, func.definition(), 0, args()).compute_with(s, var, align);
     return *this;
 }
 
-Func &Func::compute_with(Stage s, Var var) {
+Func &Func::compute_with(Stage s, VarOrRVar var, AlignStrategy align) {
     invalidate_cache();
-    Stage(func, func.definition(), 0, args()).compute_with(s, var);
-    return *this;
-}
-
-Func &Func::compute_with(Stage s, RVar var) {
-    invalidate_cache();
-    Stage(func, func.definition(), 0, args()).compute_with(s, var);
+    Stage(func, func.definition(), 0, args()).compute_with(s, var, align);
     return *this;
 }
 

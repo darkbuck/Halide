@@ -62,6 +62,8 @@ class Stage {
 
     const std::vector<Internal::StorageDim> &storage_dims() const { return func.schedule().storage_dims(); }
 
+    Stage &compute_with(LoopLevel loop_level, const std::map<std::string, AlignStrategy> &align);
+
 public:
     Stage(Internal::Function f, Internal::Definition d, size_t stage, const std::vector<Var> &args)
             : func(f), definition(d), stage(stage), dim_vars(args) {
@@ -259,9 +261,10 @@ public:
      *
      */
     // @{
-    EXPORT Stage &compute_with(LoopLevel loop_level);
-    EXPORT Stage &compute_with(Stage s, Var var);
-    EXPORT Stage &compute_with(Stage s, RVar var);
+    EXPORT Stage &compute_with(LoopLevel loop_level, const std::map<VarOrRVar, AlignStrategy> &align);
+    EXPORT Stage &compute_with(LoopLevel loop_level, AlignStrategy align = AlignStrategy::Auto);
+    EXPORT Stage &compute_with(Stage s, VarOrRVar var, const std::map<VarOrRVar, AlignStrategy> &align);
+    EXPORT Stage &compute_with(Stage s, VarOrRVar var, AlignStrategy align = AlignStrategy::Auto);
     // @}
 
     /** Scheduling calls that control how the domain of this stage is
@@ -1712,9 +1715,8 @@ public:
      *  to be fused with another stage 's' from outermost loop to a
      * given LoopLevel. See \ref Stage::compute_with */
     // @{
-    EXPORT Func &compute_with(Stage s, Var var);
-    EXPORT Func &compute_with(Stage s, RVar var);
-    EXPORT Func &compute_with(LoopLevel loop_level);
+    EXPORT Func &compute_with(Stage s, VarOrRVar var, std::map<VarOrRVar, AlignStrategy> align);
+    EXPORT Func &compute_with(Stage s, VarOrRVar var, AlignStrategy align = AlignStrategy::Auto);
 
     /** Compute all of this function once ahead of time. Reusing
      * the example in \ref Func::compute_at :
