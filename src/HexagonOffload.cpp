@@ -276,6 +276,12 @@ public:
         llvm::LLVMContext context;
         std::unique_ptr<llvm::Module> llvm_module(compile_module_to_llvm_module(device_code, context));
 
+        // Generate .bc file before we do any compiling in llvm to capture the inputs.
+        auto temp_bitcode_file = file_make_temp("HexOffLoad", ".bc");
+        debug(0) << "Hexagon device bitcode: " <<  temp_bitcode_file << "\n";
+        auto out = make_raw_fd_ostream(temp_bitcode_file);
+        compile_llvm_module_to_llvm_bitcode(*llvm_module, *out);
+
         llvm::SmallVector<char, 4096> object;
         llvm::raw_svector_ostream object_stream(object);
         compile_llvm_module_to_object(*llvm_module, object_stream);
