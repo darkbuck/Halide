@@ -11,7 +11,7 @@ using namespace Halide;
 using namespace Halide::Internal;
 
 int split_test() {
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Var x("x"), y("y");
         Func f("f"), g("g"), h("h");
@@ -52,7 +52,7 @@ int split_test() {
 int fuse_updates_test() {
     int size = 100;
     int split_size = 7;
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Var x("x"), y("y");
         Func f("f"), g("g"), h("h");
@@ -104,7 +104,7 @@ int fuse_updates_test() {
 }
 
 int fuse_test() {
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Var x("x"), y("y"), z("z");
         Func f("f"), g("g"), h("h");
@@ -142,7 +142,7 @@ int fuse_test() {
 }
 
 int multiple_fuse_group_test() {
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Var x("x"), y("y");
         Func f("f"), g("g"), h("h"), p("p"), q("q");
@@ -206,8 +206,8 @@ int multiple_fuse_group_test() {
 int multiple_outputs_test() {
     const int f_size = 3;
     const int g_size = 4;
-    Image<int> f_im(f_size, f_size), g_im(g_size, g_size);
-    Image<int> f_im_ref(f_size, f_size), g_im_ref(g_size, g_size);
+    Buffer<int> f_im(f_size, f_size), g_im(g_size, g_size);
+    Buffer<int> f_im_ref(f_size, f_size), g_im_ref(g_size, g_size);
 
     {
         Var x("x"), y("y");
@@ -254,8 +254,8 @@ int multiple_outputs_test() {
 int multiple_outputs_test_with_update() {
     const int f_size = 3;
     const int g_size = 4;
-    Image<int> f_im(f_size, f_size), g_im(g_size, g_size);
-    Image<int> f_im_ref(f_size, f_size), g_im_ref(g_size, g_size);
+    Buffer<int> f_im(f_size, f_size), g_im(g_size, g_size);
+    Buffer<int> f_im_ref(f_size, f_size), g_im_ref(g_size, g_size);
 
     {
         Var x("x"), y("y");
@@ -303,7 +303,7 @@ int multiple_outputs_test_with_update() {
 }
 
 int skip_test_1() {
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Var x("x"), y("y");
         Func f("f"), g("g"), h("h");
@@ -338,7 +338,7 @@ int skip_test_1() {
 }
 
 int skip_test_2() {
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Var x("x"), y("y");
         Func f("f"), g("g"), h("h");
@@ -373,7 +373,7 @@ int skip_test_2() {
 }
 
 int fuse_compute_at_test() {
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Var x("x"), y("y");
         Func f("f"), g("g"), h("h"), p("p"), q("q"), r("r");
@@ -422,7 +422,7 @@ int fuse_compute_at_test() {
 }
 
 int double_split_fuse_test() {
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Func f("f"), g("g");
         Var x("x"), y("y"), xo("xo"), xi("xi"), xoo("xoo"), xoi("xoi");
@@ -464,8 +464,8 @@ int double_split_fuse_test() {
 
 int rowsum_test() {
     const int size = 100;
-    Image<int> rowsum_im(size), g_im(size, size);
-    Image<int> rowsum_im_ref(size), g_im_ref(size, size);
+    Buffer<int> rowsum_im(size), g_im(size, size);
+    Buffer<int> rowsum_im_ref(size), g_im_ref(size, size);
 
     {
         Var x("x"), y("y");
@@ -515,11 +515,11 @@ int rowsum_test() {
 int rgb_yuv420_test() {
     // Somewhat approximating the behavior of rgb -> yuv420 (downsample by half in the u and v channels)
     const int size = 100;
-    Image<int> y_im(size, size), u_im(size/2, size/2), v_im(size/2, size/2);
-    Image<int> y_im_ref(size, size), u_im_ref(size/2, size/2), v_im_ref(size/2, size/2);
+    Buffer<int> y_im(size, size), u_im(size/2, size/2), v_im(size/2, size/2);
+    Buffer<int> y_im_ref(size, size), u_im_ref(size/2, size/2), v_im_ref(size/2, size/2);
 
     // Compute a random image
-    Image<int> input(size, size, 3);
+    Buffer<int> input(size, size, 3);
     for (int r = 0; r < size; r++) {
         for (int g = 0; g < size; g++) {
             for (int b = 0; b < 3; b++) {
@@ -583,7 +583,7 @@ int rgb_yuv420_test() {
 }
 
 int vectorize_test() {
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Var x("x"), y("y");
         Func f("f"), g("g"), h("h");
@@ -624,7 +624,7 @@ int vectorize_test() {
 }
 
 int some_are_skipped_test() {
-    Image<int> im_ref, im;
+    Buffer<int> im_ref, im;
     {
         Var x("x"), y("y");
         Func f("f"), g("g"), h("h"), p("p");
@@ -662,6 +662,69 @@ int some_are_skipped_test() {
     if (check_image(im, func)) {
         return -1;
     }
+    return 0;
+}
+
+int multiple_outputs_on_gpu_test() {
+    Target target = get_jit_target_from_environment();
+    if (!target.has_gpu_feature()) {
+        printf("No GPU feature enabled in target. Skipping test\n");
+        return 0;
+    }
+
+    const int f_size = 550;
+    const int g_size = 110;
+    Buffer<int> f_im(f_size, f_size), g_im(g_size, g_size);
+    Buffer<int> f_im_ref(f_size, f_size), g_im_ref(g_size, g_size);
+
+    {
+        Var x("x"), y("y");
+        Func f("f"), g("g"), input("q");
+
+        input(x, y) = x + y + 1;
+        f(x, y) = 100 - input(x, y);
+        g(x, y) = x + input(x, y);
+        f.realize(f_im_ref);
+        g.realize(g_im_ref);
+    }
+
+    {
+        Var x("x"), y("y");
+        Func f("f"), g("g"), input("input");
+
+        input(x, y) = x + y + 1;
+        f(x, y) = 100 - input(x, y);
+        g(x, y) = x + input(x, y);
+
+        input.compute_root();
+        f.compute_root().gpu_tile(x, y, 8, 8);
+        g.compute_root().gpu_tile(x, y, 8, 8);
+
+        debug(0) << "Scheduling compute_with\n";
+        g.compute_with(f, Var::gpu_blocks());
+
+        Realization r(f_im, g_im);
+        Pipeline({f, g}).realize(r);
+        r[0].copy_to_host();
+        r[1].copy_to_host();
+    }
+
+    std::cout << "Checking f output\n";
+    auto f_func = [f_im_ref](int x, int y) {
+        return f_im_ref(x, y);
+    };
+    if (check_image(f_im, f_func)) {
+        return -1;
+    }
+
+    std::cout << "Checking g output\n";
+    auto g_func = [g_im_ref](int x, int y) {
+        return g_im_ref(x, y);
+    };
+    if (check_image(g_im, g_func)) {
+        return -1;
+    }
+
     return 0;
 }
 
@@ -733,6 +796,11 @@ int main(int argc, char **argv) {
 
     printf("Running some are skipped test\n");
     if (some_are_skipped_test() != 0) {
+        return -1;
+    }
+
+    printf("Running multiple outputs on gpu test\n");
+    if (multiple_outputs_on_gpu_test() != 0) {
         return -1;
     }
 

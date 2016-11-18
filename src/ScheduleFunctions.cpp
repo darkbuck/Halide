@@ -920,13 +920,15 @@ private:
             // scheduling flag (parallel, vectorize, or unrolled) since it is of
             // extent one anyway.
             ForType for_type = op->for_type;
+            DeviceAPI device_api = op->device_api;
             if (is_one(extent_val)) {
                 for_type = ForType::Serial;
+                device_api = DeviceAPI::None;
             }
 
             stmt = For::make(new_var, Variable::make(Int(32), new_var + ".loop_min"),
                              Variable::make(Int(32), new_var + ".loop_extent"),
-                             for_type, op->device_api, body);
+                             for_type, device_api, body);
 
             // Add let stmts defining the bound of the renamed for-loop.
             stmt = LetStmt::make(new_var + ".loop_min", min_val, stmt);
