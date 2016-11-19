@@ -955,6 +955,47 @@ Stmt substitute_bounds(Stmt s, map<string, Expr> &bounds, const map<string, Expr
     return s;
 }
 
+class ShiftLoops : public IRMutator {
+    const map<string, Expr> &shifts; // Add the shift factor to the old var
+
+    using IRMutator::visit;
+
+    Expr shift_let(const string &name, Expr value) {
+        value = mutate(value);
+        const auto &iter = shifts.find(name);
+        if (iter != shifts.end()) {
+            value = simplify(value + iter->second);
+        }
+        return value;
+    }
+
+    void visit(const For *op) {
+        IRMutator::visit(op);
+        const auto &iter = shifts.find(op->name);
+        if (iter != shifts.end()) {
+            op = stmt.as<For>();
+            internal_assert(op);
+            Expr adjusted = Variable::make(Int(32), op->name) - iter->second;
+            Stmt body = substitute(op->name, adjusted, op->body);
+            stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
+        }
+    }
+
+    void visit(const LetStmt *op) {
+        Expr value = shift_let(op->name, op->value);
+        Stmt body = mutate(op->body);
+        if (value.same_as(op->value) &&
+            body.same_as(op->body)) {
+            stmt = op;
+        } else {
+            stmt = LetStmt::make(op->name, value, body);
+        }
+    }
+
+public:
+    ShiftLoops(const map<string, Expr> &s) : shifts(s) {}
+};
+
 // Inject the allocation and realization of a group of functions which are
 // to be fused into an existing loop nest using its schedule.
 class InjectGroupRealization : public IRMutator {
@@ -1049,10 +1090,63 @@ private:
             }
         }
 
-        // Shifts the loops according to the alignment strategies.
+        // Shifts the loops according to the alignment strategies. Do this after
+        // the fused loop renaming and adding the fused let stmts.
+        map<string, Expr> shifts;
+        for (size_t i = 0; i < group.size(); ++i) {
+            if (!skip[group[i].name()]) {
+                const Function &f = group[i];
+                compute_shift_factor(skip, f, f.name() + ".s0.", f.definition(), shifts);
+                for (size_t j = 0; j < f.updates().size(); ++j) {
+                    string prefix = f.name() + ".s" + std::to_string(j+1) + ".";
+                    compute_shift_factor(skip, f, prefix, f.updates()[j], shifts);
+                }
+            }
+        }
 
+        ShiftLoops shifter(shifts);
+        produce = shifter.mutate(produce);
 
         return Block::make(produce, consume);
+    }
+
+    void compute_shift_factor(const map<string, bool> &skip, Function f,
+                              const string &prefix, const Definition &def,
+                              map<string, Expr> &shifts) {
+        const vector<Dim> &dims = def.schedule().dims(); // From inner to outer
+        const LoopLevel &fuse_level = def.schedule().fuse_level().level;
+        const map<string, AlignStrategy> &align_strategy = def.schedule().fuse_level().align;
+
+        size_t start_fuse = dims.size();
+        if (!fuse_level.is_inline() && !fuse_level.is_root()) {
+            if (!skip.find(fuse_level.func().name())->second) {
+                const auto iter = std::find_if(dims.begin(), dims.end(),
+                    [&fuse_level](const Dim& d) { return var_name_match(d.var, fuse_level.var().name()); });
+                internal_assert(iter != dims.end());
+                start_fuse = iter - dims.begin();
+
+                for (int i = start_fuse; i < (int)dims.size()-1; ++i) {
+                    const Dim &dim = dims[i];
+                    Expr shift_val;
+                    const auto &it = align_strategy.find(dim.var);
+                    if ((it == align_strategy.end()) ||
+                        (it->second == AlignStrategy::NoAlign) ||
+                        (it->second == AlignStrategy::Auto)) {
+                        continue;
+                    } else if (it->second == AlignStrategy::AlignStart) {
+                        //TODO(psuriana): determine the shift factor
+                        shift_val = Variable::make(Int(32), prefix + dim.var + ".loop_min");
+                    } else {
+                        internal_assert(it->second == AlignStrategy::AlignEnd);
+                        //TODO(psuriana): determine the shift factor
+                        shift_val = Variable::make(Int(32), prefix + dim.var + ".loop_max");
+                    }
+                    internal_assert(shift_val.defined());
+                    shifts.emplace(prefix + dim.var + ".loop_max", shift_val);
+                    shifts.emplace(prefix + dim.var + ".loop_min", shift_val);
+                }
+            }
+        }
     }
 
     Stmt build_produce(const map<string, bool> &skip, Function f, Stmt produce, map<string, Expr> &bounds,
