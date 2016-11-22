@@ -330,7 +330,7 @@ Func CameraPipe::build() {
         .vectorize(xi)
         .unroll(yi);
     deinterleaved.compute_at(processed, yi).store_at(processed, yo)
-        .fold_storage(y, 4)
+        .fold_storage(y, 8)
         .reorder(c, x, y)
         .vectorize(x, 2*vec, TailStrategy::RoundUp)
         .unroll(c);
