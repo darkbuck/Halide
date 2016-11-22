@@ -261,9 +261,9 @@ public:
      *
      */
     // @{
-    EXPORT Stage &compute_with(LoopLevel loop_level, const std::map<VarOrRVar, AlignStrategy> &align);
+    EXPORT Stage &compute_with(LoopLevel loop_level, const std::vector<std::pair<VarOrRVar, AlignStrategy>> &align);
     EXPORT Stage &compute_with(LoopLevel loop_level, AlignStrategy align = AlignStrategy::Auto);
-    EXPORT Stage &compute_with(Stage s, VarOrRVar var, const std::map<VarOrRVar, AlignStrategy> &align);
+    EXPORT Stage &compute_with(Stage s, VarOrRVar var, const std::vector<std::pair<VarOrRVar, AlignStrategy>> &align);
     EXPORT Stage &compute_with(Stage s, VarOrRVar var, AlignStrategy align = AlignStrategy::Auto);
     // @}
 
@@ -1715,7 +1715,7 @@ public:
      *  to be fused with another stage 's' from outermost loop to a
      * given LoopLevel. See \ref Stage::compute_with */
     // @{
-    EXPORT Func &compute_with(Stage s, VarOrRVar var, std::map<VarOrRVar, AlignStrategy> align);
+    EXPORT Func &compute_with(Stage s, VarOrRVar var, const std::vector<std::pair<VarOrRVar, AlignStrategy>> &align);
     EXPORT Func &compute_with(Stage s, VarOrRVar var, AlignStrategy align = AlignStrategy::Auto);
 
     /** Compute all of this function once ahead of time. Reusing

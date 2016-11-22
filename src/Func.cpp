@@ -1617,7 +1617,7 @@ Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy
     return *this;
 }
 
-Stage &Stage::compute_with(LoopLevel loop_level, const map<VarOrRVar, AlignStrategy> &align) {
+Stage &Stage::compute_with(LoopLevel loop_level, const vector<pair<VarOrRVar, AlignStrategy>> &align) {
     map<string, AlignStrategy> align_str;
     for (const auto &iter: align) {
         align_str.emplace(iter.first.name(), iter.second);
@@ -1626,11 +1626,11 @@ Stage &Stage::compute_with(LoopLevel loop_level, const map<VarOrRVar, AlignStrat
 }
 
 Stage &Stage::compute_with(LoopLevel loop_level, AlignStrategy align) {
-    map<string, AlignStrategy> align_str = {{loop_level.var().name(), align}};
+    vector<pair<VarOrRVar, AlignStrategy>> align_str = {{VarOrRVar(loop_level.var().name()), align}};
     return compute_with(loop_level, align_str);
 }
 
-Stage &Stage::compute_with(Stage s, VarOrRVar var, const map<VarOrRVar, AlignStrategy> &align) {
+Stage &Stage::compute_with(Stage s, VarOrRVar var, const vector<pair<VarOrRVar, AlignStrategy>> &align) {
     return compute_with(LoopLevel(s.func, var, s.stage), align);
 }
 
@@ -2122,7 +2122,7 @@ Func &Func::compute_at(Func f, Var var) {
     return compute_at(LoopLevel(f, var));
 }
 
-Func &Func::compute_with(Stage s, VarOrRVar var, std::map<VarOrRVar, AlignStrategy> align) {
+Func &Func::compute_with(Stage s, VarOrRVar var, const vector<pair<VarOrRVar, AlignStrategy>> &align) {
     invalidate_cache();
     Stage(func, func.definition(), 0, args()).compute_with(s, var, align);
     return *this;

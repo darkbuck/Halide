@@ -36,7 +36,7 @@ int split_test() {
         Var xo("xo"), xi("xi");
         f.split(x, xo, xi, 7);
         g.split(x, xo, xi, 7);
-        g.compute_with(f, xo);
+        g.compute_with(f, xo, AlignStrategy::AlignEnd);
         im = h.realize(200, 200);
     }
 

@@ -870,22 +870,27 @@ Stmt inject_stmt(Stmt root, Stmt injected, const LoopLevel &level) {
     return root;
 }
 
-class SubstituteBounds : public IRMutator {
+// Collect all let stmts.
+class CollectBounds : public IRVisitor {
 public:
-    map<string, Expr> &bounds;
+    map<string, Expr> bounds;
+
+private:
+    using IRVisitor::visit;
+
+    void visit(const LetStmt *op) {
+        bounds.emplace(op->name, op->value);
+        IRVisitor::visit(op);
+    }
+};
+
+class SubstituteFusedBounds : public IRMutator {
+public:
     const map<string, Expr> &replacements;
-    SubstituteBounds(map<string, Expr> &b, const map<string, Expr> &r) : bounds(b), replacements(r) {}
+    SubstituteFusedBounds(const map<string, Expr> &r) : replacements(r) {}
 
 private:
     using IRMutator::visit;
-
-    void visit(const LetStmt *op) {
-        auto iter = bounds.find(op->name);
-        if (iter != bounds.end()) {
-            iter->second = op->value;
-        }
-        IRMutator::visit(op);
-    }
 
     void visit(const For *op) {
         const Variable *min_var = op->min.as<Variable>();
@@ -944,13 +949,12 @@ private:
 
 // The bounds of every loop exist in 'replacements' should be replaced. The
 // loop is also renamed by adding ".fused" in the original name before the
-// variable name. We also replaced the value of element in 'bounds' when we find
-// let stmt with the same name in 's'.
-Stmt substitute_bounds(Stmt s, map<string, Expr> &bounds, const map<string, Expr> &replacements) {
+// variable name.
+Stmt substitute_fused_bounds(Stmt s, const map<string, Expr> &replacements) {
     if (!s.defined()) {
         return s;
     }
-    SubstituteBounds subs(bounds, replacements);
+    SubstituteFusedBounds subs(replacements);
     s = subs.mutate(s);
     return s;
 }
@@ -973,6 +977,7 @@ class ShiftLoops : public IRMutator {
         IRMutator::visit(op);
         const auto &iter = shifts.find(op->name);
         if (iter != shifts.end()) {
+            debug(5) << "...Shifting " << op->name << " by " << iter->second << "\n";
             op = stmt.as<For>();
             internal_assert(op);
             Expr adjusted = Variable::make(Int(32), op->name) - iter->second;
@@ -1052,7 +1057,6 @@ private:
         }
 
         // Build the loops.
-        map<string, Expr> bounds; // The original bounds of the loopness (without any loop-fusion)
         map<string, Expr> replacements;
 
         int parent_index = -1; // The first function in the group that is not skipped
@@ -1060,7 +1064,7 @@ private:
         Stmt produce;
         for (size_t i = 0; i < group.size(); ++i) {
             if (!skip[group[i].name()]) {
-                produce = build_produce(skip, group[i], produce, bounds, replacements, add_lets);
+                produce = build_produce(skip, group[i], produce, replacements, add_lets);
                 if (parent_index == -1) {
                     parent_index = i;
                 }
@@ -1074,14 +1078,34 @@ private:
             produce = LetStmt::make(b.first, b.second, produce);
         }
 
+        // The original bounds of the loopness (without any loop-fusion)
+        CollectBounds subs;
+        produce.accept(&subs);
+
+        // Shifts the loops according to the alignment strategies.
+        map<string, Expr> shifts;
+        for (size_t i = 0; i < group.size(); ++i) {
+            if (!skip[group[i].name()]) {
+                const Function &f = group[i];
+                compute_shift_factor(skip, f, f.name() + ".s0.", f.definition(), subs.bounds, shifts);
+                for (size_t j = 0; j < f.updates().size(); ++j) {
+                    string prefix = f.name() + ".s" + std::to_string(j+1) + ".";
+                    compute_shift_factor(skip, f, prefix, f.updates()[j], subs.bounds, shifts);
+                }
+            }
+        }
+
+        ShiftLoops shifter(shifts);
+        produce = shifter.mutate(produce);
+
         // Replace all the child fused loops with the appropriate bounds (i.e.
         // the min/max should refer to the parent loop vars and the extent should
         // be one).
-        produce = substitute_bounds(produce, bounds, replacements);
+        produce = substitute_fused_bounds(produce, replacements);
 
         // Replace the bounds of parent fused loops with union of bound of
         // the fused loops.
-        produce = replace_parent_bound_with_union_bound(skip, group[parent_index], produce, bounds);
+        produce = replace_parent_bound_with_union_bound(skip, group[parent_index], produce, subs.bounds);
 
         // Add the producer nodes.
         for (size_t i = group.size(); i > 0; --i) {
@@ -1090,28 +1114,12 @@ private:
             }
         }
 
-        // Shifts the loops according to the alignment strategies. Do this after
-        // the fused loop renaming and adding the fused let stmts.
-        map<string, Expr> shifts;
-        for (size_t i = 0; i < group.size(); ++i) {
-            if (!skip[group[i].name()]) {
-                const Function &f = group[i];
-                compute_shift_factor(skip, f, f.name() + ".s0.", f.definition(), shifts);
-                for (size_t j = 0; j < f.updates().size(); ++j) {
-                    string prefix = f.name() + ".s" + std::to_string(j+1) + ".";
-                    compute_shift_factor(skip, f, prefix, f.updates()[j], shifts);
-                }
-            }
-        }
-
-        ShiftLoops shifter(shifts);
-        produce = shifter.mutate(produce);
-
         return Block::make(produce, consume);
     }
 
     void compute_shift_factor(const map<string, bool> &skip, Function f,
                               const string &prefix, const Definition &def,
+                              const map<string, Expr> &bounds,
                               map<string, Expr> &shifts) {
         const vector<Dim> &dims = def.schedule().dims(); // From inner to outer
         const LoopLevel &fuse_level = def.schedule().fuse_level().level;
@@ -1120,41 +1128,64 @@ private:
         size_t start_fuse = dims.size();
         if (!fuse_level.is_inline() && !fuse_level.is_root()) {
             if (!skip.find(fuse_level.func().name())->second) {
-                const auto iter = std::find_if(dims.begin(), dims.end(),
-                    [&fuse_level](const Dim& d) { return var_name_match(d.var, fuse_level.var().name()); });
-                internal_assert(iter != dims.end());
-                start_fuse = iter - dims.begin();
-
+                {
+                    const auto iter = std::find_if(dims.begin(), dims.end(),
+                        [&fuse_level](const Dim& d) { return var_name_match(d.var, fuse_level.var().name()); });
+                    internal_assert(iter != dims.end());
+                    start_fuse = iter - dims.begin();
+                }
                 for (int i = start_fuse; i < (int)dims.size()-1; ++i) {
-                    const Dim &dim = dims[i];
+                    const string &var = dims[i].var;
                     Expr shift_val;
-                    const auto &it = align_strategy.find(dim.var);
-                    if ((it == align_strategy.end()) ||
-                        (it->second == AlignStrategy::NoAlign) ||
-                        (it->second == AlignStrategy::Auto)) {
-                        continue;
-                    } else if (it->second == AlignStrategy::AlignStart) {
-                        //TODO(psuriana): determine the shift factor
-                        shift_val = Variable::make(Int(32), prefix + dim.var + ".loop_min");
-                    } else {
-                        internal_assert(it->second == AlignStrategy::AlignEnd);
-                        //TODO(psuriana): determine the shift factor
-                        shift_val = Variable::make(Int(32), prefix + dim.var + ".loop_max");
+
+                    auto iter = align_strategy.begin();
+                    for (; iter != align_strategy.end(); ++iter) {
+                        if (var_name_match(var, iter->first)) {
+                            break;
+                        }
                     }
+
+                    if ((iter == align_strategy.end()) ||
+                        (iter->second == AlignStrategy::NoAlign) ||
+                        (iter->second == AlignStrategy::Auto)) {
+                        continue;
+                    }
+
+                    string parent_prefix = fuse_level.func().name() + ".s" + std::to_string(fuse_level.stage()) + ".";
+
+                    if (iter->second == AlignStrategy::AlignStart) {
+                        const auto &it1 = bounds.find(parent_prefix + var + ".loop_min");
+                        internal_assert(it1 != bounds.end()) << "Can't find " << parent_prefix + var + ".loop_min" << "\n";
+                        Expr parent_min = it1->second;
+
+                        const auto &it2 = bounds.find(prefix + var + ".loop_min");
+                        internal_assert(it2 != bounds.end()) << "Can't find " << prefix + var + ".loop_min" + ".loop_min" << "\n";
+                        shift_val = parent_min - it2->second;
+                    } else {
+                        internal_assert(iter->second == AlignStrategy::AlignEnd);
+                        const auto &it1 = bounds.find(parent_prefix + var + ".loop_max");
+                        internal_assert(it1 != bounds.end());
+                        Expr parent_max = it1->second;
+
+                        const auto &it2 = bounds.find(prefix + var + ".loop_max");
+                        internal_assert(it2 != bounds.end());
+                        shift_val = parent_max - it2->second;
+                    }
+
                     internal_assert(shift_val.defined());
-                    shifts.emplace(prefix + dim.var + ".loop_max", shift_val);
-                    shifts.emplace(prefix + dim.var + ".loop_min", shift_val);
+                    shifts.emplace(prefix + var + ".loop_max", shift_val);
+                    shifts.emplace(prefix + var + ".loop_in", shift_val);
                 }
             }
         }
     }
 
-    Stmt build_produce(const map<string, bool> &skip, Function f, Stmt produce, map<string, Expr> &bounds,
+    Stmt build_produce(const map<string, bool> &skip, Function f, Stmt produce,
                        map<string, Expr> &replacements, vector<pair<string, Expr>> &add_lets) {
         string prefix = f.name() + ".s0.";
         produce = inject_stmt(produce,
                               build_produce_definition(skip, f, prefix, f.definition(),
-                                                       false, bounds, replacements, add_lets),
+                                                       false, replacements, add_lets),
                               f.definition().schedule().fuse_level().level);
 
         for (size_t j = 0; j < f.updates().size(); ++j) {
@@ -1162,7 +1193,7 @@ private:
             string prefix = f.name() + ".s" + std::to_string(j+1) + ".";
             produce = inject_stmt(produce,
                                   build_produce_definition(skip, f, prefix, def, true,
-                                                           bounds, replacements, add_lets),
+                                                           replacements, add_lets),
                                   def.schedule().fuse_level().level);
         }
         return produce;
@@ -1170,8 +1201,7 @@ private:
 
     Stmt build_produce_definition(const map<string, bool> &skip, Function f,
                                   const string &prefix, const Definition &def,
-                                  bool is_update, map<string, Expr> &bounds,
-                                  map<string, Expr> &replacements,
+                                  bool is_update, map<string, Expr> &replacements,
                                   vector<pair<string, Expr>> &add_lets) {
         const vector<Dim> &dims = def.schedule().dims(); // From inner to outer
         const LoopLevel &fuse_level = def.schedule().fuse_level().level;
@@ -1203,19 +1233,11 @@ private:
             // Should ignore the __outermost dummy dimension.
             for (size_t i = iter - dims.begin(); i < dims.size() - 1; ++i) {
                 string var = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + dims[i].var;
-                bounds.emplace(var + ".loop_min", Expr());
-                bounds.emplace(var + ".loop_max", Expr());
-                bounds.emplace(var + ".loop_extent", Expr());
-
                 string var_orig = pair.func_1 + ".s" + std::to_string(pair.stage_1) + "." + dims[i].var;
                 Expr val = Variable::make(Int(32), var_orig);
                 replacements.emplace(var + ".loop_min", val);
                 replacements.emplace(var + ".loop_max", val);
                 replacements.emplace(var + ".loop_extent", make_const(Int(32), 1));
-
-                bounds.emplace(var_orig + ".loop_min", Expr());
-                bounds.emplace(var_orig + ".loop_max", Expr());
-                bounds.emplace(var_orig + ".loop_extent", Expr());
             }
         }
 
@@ -1332,8 +1354,7 @@ private:
         }
 
         // Now, replace the bounds of the parent fused loops with the union bounds.
-        map<string, Expr> empty_bounds;
-        produce = substitute_bounds(produce, empty_bounds, replacements);
+        produce = substitute_fused_bounds(produce, replacements);
         return produce;
     }
 

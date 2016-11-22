@@ -48,7 +48,7 @@ Func CameraPipe::hot_pixel_suppression(Func input) {
     Expr a = max(max(input(x-2, y), input(x+2, y)),
                  max(input(x, y-2), input(x, y+2)));
 
-    Func denoised;
+    Func denoised("denoised");
     denoised(x, y) = clamp(input(x, y), 0, a);
 
     return denoised;
@@ -68,7 +68,7 @@ Func CameraPipe::interleave_y(Func a, Func b) {
 
 Func CameraPipe::deinterleave(Func raw) {
     // Deinterleave the color channels
-    Func deinterleaved;
+    Func deinterleaved("deinterleaved");
 
     deinterleaved(x, y, c) = select(c == 0, raw(2*x, 2*y),
                                     c == 1, raw(2*x+1, 2*y),
@@ -84,14 +84,15 @@ std::pair<Func, Scheduler> CameraPipe::demosaic(Func deinterleaved) {
     // gr refers to green sites in the red rows
 
     // Give more convenient names to the four channels we know
-    Func r_r, g_gr, g_gb, b_b;
+    Func r_r("r_r"), g_gr("g_gr"), g_gb("g_gb"), b_b("b_b");
     g_gr(x, y) = deinterleaved(x, y, 0);
     r_r(x, y)  = deinterleaved(x, y, 1);
     b_b(x, y)  = deinterleaved(x, y, 2);
     g_gb(x, y) = deinterleaved(x, y, 3);
 
     // These are the ones we need to interpolate
-    Func b_r, g_r, b_gr, r_gr, b_gb, r_gb, r_b, g_b;
+    Func b_r("b_r"), g_r("g_r"), b_gr("b_gr"), r_gr("r_gr");
+    Func b_gb("b_gb"), r_gb("r_gb"), r_b("r_b"), g_b("g_b");
 
     // First calculate green at the red and blue sites
 
@@ -169,7 +170,7 @@ std::pair<Func, Scheduler> CameraPipe::demosaic(Func deinterleaved) {
     Func b = interleave_y(interleave_x(b_gr, b_r),
                           interleave_x(b_b, b_gb));
 
-    Func output;
+    Func output("output");
     output(x, y, c) = select(c == 0, r(x, y),
                              c == 1, g(x, y),
                                      b(x, y));
@@ -186,11 +187,12 @@ std::pair<Func, Scheduler> CameraPipe::demosaic(Func deinterleaved) {
         g_r.compute_at(processed, yi)
             .store_at(processed, yo)
             .vectorize(x, 2*vec, TailStrategy::RoundUp)
-            .fold_storage(y, 2);
+            .fold_storage(y, 4);
         g_b.compute_at(processed, yi)
             .store_at(processed, yo)
             .vectorize(x, 2*vec, TailStrategy::RoundUp)
-            .fold_storage(y, 2);
+            .fold_storage(y, 4);
+        g_b.compute_with(g_r, x, {{x, AlignStrategy::AlignStart}, {y, AlignStrategy::AlignStart}});
         output.compute_at(processed, x)
             .vectorize(x)
             .unroll(y)
@@ -212,13 +214,13 @@ Func CameraPipe::color_correct(Func input) {
     // calibrated matrices using inverse kelvin.
     Expr kelvin = color_temp;
 
-    Func matrix;
+    Func matrix("matrix");
     Expr alpha = (1.0f/kelvin - 1.0f/3200) / (1.0f/7000 - 1.0f/3200);
     Expr val =  (matrix_3200(x, y) * alpha + matrix_7000(x, y) * (1 - alpha));
     matrix(x, y) = cast<int16_t>(val * 256.0f); // Q8.8 fixed point
     matrix.compute_root();
 
-    Func corrected;
+    Func corrected("corrected");
     Expr ir = cast<int32_t>(input(x, y, 0));
     Expr ig = cast<int32_t>(input(x, y, 1));
     Expr ib = cast<int32_t>(input(x, y, 2));
@@ -276,7 +278,7 @@ Func CameraPipe::apply_curve(Func input) {
 
     curve.compute_root(); // It's a LUT, compute it once ahead of time.
 
-    Func curved;
+    Func curved("curved");
 
     if (lutResample == 1) {
         // Use clamp to restrict size of LUT as allocated by compute_root
@@ -300,12 +302,12 @@ Func CameraPipe::build() {
     // to make a 2560x1920 output image, just like the FCam pipe, so
     // shift by 16, 12. We also convert it to be signed, so we can deal
     // with values that fall below 0 during processing.
-    Func shifted;
+    Func shifted("shifted");
     shifted(x, y) = cast<int16_t>(input(x+16, y+12));
 
     Func denoised = hot_pixel_suppression(shifted);
     Func deinterleaved = deinterleave(denoised);
-    Func demosaiced; Scheduler demosaiced_scheduler;
+    Func demosaiced("demosaiced"); Scheduler demosaiced_scheduler;
     std::tie(demosaiced, demosaiced_scheduler) = demosaic(deinterleaved);
     Func corrected = color_correct(demosaiced);
     Func processed = apply_curve(corrected);
