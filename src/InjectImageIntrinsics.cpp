@@ -8,20 +8,24 @@
 namespace Halide {
 namespace Internal {
 
+using std::map;
 using std::string;
 using std::vector;
 
 class InjectImageIntrinsics : public IRMutator {
 public:
-    InjectImageIntrinsics() : inside_kernel_loop(false) {}
+    InjectImageIntrinsics(const map<string, Function> &e) : inside_kernel_loop(false), env(e) {}
     Scope<int> scope;
     bool inside_kernel_loop;
+    Scope<int> kernel_scope_allocations;
+    const map<string, Function> &env;
 
 private:
     using IRMutator::visit;
 
     void visit(const Provide *provide) {
-        if (!inside_kernel_loop) {
+        if (!inside_kernel_loop ||
+            kernel_scope_allocations.contains(provide->name)) {
             IRMutator::visit(provide);
             return;
         }
@@ -51,13 +55,17 @@ private:
     void visit(const Call *call) {
         if (!inside_kernel_loop ||
             (call->call_type != Call::Halide &&
-             call->call_type != Call::Image)) {
+             call->call_type != Call::Image) ||
+            kernel_scope_allocations.contains(call->name)) {
             IRMutator::visit(call);
             return;
         }
 
         string name = call->name;
-        if (call->call_type == Call::Halide && call->func.outputs() > 1) {
+        auto it = env.find(name);
+        if (call->call_type == Call::Halide &&
+            it != env.end() &&
+            it->second.outputs() > 1) {
             name = name + '.' + std::to_string(call->value_index);
         }
 
@@ -111,7 +119,7 @@ private:
                        Call::image_load,
                        args,
                        Call::PureIntrinsic,
-                       Function(),
+                       nullptr,
                        0,
                        call->image,
                        call->param);
@@ -136,21 +144,30 @@ private:
     void visit(const For *loop) {
         bool old_kernel_loop = inside_kernel_loop;
         if (loop->for_type == ForType::Parallel &&
-            (loop->device_api == DeviceAPI::GLSL ||
-                loop->device_api == DeviceAPI::Renderscript)) {
+            loop->device_api == DeviceAPI::GLSL) {
             inside_kernel_loop = true;
         }
         IRMutator::visit(loop);
         inside_kernel_loop = old_kernel_loop;
     }
+
+    void visit(const Realize *op) {
+        if (inside_kernel_loop) {
+            kernel_scope_allocations.push(op->name, 0);
+            IRMutator::visit(op);
+            kernel_scope_allocations.pop(op->name);
+        } else {
+            IRMutator::visit(op);
+        }
+    }
 };
 
-Stmt inject_image_intrinsics(Stmt s) {
+Stmt inject_image_intrinsics(Stmt s, const map<string, Function> &env) {
     debug(4)
         << "InjectImageIntrinsics: inject_image_intrinsics stmt: "
         << s << "\n";
     s = zero_gpu_loop_mins(s);
-    InjectImageIntrinsics gl;
+    InjectImageIntrinsics gl(env);
     return gl.mutate(s);
 }
 }

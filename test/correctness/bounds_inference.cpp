@@ -18,9 +18,13 @@ int main(int argc, char **argv) {
         f.gpu_tile(x, y, 16, 16);
         g.gpu_tile(x, 128);
         h.gpu_tile(x, 128);
+    } else if (target.features_any_of({Target::HVX_64, Target::HVX_128})) {
+        f.hexagon().vectorize(x, 32);
+        g.hexagon().vectorize(x, 32);
+        h.hexagon().vectorize(x, 32);
     }
 
-    Image<int> out = f.realize(32, 32, target);
+    Buffer<int> out = f.realize(32, 32, target);
 
     for (int y = 0; y < 32; y++) {
         for (int x = 0; x < 32; x++) {

@@ -6,6 +6,7 @@
  */
 
 #include "Expr.h"
+#include "BufferPtr.h"
 
 namespace Halide {
 namespace Internal {
@@ -70,7 +71,8 @@ public:
      * bound value. Only relevant when jitting */
     template<typename T>
     NO_INLINE T get_scalar() const {
-        user_assert(type() == type_of<T>())
+        // Allow get_scalar<uint64_t>() for all Handle types
+        user_assert(type() == type_of<T>() || (type().is_handle() && type_of<T>() == UInt(64)))
             << "Can't get Param<" << type()
             << "> as scalar of type " << type_of<T>() << "\n";
         return *((const T *)(get_scalar_address()));
@@ -84,47 +86,26 @@ public:
      * value. Only relevant when jitting */
     template<typename T>
     NO_INLINE void set_scalar(T val) {
-        user_assert(type() == type_of<T>())
+        // Allow set_scalar<uint64_t>() for all Handle types
+        user_assert(type() == type_of<T>() || (type().is_handle() && type_of<T>() == UInt(64)))
             << "Can't set Param<" << type()
             << "> to scalar of type " << type_of<T>() << "\n";
         *((T *)(get_scalar_address())) = val;
     }
 
-    /** If the parameter is a scalar parameter, get its default
-     * value. */
-    template<typename T>
-    NO_INLINE T get_default() const {
-        user_assert(type() == type_of<T>())
-            << "Can't get default for Param<" << type()
-            << "> to scalar of type " << type_of<T>() << "\n";
-        return *((T *)(get_default_address()));
-    }
-
-    /** If the parameter is a scalar parameter, set its default
-     * value. Useful when jitting and for introspection on code
-     * written in Halide. */
-    template<typename T>
-    NO_INLINE T set_default(const T &val) const {
-        user_assert(type() == type_of<T>())
-            << "Can't set default for Param<" << type()
-            << "> to scalar of type " << type_of<T>() << "\n";
-        *((T *)(get_default_address())) = val;
-    }
-
     /** If the parameter is a buffer parameter, get its currently
      * bound buffer. Only relevant when jitting */
-    EXPORT Buffer get_buffer() const;
+    EXPORT BufferPtr get_buffer() const;
 
     /** If the parameter is a buffer parameter, set its current
      * value. Only relevant when jitting */
-    EXPORT void set_buffer(Buffer b);
+    EXPORT void set_buffer(BufferPtr b);
 
     /** Get the pointer to the current value of the scalar
      * parameter. For a given parameter, this address will never
      * change. Only relevant when jitting. */
 
     EXPORT void *get_scalar_address() const;
-    EXPORT void *get_default_address() const;
 
     /** Tests if this handle is the same as another handle */
     EXPORT bool same_as(const Parameter &other) const;
@@ -138,9 +119,11 @@ public:
     EXPORT void set_min_constraint(int dim, Expr e);
     EXPORT void set_extent_constraint(int dim, Expr e);
     EXPORT void set_stride_constraint(int dim, Expr e);
+    EXPORT void set_host_alignment(int bytes);
     EXPORT Expr min_constraint(int dim) const;
     EXPORT Expr extent_constraint(int dim) const;
     EXPORT Expr stride_constraint(int dim) const;
+    EXPORT int host_alignment() const;
     //@}
 
     /** Get and set constraints for scalar parameters. These are used

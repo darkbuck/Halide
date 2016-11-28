@@ -6,10 +6,6 @@ using namespace Halide;
 int main(int argc, char **argv) {
 
     Target target = get_jit_target_from_environment();
-    if (!target.has_gpu_feature() && !target.has_feature(Target::OpenGLCompute)) {
-        printf("No gpu target enabled. Skipping test.\n");
-        return 0;
-    }
 
     // We want to test all possible data flows for a buffer:
 
@@ -36,15 +32,20 @@ int main(int argc, char **argv) {
         out(x) = g(x) + 3;
 
         f.compute_root();
-        g.compute_root().gpu_tile(x, 16);
+        if (target.has_gpu_feature()) {
+            g.compute_root().gpu_tile(x, 16);
+        } else if (target.features_any_of({Target::HVX_64, Target::HVX_128})) {
+            g.compute_root().hexagon();
+        }
         out.compute_root();
 
-        Image<int> input(1024);
+        Buffer<int> input(1024);
         lambda(x, x * 17 + 83).realize(input);
         in.set(input);
 
-        Image<int> output1(1024);
+        Buffer<int> output1(1024);
         out.realize(output1);
+        output1.copy_to_host();
 
         for (int x = 0; x < 1024; x++) {
             int correct = (input(x) + 1) * 2 + 3;
@@ -64,15 +65,21 @@ int main(int argc, char **argv) {
         f(x) = in(x) + 1;
         out(x) = f(x) * 2;
 
-        f.compute_root().gpu_tile(x, 16);
-        out.compute_root().gpu_tile(x, 16);
+        if (target.has_gpu_feature()) {
+            f.compute_root().gpu_tile(x, 16);
+            out.compute_root().gpu_tile(x, 16);
+        } else if (target.features_any_of({Target::HVX_64, Target::HVX_128})) {
+            f.compute_root().hexagon();
+            out.compute_root().hexagon();
+        }
 
-        Image<int> input(1024);
+        Buffer<int> input(1024);
         lambda(x, x * 17 + 83).realize(input);
         in.set(input);
 
-        Image<int> output2(1024);
+        Buffer<int> output2(1024);
         out.realize(output2);
+        output2.copy_to_host();
 
         for (int x = 0; x < 1024; x++) {
             int correct = (input(x) + 1) * 2;

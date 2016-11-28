@@ -50,13 +50,16 @@ public:
             if (call->args.size() == 1) {
                 record(call->args[0]);
             } else {
+                // Do not look at anything inside a memoize_expr bracket.
                 for (size_t i = 1; i < call->args.size(); i++) {
                     record(call->args[i]);
                 }
             }
+        } else if (call->func.defined()) {
+            Function fn(call->func);
+            visit_function(fn);
+            IRGraphVisitor::visit(call);
         } else {
-            // Do not look at anything inside a memoize_expr bracket.
-            visit_function(call->func);
             IRGraphVisitor::visit(call);
         }
     }
@@ -106,7 +109,7 @@ public:
         info.type = expr.type();
         info.size_expr = info.type.bytes();
         info.value_expr = expr;
-        dependency_info[DependencyKey(info.type.bytes(), unique_name("memoize_tag", false))] = info;
+        dependency_info[DependencyKey(info.type.bytes(), unique_name("memoize_tag"))] = info;
     }
 
     // Used to make sure larger parameters come before smaller ones
@@ -160,7 +163,7 @@ class KeyInfo {
         while (i < 4 && max_alignment > (1 << i)) {
             i = i + 1;
         }
-        return (size_t)(1 << i);
+        return size_t(1) << i;
     }
 
 // Using the full names in the key results in a (hopefully incredibly
@@ -179,7 +182,7 @@ class KeyInfo {
 #if USE_FULL_NAMES_IN_KEY
     Stmt call_copy_memory(const std::string &key_name, const std::string &value, Expr index) {
         Expr dest = Call::make(Handle(), Call::address_of,
-                               {Load::make(UInt(8), key_name, index, Buffer(), Parameter())},
+                               {Load::make(UInt(8), key_name, index, BufferPtr(), Parameter())},
                                Call::PureIntrinsic);
         Expr src = StringImm::make(value);
         Expr copy_size = (int32_t)value.size();
@@ -232,14 +235,14 @@ public:
         Expr top_level_name_size = (int32_t)top_level_name.size();
         writes.push_back(Store::make(key_name,
                                      Cast::make(Int(32), top_level_name_size),
-                                     (index / Int(32).bytes())));
+                                     (index / Int(32).bytes()), Parameter()));
         index += 4;
         writes.push_back(call_copy_memory(key_name, top_level_name, index));
         // Align to four byte boundary again.
         index += top_level_name_size;
         size_t alignment = 4 + top_level_name.size();
         while (alignment % 4) {
-            writes.push_back(Store::make(key_name, Cast::make(UInt(8), 0), index));
+            writes.push_back(Store::make(key_name, Cast::make(UInt(8), 0), index, Parameter()));
             index = index + 1;
             alignment++;
         }
@@ -263,7 +266,7 @@ public:
         writes.push_back(Store::make(key_name,
                                      StringImm::make(std::to_string(top_level_name.size()) + ":" + top_level_name +
                                                      std::to_string(function_name.size()) + ":" + function_name),
-                                     (index / Handle().bytes())));
+                                     (index / Handle().bytes()), Parameter()));
         size_t alignment = Handle().bytes();
         index += Handle().bytes();
 
@@ -271,7 +274,7 @@ public:
         static std::atomic<int> memoize_instance {0};
         writes.push_back(Store::make(key_name,
                                      memoize_instance++,
-                                     (index / Int(32).bytes())));
+                                     (index / Int(32).bytes()), Parameter()));
         alignment += 4;
         index += 4;
 #endif
@@ -279,7 +282,7 @@ public:
         size_t needed_alignment = parameters_alignment();
         if (needed_alignment > 1) {
             while (alignment % needed_alignment) {
-                writes.push_back(Store::make(key_name, Cast::make(UInt(8), 0), index));
+                writes.push_back(Store::make(key_name, Cast::make(UInt(8), 0), index, Parameter()));
                 index = index + 1;
                 alignment++;
             }
@@ -288,13 +291,10 @@ public:
         for (const DependencyKeyInfoPair &i : dependencies.dependency_info) {
             writes.push_back(Store::make(key_name,
                                          i.second.value_expr,
-                                         (index / i.second.size_expr)));
+                                         (index / i.second.size_expr), Parameter()));
             index += i.second.size_expr;
         }
-        Stmt blocks;
-        for (size_t i = writes.size(); i > 0; i--) {
-            blocks = Block::make(writes[i - 1], blocks);
-        }
+        Stmt blocks = Block::make(writes);
 
         return blocks;
     }
@@ -307,7 +307,7 @@ public:
                          int32_t tuple_count, std::string storage_base_name) {
         std::vector<Expr> args;
         args.push_back(Call::make(type_of<uint8_t *>(), Call::address_of,
-                                  {Load::make(type_of<uint8_t>(), key_allocation_name, Expr(0), Buffer(), Parameter())},
+                                  {Load::make(type_of<uint8_t>(), key_allocation_name, Expr(0), BufferPtr(), Parameter())},
                                   Call::PureIntrinsic));
         args.push_back(key_size());
         args.push_back(Variable::make(type_of<buffer_t *>(), computed_bounds_name));
@@ -330,7 +330,7 @@ public:
                            int32_t tuple_count, std::string storage_base_name) {
         std::vector<Expr> args;
         args.push_back(Call::make(type_of<uint8_t *>(), Call::address_of,
-                                  {Load::make(type_of<uint8_t>(), key_allocation_name, Expr(0), Buffer(), Parameter())},
+                                  {Load::make(type_of<uint8_t>(), key_allocation_name, Expr(0), BufferPtr(), Parameter())},
                                   Call::PureIntrinsic));
         args.push_back(key_size());
         args.push_back(Variable::make(type_of<buffer_t *>(), computed_bounds_name));
@@ -346,7 +346,7 @@ public:
         args.push_back(Call::make(type_of<buffer_t **>(), Call::make_struct, buffers, Call::Intrinsic));
 
         // This is actually a void call. How to indicate that? Look at Extern_ stuff.
-        return Evaluate::make(Call::make(Bool(), "halide_memoization_cache_store", args, Call::Extern));
+        return Evaluate::make(Call::make(Int(32), "halide_memoization_cache_store", args, Call::Extern));
     }
 };
 
@@ -366,7 +366,7 @@ private:
 
     using IRMutator::visit;
 
-    void visit(const ProducerConsumer *op) {
+    void visit(const Realize *op) {
         std::map<std::string, Function>::const_iterator iter = env.find(op->name);
         if (iter != env.end() &&
             iter->second.schedule().memoized()) {
@@ -391,9 +391,7 @@ private:
                            << "it has compute and storage scheduled at different loop levels.\n";
             }
 
-            Stmt produce = mutate(op->produce);
-            Stmt update = mutate(op->update);
-            Stmt consume = mutate(op->consume);
+            Stmt mutated_body = mutate(op->body);
 
             KeyInfo key_info(f, top_level_name);
 
@@ -402,24 +400,13 @@ private:
             std::string cache_miss_name = op->name + ".cache_miss";
             std::string computed_bounds_name = op->name + ".computed_bounds.buffer";
 
-            Expr cache_miss = Variable::make(Bool(), cache_miss_name);
-
-            Stmt cache_store_back =
-                IfThenElse::make(cache_miss, key_info.store_computation(cache_key_name, computed_bounds_name, f.outputs(), op->name));
-
-            Stmt mutated_produce = IfThenElse::make(cache_miss, produce);
-            Stmt mutated_update =
-                update.defined() ? IfThenElse::make(cache_miss, update) :
-                                       update;
-            Stmt mutated_consume = Block::make(cache_store_back, consume);
-
-            Stmt mutated_pipeline = ProducerConsumer::make(op->name, mutated_produce, mutated_update, mutated_consume);
             Stmt cache_miss_marker = LetStmt::make(cache_miss_name,
                                                    Cast::make(Bool(), Variable::make(Int(32), cache_result_name)),
-                                                   mutated_pipeline);
+                                                   mutated_body);
             Stmt cache_lookup_check = Block::make(AssertStmt::make(NE::make(Variable::make(Int(32), cache_result_name), -1),
                                                                    Call::make(Int(32), "halide_error_out_of_memory", { }, Call::Extern)),
                                                   cache_miss_marker);
+
             Stmt cache_lookup = LetStmt::make(cache_result_name,
                                               key_info.generate_lookup(cache_key_name, computed_bounds_name, f.outputs(), op->name),
                                               cache_lookup_check);
@@ -429,9 +416,10 @@ private:
             computed_bounds_args.push_back(null_handle);
             computed_bounds_args.push_back(make_zero(f.output_types()[0]));
             std::string max_stage_num = std::to_string(f.updates().size());
+            const std::vector<std::string> f_args = f.args();
             for (int32_t i = 0; i < f.dimensions(); i++) {
-                Expr min = Variable::make(Int(32), op->name + ".s" + max_stage_num + "." + f.args()[i] + ".min");
-                Expr max = Variable::make(Int(32), op->name + ".s" + max_stage_num + "." + f.args()[i] + ".max");
+                Expr min = Variable::make(Int(32), op->name + ".s" + max_stage_num + "." + f_args[i] + ".min");
+                Expr max = Variable::make(Int(32), op->name + ".s" + max_stage_num + "." + f_args[i] + ".max");
                 computed_bounds_args.push_back(min);
                 computed_bounds_args.push_back(max - min);
                 computed_bounds_args.push_back(0); // TODO: Verify there is no use for the stride.
@@ -447,7 +435,41 @@ private:
                 Allocate::make(cache_key_name, UInt(8), {key_info.key_size()},
                                const_true(), generate_key);
 
-            stmt = cache_key_alloc;
+            stmt = Realize::make(op->name, op->types, op->bounds, op->condition, cache_key_alloc);
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+    void visit(const ProducerConsumer *op) {
+        std::map<std::string, Function>::const_iterator iter = env.find(op->name);
+        if (iter != env.end() &&
+            iter->second.schedule().memoized()) {
+
+            // The error checking should have been done inside Realization node
+            // of this producer, so no need to do it here.
+
+            Stmt body = mutate(op->body);
+
+            std::string cache_miss_name = op->name + ".cache_miss";
+            Expr cache_miss = Variable::make(Bool(), cache_miss_name);
+
+            if (op->is_producer) {
+                Stmt mutated_body = IfThenElse::make(cache_miss, body);
+                stmt = ProducerConsumer::make(op->name, op->is_producer, mutated_body);
+            } else {
+                const Function f(iter->second);
+                KeyInfo key_info(f, top_level_name);
+
+                std::string cache_key_name = op->name + ".cache_key";
+                std::string computed_bounds_name = op->name + ".computed_bounds.buffer";
+
+                Stmt cache_store_back =
+                    IfThenElse::make(cache_miss, key_info.store_computation(cache_key_name, computed_bounds_name, f.outputs(), op->name));
+
+                Stmt mutated_body = Block::make(cache_store_back, body);
+                stmt = ProducerConsumer::make(op->name, op->is_producer, mutated_body);
+            }
         } else {
             IRMutator::visit(op);
         }

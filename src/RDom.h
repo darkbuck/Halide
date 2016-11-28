@@ -7,11 +7,12 @@
  */
 
 #include "IR.h"
-#include "Param.h"
 
 #include <vector>
 
 namespace Halide {
+
+class ImageParam;
 
 /** A reduction variable represents a single dimension of a reduction
  * domain (RDom). Don't construct them directly, instead construct an
@@ -33,9 +34,6 @@ public:
 
     /** Construct an RVar with the given name */
     explicit RVar(const std::string &n) : _name(n) {
-        // Make sure we don't get a unique name with the same name as
-        // this later:
-        Internal::unique_name(n, false);
     }
 
     /** Construct a reduction variable with the given name and
@@ -77,7 +75,7 @@ public:
  RDom r(0, 10);
  f(x) = x; // the initial value
  f(r) = f(r) * 2;
- Image<int> result = f.realize(10);
+ Buffer<int> result = f.realize(10);
  \endcode
  *
  * This function creates a single-dimensional buffer of size 10, in
@@ -186,9 +184,9 @@ class RDom {
     EXPORT void initialize_from_ranges(const std::vector<std::pair<Expr, Expr>> &ranges, std::string name = "");
 
     template <typename... Args>
-    NO_INLINE void initialize_from_ranges(std::vector<std::pair<Expr, Expr>> &ranges, Expr min, Expr extent, Args... args) {
+    NO_INLINE void initialize_from_ranges(std::vector<std::pair<Expr, Expr>> &ranges, Expr min, Expr extent, Args&&... args) {
         ranges.push_back(std::make_pair(min, extent));
-        initialize_from_ranges(ranges, args...);
+        initialize_from_ranges(ranges, std::forward<Args>(args)...);
     }
 
 public:
@@ -203,20 +201,22 @@ public:
     }
 
     template <typename... Args>
-    NO_INLINE RDom(Expr min, Expr extent, Args... args) {
+    NO_INLINE RDom(Expr min, Expr extent, Args&&... args) {
         // This should really just be a delegating constructor, but I couldn't make
         // that work with variadic template unpacking in visual studio 2013
         std::vector<std::pair<Expr, Expr>> ranges;
-        initialize_from_ranges(ranges, min, extent, args...);
+        initialize_from_ranges(ranges, min, extent, std::forward<Args>(args)...);
     }
     // @}
 
     /** Construct a reduction domain that iterates over all points in
-     * a given Buffer, Image, or ImageParam. Has the same
-     * dimensionality as the argument. */
+     * a given Buffer or ImageParam. Has the same dimensionality as
+     * the argument. */
     // @{
-    EXPORT RDom(Buffer);
+    EXPORT RDom(const Buffer<> &);
     EXPORT RDom(ImageParam);
+    template<typename T, int D>
+    NO_INLINE RDom(const Buffer<T, D> &im) : RDom(Buffer<>(im)) {}
     // @}
 
     /** Construct a reduction domain that wraps an Internal ReductionDomain object. */
@@ -242,6 +242,71 @@ public:
 
     /** Single-dimensional reduction domains can be also be used as Exprs directly. */
     EXPORT operator Expr() const;
+
+    /** Add a predicate to the RDom. An RDom may have multiple
+     * predicates associated with it. An update definition that uses
+     * an RDom only iterates over the subset points in the domain for
+     * which all of its predicates are true. The predicate expression
+     * obeys the same rules as the expressions used on the
+     * right-hand-side of the corresponding update definition. It may
+     * refer to the RDom's variables and free variables in the Func's
+     * update definition. It may include calls to other Funcs, or make
+     * recursive calls to the same Func. This permits iteration over
+     * non-rectangular domains, or domains with sizes that vary with
+     * some free variable, or domains with shapes determined by some
+     * other Func.
+     *
+     * Note that once RDom is used in the update definition of some
+     * Func, no new predicates can be added to the RDom.
+     *
+     * Consider a simple example:
+     \code
+     RDom r(0, 20, 0, 20);
+     r.where(r.x < r.y);
+     r.where(r.x == 10);
+     r.where(r.y > 13);
+     f(r.x, r.y) += 1;
+     \endcode
+     * This is equivalent to:
+     \code
+     for (int r.y = 0; r.y < 20; r.y++) {
+       if (r.y > 13) {
+         for (int r.x = 0; r.x < 20; r.x++) {
+           if (r.x == 10) {
+             if (r.x < r.y) {
+               f[r.x, r.y] += 1;
+             }
+           }
+         }
+       }
+     }
+     \endcode
+     *
+     * Where possible Halide restricts the range of the containing for
+     * loops to avoid the cases where the predicate is false so that
+     * the if statement can be removed entirely. The case above would
+     * be further simplified into:
+     *
+     \code
+     for (int r.y = 14; r.y < 20; r.y++) {
+       f[r.x, r.y] += 1;
+     }
+     \endcode
+     *
+     * In general, the predicates that we can simplify away by
+     * restricting loop ranges are inequalities that compare an inner
+     * Var or RVar to some expression in outer Vars or RVars.
+     *
+     * You can also pack multiple conditions into one predicate like so:
+     *
+     \code
+     RDom r(0, 20, 0, 20);
+     r.where((r.x < r.y) && (r.x == 10) && (r.y > 13));
+     f(r.x, r.y) += 1;
+     \endcode
+     *
+     */
+    EXPORT void where(Expr predicate);
 
     /** Direct access to the first four dimensions of the reduction
      * domain. Some of these variables may be undefined if the

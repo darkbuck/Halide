@@ -21,13 +21,17 @@ int main(int argc, char **argv) {
         f.gpu_tile(x, y, 8, 8);
         g.gpu_tile(x, y, 8, 8);
         h.gpu_tile(x, y, 8, 8);
+    } else if (target.features_any_of({Target::HVX_64, Target::HVX_128})) {
+        f.hexagon().vectorize(x, 32);
+        g.hexagon().vectorize(x, 32);
+        h.hexagon().vectorize(x, 32);
     }
 
     printf("Realizing function...\n");
 
-    Image<int> imf = f.realize(32, 32, target);
-    Image<int> img = g.realize(32, 32, target);
-    Image<int> imh = h.realize(32, 32, target);
+    Buffer<int> imf = f.realize(32, 32, target);
+    Buffer<int> img = g.realize(32, 32, target);
+    Buffer<int> imh = h.realize(32, 32, target);
 
     // Check the result was what we expected
     for (int i = 0; i < 32; i++) {

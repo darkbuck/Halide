@@ -20,9 +20,49 @@ namespace Internal {
 
 class IRVisitor;
 
-/** A class representing a type of IR node (e.g. Add, or Mul, or
- * For). We use it for rtti (without having to compile with rtti). */
-struct IRNodeType {};
+/** All our IR node types get unique IDs for the purposes of RTTI */
+enum class IRNodeType {
+    IntImm,
+    UIntImm,
+    FloatImm,
+    StringImm,
+    Cast,
+    Variable,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Min,
+    Max,
+    EQ,
+    NE,
+    LT,
+    LE,
+    GT,
+    GE,
+    And,
+    Or,
+    Not,
+    Select,
+    Load,
+    Ramp,
+    Broadcast,
+    Call,
+    Let,
+    LetStmt,
+    AssertStmt,
+    ProducerConsumer,
+    For,
+    Store,
+    Provide,
+    Allocate,
+    Free,
+    Realize,
+    Block,
+    IfThenElse,
+    Evaluate
+};
 
 /** The abstract base classes for a node in the Halide IR. */
 struct IRNode {
@@ -47,7 +87,7 @@ struct IRNode {
      * injects run-time type identification stuff everywhere (and
      * often breaks when linking external libraries compiled
      * without it), and we only want it for IR nodes. */
-    virtual const IRNodeType *type_info() const = 0;
+    virtual IRNodeType type_info() const = 0;
 };
 
 template<>
@@ -82,15 +122,13 @@ struct BaseExprNode : public IRNode {
 template<typename T>
 struct ExprNode : public BaseExprNode {
     EXPORT void accept(IRVisitor *v) const;
-    virtual IRNodeType *type_info() const {return &_type_info;}
-    static EXPORT IRNodeType _type_info;
+    virtual IRNodeType type_info() const {return T::_type_info;}
 };
 
 template<typename T>
 struct StmtNode : public BaseStmtNode {
     EXPORT void accept(IRVisitor *v) const;
-    virtual IRNodeType *type_info() const {return &_type_info;}
-    static EXPORT IRNodeType _type_info;
+    virtual IRNodeType type_info() const {return T::_type_info;}
 };
 
 /** IR nodes are passed around opaque handles to them. This is a
@@ -116,40 +154,36 @@ struct IRHandle : public IntrusivePtr<const IRNode> {
      * }
      */
     template<typename T> const T *as() const {
-        if (ptr->type_info() == &T::_type_info) {
+        if (ptr && ptr->type_info() == T::_type_info) {
             return (const T *)ptr;
         }
         return nullptr;
     }
 };
 
+
 /** Integer constants */
 struct IntImm : public ExprNode<IntImm> {
     int64_t value;
 
     static const IntImm *make(Type t, int64_t value) {
-        internal_assert(t.is_int() && t.is_scalar()) << "IntImm must be a scalar Int\n";
+        internal_assert(t.is_int() && t.is_scalar())
+            << "IntImm must be a scalar Int\n";
         internal_assert(t.bits() == 8 || t.bits() == 16 || t.bits() == 32 || t.bits() == 64)
             << "IntImm must be 8, 16, 32, or 64-bit\n";
 
-        if (t.bits() == 32 && value >= -8 && value <= 8 &&
-            small_int_cache[(int)value + 8]) {
-            return small_int_cache[(int)value + 8];
-        }
-
-        IntImm *node = new IntImm;
-        node->type = t;
         // Normalize the value by dropping the high bits
         value <<= (64 - t.bits());
         // Then sign-extending to get them back
         value >>= (64 - t.bits());
+
+        IntImm *node = new IntImm;
+        node->type = t;
         node->value = value;
         return node;
     }
 
-private:
-    /** ints from -8 to 8 */
-    EXPORT static const IntImm *small_int_cache[17];
+    static const IRNodeType _type_info = IRNodeType::IntImm;
 };
 
 /** Unsigned integer constants */
@@ -161,14 +195,18 @@ struct UIntImm : public ExprNode<UIntImm> {
             << "UIntImm must be a scalar UInt\n";
         internal_assert(t.bits() == 1 || t.bits() == 8 || t.bits() == 16 || t.bits() == 32 || t.bits() == 64)
             << "UIntImm must be 1, 8, 16, 32, or 64-bit\n";
-        UIntImm *node = new UIntImm;
-        node->type = t;
+
         // Normalize the value by dropping the high bits
         value <<= (64 - t.bits());
         value >>= (64 - t.bits());
+
+        UIntImm *node = new UIntImm;
+        node->type = t;
         node->value = value;
         return node;
     }
+
+    static const IRNodeType _type_info = IRNodeType::UIntImm;
 };
 
 /** Floating point constants */
@@ -176,7 +214,8 @@ struct FloatImm : public ExprNode<FloatImm> {
     double value;
 
     static const FloatImm *make(Type t, double value) {
-        internal_assert(t.is_float() && t.is_scalar()) << "FloatImm must be a scalar Float\n";
+        internal_assert(t.is_float() && t.is_scalar())
+            << "FloatImm must be a scalar Float\n";
         FloatImm *node = new FloatImm;
         node->type = t;
         switch (t.bits()) {
@@ -195,6 +234,8 @@ struct FloatImm : public ExprNode<FloatImm> {
 
         return node;
     }
+
+    static const IRNodeType _type_info = IRNodeType::FloatImm;
 };
 
 /** String constants */
@@ -207,6 +248,8 @@ struct StringImm : public ExprNode<StringImm> {
         node->value = val;
         return node;
     }
+
+    static const IRNodeType _type_info = IRNodeType::StringImm;
 };
 
 }  // namespace Internal
@@ -250,35 +293,35 @@ struct Expr : public Internal::IRHandle {
  * map<Expr, Foo, ExprCompare> */
 struct ExprCompare {
     bool operator()(Expr a, Expr b) const {
-        return a.ptr < b.ptr;
+        return a.get() < b.get();
     }
 };
 
 /** An enum describing a type of device API. Used by schedules, and in
  * the For loop IR node. */
 enum class DeviceAPI {
-    Parent, /// Used to denote for loops that inherit their device from where they are used, generally the default
+    None, /// Used to denote for loops that run on the same device as the containing code.
     Host,
     Default_GPU,
     CUDA,
     OpenCL,
     GLSL,
-    Renderscript,
     OpenGLCompute,
-    Metal
+    Metal,
+    Hexagon
 };
 
 /** An array containing all the device apis. Useful for iterating
  * through them. */
-const DeviceAPI all_device_apis[] = {DeviceAPI::Parent,
+const DeviceAPI all_device_apis[] = {DeviceAPI::None,
                                      DeviceAPI::Host,
                                      DeviceAPI::Default_GPU,
                                      DeviceAPI::CUDA,
                                      DeviceAPI::OpenCL,
                                      DeviceAPI::GLSL,
-                                     DeviceAPI::Renderscript,
                                      DeviceAPI::OpenGLCompute,
-                                     DeviceAPI::Metal};
+                                     DeviceAPI::Metal,
+                                     DeviceAPI::Hexagon};
 
 namespace Internal {
 

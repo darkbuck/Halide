@@ -16,11 +16,11 @@ int main(int argc, char **argv) {
 
     // implicit for all x, y on both sides, except for the float which has zero implicit args
     Func h;
-    h(_) = (g + f)*6.0f;
+    h(_) = (g(_) + f(_))*6.0f;
 
     printf("Realizing function...\n");
 
-    Image<float> im = h.realize(4, 4);
+    Buffer<float> im = h.realize(4, 4);
 
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {

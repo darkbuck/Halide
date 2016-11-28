@@ -712,7 +712,7 @@ public:
 
     // Look up n stack frames and get the source location as filename:line
     std::string get_source_location() {
-
+        return "";
         debug(5) << "Finding source location\n";
 
         if (!source_lines.size()) {
@@ -871,7 +871,20 @@ private:
         llvm::object::ObjectFile *obj = nullptr;
 
         // Open the object file in question. The API to do this keeps changing.
-        #if LLVM_VERSION >= 36
+        #if LLVM_VERSION >= 39
+
+        llvm::Expected<llvm::object::OwningBinary<llvm::object::ObjectFile>> maybe_obj =
+            llvm::object::ObjectFile::createObjectFile(binary);
+
+        if (!maybe_obj) {
+            consumeError(maybe_obj.takeError());
+            debug(1) << "Failed to load binary:" << binary << "\n";
+            return;
+        }
+
+        obj = maybe_obj.get().getBinary();
+
+        #else
 
         llvm::ErrorOr<llvm::object::OwningBinary<llvm::object::ObjectFile>> maybe_obj =
             llvm::object::ObjectFile::createObjectFile(binary);
@@ -882,31 +895,11 @@ private:
         }
 
         obj = maybe_obj.get().getBinary();
-
-        #elif LLVM_VERSION >= 35
-
-        llvm::ErrorOr<std::unique_ptr<llvm::object::ObjectFile>> maybe_obj =
-            llvm::object::ObjectFile::createObjectFile(binary);
-
-        if (!maybe_obj) {
-            debug(1) << "Failed to load binary:" << binary << "\n";
-            return;
-        }
-
-        obj = maybe_obj.get().get();
-
-        #else
-        obj = llvm::object::ObjectFile::createObjectFile(binary);
         #endif
 
         if (obj) {
             working = true;
             parse_object_file(obj);
-
-            #if LLVM_VERSION < 35
-            // It's not memory-managed in older LLVMs.
-            delete obj;
-            #endif
         } else {
             debug(1) << "Could not load object file: " << binary << "\n";
             working = false;
@@ -923,14 +916,8 @@ private:
         std::string prefix = ".";
 #endif
 
-#if LLVM_VERSION > 34
         for (llvm::object::section_iterator iter = obj->section_begin();
              iter != obj->section_end(); ++iter) {
-#else
-        llvm::error_code err;
-        for (llvm::object::section_iterator iter = obj->begin_sections();
-             iter != obj->end_sections(); iter.increment(err)) {
-#endif
             llvm::StringRef name;
             iter->getName(name);
             debug(2) << "Section: " << name.str() << "\n";
@@ -2235,7 +2222,9 @@ bool saves_frame_pointer(void *fn) {
 }
 
 
-void test_compilation_unit(bool (*test)(), void (*calib)()) {
+void test_compilation_unit(bool (*test)(bool (*)(const void *, const std::string &)),
+                           bool (*test_a)(const void *, const std::string &),
+                           void (*calib)()) {
     #ifdef __ARM__
     return;
     #else
@@ -2265,7 +2254,7 @@ void test_compilation_unit(bool (*test)(), void (*calib)()) {
             return;
         }
 
-        debug_sections->working = (*test)();
+        debug_sections->working = (*test)(test_a);
         if (!debug_sections->working) {
             debug(5) << "Failed because test routine failed\n";
             return;
@@ -2303,7 +2292,9 @@ void register_heap_object(const void *obj, size_t size, const void *helper) {
 void deregister_heap_object(const void *obj, size_t size) {
 }
 
-void test_compilation_unit(bool (*test)(), void (*calib)()) {
+void test_compilation_unit(bool (*test)(bool (*)(const void *, const std::string &)),
+                           bool (*test_a)(const void *, const std::string &),
+                           void (*calib)()) {
 }
 
 }

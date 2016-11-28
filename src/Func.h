@@ -10,14 +10,16 @@
 #include "Var.h"
 #include "Function.h"
 #include "Param.h"
+#include "OutputImageParam.h"
 #include "Argument.h"
 #include "RDom.h"
 #include "JITModule.h"
-#include "Image.h"
 #include "Target.h"
 #include "Tuple.h"
 #include "Module.h"
 #include "Pipeline.h"
+
+#include <map>
 
 namespace Halide {
 
@@ -34,21 +36,54 @@ struct VarOrRVar {
         else return var.name();
     }
 
-    const Var var;
-    const RVar rvar;
-    const bool is_rvar;
+    Var var;
+    RVar rvar;
+    bool is_rvar;
 };
+
+namespace Internal {
+struct Split;
+struct StorageDim;
+}
 
 /** A single definition of a Func. May be a pure or update definition. */
 class Stage {
-    Internal::Schedule schedule;
+    Internal::Definition definition;
+    std::string stage_name;
+    std::vector<Var> dim_vars; // Pure Vars of the Function (from the init definition)
+    std::vector<Internal::StorageDim> storage_dims;
+
     void set_dim_type(VarOrRVar var, Internal::ForType t);
     void set_dim_device_api(VarOrRVar var, DeviceAPI device_api);
-    void split(const std::string &old, const std::string &outer, const std::string &inner, Expr factor, bool exact);
-    std::string stage_name;
+    void split(const std::string &old, const std::string &outer, const std::string &inner,
+               Expr factor, bool exact, TailStrategy tail);
+    void remove(const std::string &var);
+    Stage &purify(VarOrRVar old_name, VarOrRVar new_name);
+
 public:
-    Stage(Internal::Schedule s, const std::string &n) :
-        schedule(s), stage_name(n) {s.touched() = true;}
+    Stage(Internal::Definition d, const std::string &n, const std::vector<Var> &args,
+          const std::vector<Internal::StorageDim> &sdims)
+            : definition(d), stage_name(n), dim_vars(args), storage_dims(sdims) {
+        internal_assert(definition.args().size() == dim_vars.size());
+        definition.schedule().touched() = true;
+    }
+
+    Stage(Internal::Definition d, const std::string &n, const std::vector<std::string> &args,
+          const std::vector<Internal::StorageDim> &sdims)
+            : definition(d), stage_name(n), storage_dims(sdims) {
+        definition.schedule().touched() = true;
+
+        std::vector<Var> dim_vars(args.size());
+        for (size_t i = 0; i < args.size(); i++) {
+            dim_vars[i] = Var(args[i]);
+        }
+        internal_assert(definition.args().size() == dim_vars.size());
+    }
+
+    /** Return the current Schedule associated with this Stage.  For
+     * introspection only: to modify Schedule, use the Func
+     * interface. */
+    const Internal::Schedule &get_schedule() const { return definition.schedule(); }
 
     /** Return a string describing the current var list taking into
      * account all the splits, reorders, and tiles. */
@@ -57,35 +92,108 @@ public:
     /** Return the name of this stage, e.g. "f.update(2)" */
     EXPORT const std::string &name() const;
 
+    /** Calling rfactor() on an associative update definition a Func will split
+     * the update into an intermediate which computes the partial results and
+     * replace the current update definition with a new definition which merges
+     * the partial results. If called on a init/pure definition, this will
+     * throw an error. rfactor() will automatically infer the associative reduction
+     * operator and identity of the operator. If it can't prove the operation
+     * is associative or if it cannot find an identity for that operator, this
+     * will throw an error. In addition, commutativity of the operator is required
+     * if rfactor() is called on the inner dimension but excluding the outer
+     * dimensions.
+     *
+     * rfactor() takes as input 'preserved', which is a list of <RVar, Var> pairs.
+     * The rvars not listed in 'preserved' are removed from the original Func and
+     * are lifted to the intermediate Func. The remaining rvars (the ones in
+     * 'preserved') are made pure in the intermediate Func. The intermediate Func's
+     * update definition inherits all scheduling directives (e.g. split,fuse, etc.)
+     * applied to the original Func's update definition. The loop order of the
+     * intermediate Func's update definition is the same as the original, albeit
+     * the lifted RVars are replaced by the new pure Vars. The loop order of the
+     * intermediate Func's init definition from innermost to outermost is the args'
+     * order of the original Func's init definition followed by the new pure Vars.
+     *
+     * The intermediate Func also inherits storage order from the original Func
+     * with the new pure Vars added to the outermost.
+     *
+     * For example, f.update(0).rfactor({{r.y, u}}) would rewrite a pipeline like this:
+     \code
+     f(x, y) = 0;
+     f(x, y) += g(r.x, r.y);
+     \endcode
+     * into a pipeline like this:
+     \code
+     f_intm(x, y, u) = 0;
+     f_intm(x, y, u) += g(r.x, u);
+
+     f(x, y) = 0;
+     f(x, y) += f_intm(x, y, r.y);
+     \endcode
+     *
+     * This has a variety of uses. You can use it to split computation of an associative reduction:
+     \code
+     f(x, y) = 10;
+     RDom r(0, 96);
+     f(x, y) = max(f(x, y), g(x, y, r.x));
+     f.update(0).split(r.x, rxo, rxi, 8).reorder(y, x).parallel(x);
+     f.update(0).rfactor({{rxo, u}}).compute_root().parallel(u).update(0).parallel(u);
+     \endcode
+     *
+     *, which is equivalent to:
+     \code
+     parallel for u = 0 to 11:
+       for y:
+         for x:
+           f_intm(x, y, u) = -inf
+     parallel for x:
+       for y:
+         parallel for u = 0 to 11:
+           for rxi = 0 to 7:
+             f_intm(x, y, u) = max(f_intm(x, y, u), g(8*u + rxi))
+     for y:
+       for x:
+         f(x, y) = 10
+     parallel for x:
+       for y:
+         for rxo = 0 to 11:
+           f(x, y) = max(f(x, y), f_intm(x, y, u))
+     \endcode
+     *
+     */
+    // @{
+    EXPORT Func rfactor(std::vector<std::pair<RVar, Var>> preserved);
+    EXPORT Func rfactor(RVar r, Var v);
+    // @}
+
     /** Scheduling calls that control how the domain of this stage is
      * traversed. See the documentation for Func for the meanings. */
     // @{
 
-    EXPORT Stage &split(VarOrRVar old, VarOrRVar outer, VarOrRVar inner, Expr factor);
+    EXPORT Stage &split(VarOrRVar old, VarOrRVar outer, VarOrRVar inner, Expr factor, TailStrategy tail = TailStrategy::Auto);
     EXPORT Stage &fuse(VarOrRVar inner, VarOrRVar outer, VarOrRVar fused);
     EXPORT Stage &serial(VarOrRVar var);
     EXPORT Stage &parallel(VarOrRVar var);
     EXPORT Stage &vectorize(VarOrRVar var);
     EXPORT Stage &unroll(VarOrRVar var);
-    EXPORT Stage &parallel(VarOrRVar var, Expr task_size);
-    EXPORT Stage &vectorize(VarOrRVar var, int factor);
-    EXPORT Stage &unroll(VarOrRVar var, int factor);
+    EXPORT Stage &parallel(VarOrRVar var, Expr task_size, TailStrategy tail = TailStrategy::Auto);
+    EXPORT Stage &vectorize(VarOrRVar var, int factor, TailStrategy tail = TailStrategy::Auto);
+    EXPORT Stage &unroll(VarOrRVar var, int factor, TailStrategy tail = TailStrategy::Auto);
     EXPORT Stage &tile(VarOrRVar x, VarOrRVar y,
-                                VarOrRVar xo, VarOrRVar yo,
-                                VarOrRVar xi, VarOrRVar yi, Expr
-                                xfactor, Expr yfactor);
+                       VarOrRVar xo, VarOrRVar yo,
+                       VarOrRVar xi, VarOrRVar yi, Expr
+                       xfactor, Expr yfactor,
+                       TailStrategy tail = TailStrategy::Auto);
     EXPORT Stage &tile(VarOrRVar x, VarOrRVar y,
-                                VarOrRVar xi, VarOrRVar yi,
-                                Expr xfactor, Expr yfactor);
+                       VarOrRVar xi, VarOrRVar yi,
+                       Expr xfactor, Expr yfactor,
+                       TailStrategy tail = TailStrategy::Auto);
     EXPORT Stage &reorder(const std::vector<VarOrRVar> &vars);
 
     template <typename... Args>
     NO_INLINE typename std::enable_if<Internal::all_are_convertible<VarOrRVar, Args...>::value, Stage &>::type
-    reorder(VarOrRVar x, VarOrRVar y, Args... args) {
-        std::vector<VarOrRVar> collected_args;
-        collected_args.push_back(x);
-        collected_args.push_back(y);
-        Internal::collect_args(collected_args, args...);
+    reorder(VarOrRVar x, VarOrRVar y, Args&&... args) {
+        std::vector<VarOrRVar> collected_args{x, y, std::forward<Args>(args)...};
         return reorder(collected_args);
     }
 
@@ -103,135 +211,133 @@ public:
 
     EXPORT Stage &gpu(VarOrRVar block_x, VarOrRVar thread_x, DeviceAPI device_api = DeviceAPI::Default_GPU);
     EXPORT Stage &gpu(VarOrRVar block_x, VarOrRVar block_y,
-                               VarOrRVar thread_x, VarOrRVar thread_y,
-                               DeviceAPI device_api = DeviceAPI::Default_GPU);
+                      VarOrRVar thread_x, VarOrRVar thread_y,
+                      DeviceAPI device_api = DeviceAPI::Default_GPU);
     EXPORT Stage &gpu(VarOrRVar block_x, VarOrRVar block_y, VarOrRVar block_z,
-                               VarOrRVar thread_x, VarOrRVar thread_y, VarOrRVar thread_z,
-                               DeviceAPI device_api = DeviceAPI::Default_GPU);
-    EXPORT Stage &gpu_tile(VarOrRVar x, Expr x_size, DeviceAPI device_api = DeviceAPI::Default_GPU);
-    EXPORT Stage &gpu_tile(VarOrRVar x, VarOrRVar y, Expr x_size, Expr y_size,
-                                    DeviceAPI device_api = DeviceAPI::Default_GPU);
+                      VarOrRVar thread_x, VarOrRVar thread_y, VarOrRVar thread_z,
+                      DeviceAPI device_api = DeviceAPI::Default_GPU);
+    EXPORT Stage &gpu_tile(VarOrRVar x, Expr x_size,
+                           TailStrategy tail = TailStrategy::Auto,
+                           DeviceAPI device_api = DeviceAPI::Default_GPU);
+    EXPORT Stage &gpu_tile(VarOrRVar x, VarOrRVar y,
+                           Expr x_size, Expr y_size,
+                           TailStrategy tail = TailStrategy::Auto,
+                           DeviceAPI device_api = DeviceAPI::Default_GPU);
     EXPORT Stage &gpu_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
-                                    Expr x_size, Expr y_size, Expr z_size, DeviceAPI device_api = DeviceAPI::Default_GPU);
+                           Expr x_size, Expr y_size, Expr z_size,
+                           TailStrategy tail = TailStrategy::Auto,
+                           DeviceAPI device_api = DeviceAPI::Default_GPU);
 
     EXPORT Stage &allow_race_conditions();
+
+    EXPORT Stage &hexagon(VarOrRVar x = Var::outermost());
+    EXPORT Stage &prefetch(VarOrRVar var, Expr offset = 1);
     // @}
-
-    // These calls are for legacy compatibility only.
-    EXPORT Stage &cuda_threads(VarOrRVar thread_x) {
-        return gpu_threads(thread_x);
-    }
-    EXPORT Stage &cuda_threads(VarOrRVar thread_x, VarOrRVar thread_y) {
-        return gpu_threads(thread_x, thread_y);
-    }
-    EXPORT Stage &cuda_threads(VarOrRVar thread_x, VarOrRVar thread_y, VarOrRVar thread_z) {
-        return gpu_threads(thread_x, thread_y, thread_z);
-    }
-
-    EXPORT Stage &cuda_blocks(VarOrRVar block_x) {
-        return gpu_blocks(block_x);
-    }
-    EXPORT Stage &cuda_blocks(VarOrRVar block_x, VarOrRVar block_y) {
-        return gpu_blocks(block_x, block_y);
-    }
-    EXPORT Stage &cuda_blocks(VarOrRVar block_x, VarOrRVar block_y, VarOrRVar block_z) {
-        return gpu_blocks(block_x, block_y, block_z);
-    }
-
-    EXPORT Stage &cuda(VarOrRVar block_x, VarOrRVar thread_x) {
-        return gpu(block_x, thread_x);
-    }
-    EXPORT Stage &cuda(VarOrRVar block_x, VarOrRVar block_y,
-                                VarOrRVar thread_x, VarOrRVar thread_y) {
-        return gpu(block_x, thread_x, block_y, thread_y);
-    }
-    EXPORT Stage &cuda(VarOrRVar block_x, VarOrRVar block_y, VarOrRVar block_z,
-                                VarOrRVar thread_x, VarOrRVar thread_y, VarOrRVar thread_z) {
-        return gpu(block_x, thread_x, block_y, thread_y, block_z, thread_z);
-    }
-    EXPORT Stage &cuda_tile(VarOrRVar x, int x_size) {
-        return gpu_tile(x, x_size);
-    }
-    EXPORT Stage &cuda_tile(VarOrRVar x, VarOrRVar y, int x_size, int y_size) {
-        return gpu_tile(x, y, x_size, y_size);
-    }
-    EXPORT Stage &cuda_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
-                                     int x_size, int y_size, int z_size) {
-        return gpu_tile(x, y, z, x_size, y_size, z_size);
-    }
 };
 
 // For backwards compatibility, keep the ScheduleHandle name.
 typedef Stage ScheduleHandle;
 
-/** A fragment of front-end syntax of the form f(x, y, z), where x,
- * y, z are Vars. It could be the left-hand side of a function
- * definition, or it could be a call to a function. We don't know
+
+class FuncTupleElementRef;
+
+/** A fragment of front-end syntax of the form f(x, y, z), where x, y,
+ * z are Vars or Exprs. If could be the left hand side of a definition or
+ * an update definition, or it could be a call to a function. We don't know
  * until we see how this object gets used.
  */
-class FuncRefExpr;
-
-class FuncRefVar {
+class FuncRef {
     Internal::Function func;
     int implicit_placeholder_pos;
-    std::vector<std::string> args;
-    std::vector<std::string> args_with_implicit_vars(const std::vector<Expr> &e) const;
-public:
-    FuncRefVar(Internal::Function, const std::vector<Var> &, int placeholder_pos = -1);
+    int implicit_count;
+    std::vector<Expr> args;
+    std::vector<Expr> args_with_implicit_vars(const std::vector<Expr> &e) const;
 
-    /**  Use this as the left-hand-side of a definition. */
+    /** Helper for function update by Tuple. If the function does not
+     * already have a pure definition, init_val will be used as RHS of
+     * each tuple element in the initial function definition. */
+    template <typename BinaryOp>
+    Stage func_ref_update(const Tuple &e, int init_val);
+
+    /** Helper for function update by Expr. If the function does not
+     * already have a pure definition, init_val will be used as RHS in
+     * the initial function definition. */
+    template <typename BinaryOp>
+    Stage func_ref_update(Expr e, int init_val);
+
+public:
+    FuncRef(Internal::Function, const std::vector<Expr> &,
+                int placeholder_pos = -1, int count = 0);
+    FuncRef(Internal::Function, const std::vector<Var> &,
+                int placeholder_pos = -1, int count = 0);
+
+    /** Use this as the left-hand-side of a definition or an update definition
+     * (see \ref RDom).
+     */
     EXPORT Stage operator=(Expr);
 
-    /** Use this as the left-hand-side of a definition for a Func with
-     * multiple outputs. */
+    /** Use this as the left-hand-side of a definition or an update definition
+     * for a Func with multiple outputs. */
     EXPORT Stage operator=(const Tuple &);
 
-    /** Define this function as a sum reduction over the given
-     * expression. The expression should refer to some RDom to sum
-     * over. If the function does not already have a pure definition,
-     * this sets it to zero.
-     */
-    EXPORT Stage operator+=(Expr);
-
-    /** Define this function as a sum reduction over the negative of
-     * the given expression. The expression should refer to some RDom
-     * to sum over. If the function does not already have a pure
-     * definition, this sets it to zero.
-     */
-    EXPORT Stage operator-=(Expr);
-
-    /** Define this function as a product reduction. The expression
-     * should refer to some RDom to take the product over. If the
-     * function does not already have a pure definition, this sets it
-     * to 1.
-     */
-    EXPORT Stage operator*=(Expr);
-
-    /** Define this function as the product reduction over the inverse
-     * of the expression. The expression should refer to some RDom to
-     * take the product over. If the function does not already have a
-     * pure definition, this sets it to 1.
-     */
-    EXPORT Stage operator/=(Expr);
-
-    /** Override the usual assignment operator, so that
-     * f(x, y) = g(x, y) defines f.
+    /** Define a stage that adds the given expression to this Func. If the
+     * expression refers to some RDom, this performs a sum reduction of the
+     * expression over the domain. If the function does not already have a
+     * pure definition, this sets it to zero.
      */
     // @{
-    EXPORT Stage operator=(const FuncRefVar &e);
-    EXPORT Stage operator=(const FuncRefExpr &e);
+    EXPORT Stage operator+=(Expr);
+    EXPORT Stage operator+=(const Tuple &);
+    EXPORT Stage operator+=(const FuncRef &);
     // @}
 
-    /** Use this FuncRefVar as a call to the function, and not as the
-     * left-hand-side of a definition. Only works for single-output
-     * funcs.
+    /** Define a stage that adds the negative of the given expression to this
+     * Func. If the expression refers to some RDom, this performs a sum reduction
+     * of the negative of the expression over the domain. If the function does
+     * not already have a pure definition, this sets it to zero.
      */
+    // @{
+    EXPORT Stage operator-=(Expr);
+    EXPORT Stage operator-=(const Tuple &);
+    EXPORT Stage operator-=(const FuncRef &);
+    // @}
+
+    /** Define a stage that multiplies this Func by the given expression. If the
+     * expression refers to some RDom, this performs a product reduction of the
+     * expression over the domain. If the function does not already have a pure
+     * definition, this sets it to 1.
+     */
+    // @{
+    EXPORT Stage operator*=(Expr);
+    EXPORT Stage operator*=(const Tuple &);
+    EXPORT Stage operator*=(const FuncRef &);
+    // @}
+
+    /** Define a stage that divides this Func by the given expression.
+     * If the expression refers to some RDom, this performs a product
+     * reduction of the inverse of the expression over the domain. If the
+     * function does not already have a pure definition, this sets it to 1.
+     */
+    // @{
+    EXPORT Stage operator/=(Expr);
+    EXPORT Stage operator/=(const Tuple &);
+    EXPORT Stage operator/=(const FuncRef &);
+    // @}
+
+    /* Override the usual assignment operator, so that
+     * f(x, y) = g(x, y) defines f.
+     */
+    EXPORT Stage operator=(const FuncRef &);
+
+    /** Use this as a call to the function, and not the left-hand-side
+     * of a definition. Only works for single-output Funcs. */
     EXPORT operator Expr() const;
 
-    /** When a FuncRefVar refers to a function that provides multiple
+    /** When a FuncRef refers to a function that provides multiple
      * outputs, you can access each output as an Expr using
-     * operator[] */
-    EXPORT Expr operator[](int) const;
+     * operator[].
+     */
+    EXPORT FuncTupleElementRef operator[](int) const;
 
     /** How many outputs does the function this refers to produce. */
     EXPORT size_t size() const;
@@ -240,82 +346,75 @@ public:
     EXPORT Internal::Function function() const {return func;}
 };
 
-/** A fragment of front-end syntax of the form f(x, y, z), where x, y,
- * z are Exprs. If could be the left hand side of an update
+/** A fragment of front-end syntax of the form f(x, y, z)[index], where x, y,
+ * z are Vars or Exprs. If could be the left hand side of an update
  * definition, or it could be a call to a function. We don't know
  * until we see how this object gets used.
  */
-class FuncRefExpr {
-    Internal::Function func;
-    int implicit_placeholder_pos;
-    std::vector<Expr> args;
-    std::vector<Expr> args_with_implicit_vars(const std::vector<Expr> &e) const;
+class FuncTupleElementRef {
+    FuncRef func_ref;
+    std::vector<Expr> args; // args to the function
+    int idx;                // Index to function outputs
+
+    /** Helper function that generates a Tuple where element at 'idx' is set
+     * to 'e' and the rests are undef. */
+    Tuple values_with_undefs(Expr e) const;
+
 public:
-    FuncRefExpr(Internal::Function, const std::vector<Expr> &,
-                int placeholder_pos = -1);
-    FuncRefExpr(Internal::Function, const std::vector<std::string> &,
-                int placeholder_pos = -1);
+    FuncTupleElementRef(const FuncRef &ref, const std::vector<Expr>& args, int idx);
 
-    /** Use this as the left-hand-side of an update definition (see
-     * \ref RDom). The function must already have a pure definition.
+    /** Use this as the left-hand-side of an update definition of Tuple
+     * component 'idx' of a Func (see \ref RDom). The function must
+     * already have an initial definition.
      */
-    EXPORT Stage operator=(Expr);
+    EXPORT Stage operator=(Expr e);
 
-    /** Use this as the left-hand-side of an update definition for a
-     * Func with multiple outputs. */
-    EXPORT Stage operator=(const Tuple &);
 
-    /** Define this function as a sum reduction over the given
-     * expression. The expression should refer to some RDom to sum
-     * over. If the function does not already have a pure definition,
-     * this sets it to zero.
+    /** Define a stage that adds the given expression to Tuple component 'idx'
+     * of this Func. The other Tuple components are unchanged. If the expression
+     * refers to some RDom, this performs a sum reduction of the expression over
+     * the domain. The function must already have an initial definition.
      */
-    EXPORT Stage operator+=(Expr);
+    EXPORT Stage operator+=(Expr e);
 
-    /** Define this function as a sum reduction over the negative of
-     * the given expression. The expression should refer to some RDom
-     * to sum over. If the function does not already have a pure
-     * definition, this sets it to zero.
+    /** Define a stage that adds the negative of the given expression to Tuple
+     * component 'idx' of this Func. The other Tuple components are unchanged.
+     * If the expression refers to some RDom, this performs a sum reduction of
+     * the negative of the expression over the domain. The function must already
+     * have an initial definition.
      */
-    EXPORT Stage operator-=(Expr);
+    EXPORT Stage operator-=(Expr e);
 
-    /** Define this function as a product reduction. The expression
-     * should refer to some RDom to take the product over. If the
-     * function does not already have a pure definition, this sets it
-     * to 1.
+    /** Define a stage that multiplies Tuple component 'idx' of this Func by
+     * the given expression. The other Tuple components are unchanged. If the
+     * expression refers to some RDom, this performs a product reduction of
+     * the expression over the domain. The function must already have an
+     * initial definition.
      */
-    EXPORT Stage operator*=(Expr);
+    EXPORT Stage operator*=(Expr e);
 
-    /** Define this function as the product reduction over the inverse
-     * of the expression. The expression should refer to some RDom to
-     * take the product over. If the function does not already have a
-     * pure definition, this sets it to 1.
+    /** Define a stage that divides Tuple component 'idx' of this Func by
+     * the given expression. The other Tuple components are unchanged.
+     * If the expression refers to some RDom, this performs a product
+     * reduction of the inverse of the expression over the domain. The function
+     * must already have an initial definition.
      */
-    EXPORT Stage operator/=(Expr);
+    EXPORT Stage operator/=(Expr e);
 
     /* Override the usual assignment operator, so that
-     * f(x, y) = g(x, y) defines f.
+     * f(x, y)[index] = g(x, y) defines f.
      */
-    // @{
-    EXPORT Stage operator=(const FuncRefVar &);
-    EXPORT Stage operator=(const FuncRefExpr &);
-    // @}
+    EXPORT Stage operator=(const FuncRef &e);
 
-    /** Use this as a call to the function, and not the left-hand-side
-     * of a definition. Only works for single-output Funcs. */
+    /** Use this as a call to Tuple component 'idx' of a Func, and not the
+     * left-hand-side of a definition. */
     EXPORT operator Expr() const;
 
-    /** When a FuncRefExpr refers to a function that provides multiple
-     * outputs, you can access each output as an Expr using
-     * operator[].
-     */
-    EXPORT Expr operator[](int) const;
-
-    /** How many outputs does the function this refers to produce. */
-    EXPORT size_t size() const;
-
     /** What function is this calling? */
-    EXPORT Internal::Function function() const {return func;}
+    EXPORT Internal::Function function() const {return func_ref.function();}
+
+    /** Return index to the function outputs. */
+    EXPORT int index() const {return idx;}
 };
 
 namespace Internal {
@@ -338,8 +437,8 @@ class Func {
      * up with 'implicit' vars with canonical names. This lets you
      * pass around partially applied Halide functions. */
     // @{
-    int add_implicit_vars(std::vector<Var> &) const;
-    int add_implicit_vars(std::vector<Expr> &) const;
+    std::pair<int, int> add_implicit_vars(std::vector<Var> &) const;
+    std::pair<int, int> add_implicit_vars(std::vector<Expr> &) const;
     // @}
 
     /** The imaging pipeline that outputs this Func alone. */
@@ -372,23 +471,23 @@ public:
      * Function object. */
     EXPORT explicit Func(Internal::Function f);
 
+    /** Construct a new Func to wrap a Buffer. */
+    template<typename T, int D>
+    NO_INLINE explicit Func(const Buffer<T, D> &im) : Func() {
+        (*this)(_) = im(_);
+    }
+
     /** Evaluate this function over some rectangular domain and return
      * the resulting buffer or buffers. Performs compilation if the
      * Func has not previously been realized and jit_compile has not
-     * been called. The returned Buffer should probably be instantly
-     * wrapped in an Image class of the appropriate type. That is, do
-     * this:
+     * been called. If the final stage of the pipeline is on the GPU,
+     * data is copied back to the host before being returned. The
+     * returned Realization should probably be instantly converted to
+     * a Buffer class of the appropriate type. That is, do this:
      *
      \code
      f(x) = sin(x);
-     Image<float> im = f.realize(...);
-     \endcode
-     *
-     * not this:
-     *
-     \code
-     f(x) = sin(x)
-     Buffer im = f.realize(...)
+     Buffer<float> im = f.realize(...);
      \endcode
      *
      * If your Func has multiple values, because you defined it using
@@ -399,8 +498,8 @@ public:
      \code
      f(x) = Tuple(x, sin(x));
      Realization r = f.realize(...);
-     Image<int> im0 = r[0];
-     Image<float> im1 = r[1];
+     Buffer<int> im0 = r[0];
+     Buffer<float> im1 = r[1];
      \endcode
      *
      */
@@ -412,24 +511,25 @@ public:
                                const Target &target = Target());
     EXPORT Realization realize(int x_size, int y_size,
                                const Target &target = Target());
-    EXPORT Realization realize(int x_size = 0,
+    EXPORT Realization realize(int x_size,
                                const Target &target = Target());
+    EXPORT Realization realize(const Target &target = Target());
     // @}
 
     /** Evaluate this function into an existing allocated buffer or
      * buffers. If the buffer is also one of the arguments to the
      * function, strange things may happen, as the pipeline isn't
      * necessarily safe to run in-place. If you pass multiple buffers,
-     * they must have matching sizes. */
+     * they must have matching sizes. This form of realize does *not*
+     * automatically copy data back from the GPU. */
     // @{
     EXPORT void realize(Realization dst, const Target &target = Target());
-    EXPORT void realize(Buffer dst, const Target &target = Target());
 
-    template<typename T>
-    NO_INLINE void realize(Image<T> dst, const Target &target = Target()) {
-        // Images are expected to exist on-host.
-        realize(Buffer(dst), target);
-        dst.copy_to_host();
+    template<typename T, int D>
+    NO_INLINE void realize(Buffer<T, D> &dst, const Target &target = Target()) {
+        Realization r(dst);
+        realize(r, target);
+        dst = r[0];
     }
     // @}
 
@@ -441,7 +541,17 @@ public:
     // @{
     EXPORT void infer_input_bounds(int x_size = 0, int y_size = 0, int z_size = 0, int w_size = 0);
     EXPORT void infer_input_bounds(Realization dst);
-    EXPORT void infer_input_bounds(Buffer dst);
+
+    template<typename T, int D>
+    NO_INLINE void infer_input_bounds(Buffer<T, D> &im) {
+        // It's possible for bounds inference to also manipulate
+        // output buffers if their host pointer is null, so we must
+        // take Buffers by reference and communicate the bounds query
+        // result by modifying the argument.
+        Realization r(im);
+        infer_input_bounds(r);
+        im = r[0];
+    }
     // @}
 
     /** Statically compile this function to llvm bitcode, with the
@@ -470,7 +580,7 @@ public:
      * given filename (which should probably end in .o or .obj), type
      * signature, and C function name (which defaults to the same name
      * as this halide function. You probably don't want to use this
-     * directly; call compile_to_file instead. */
+     * directly; call compile_to_static_library or compile_to_file instead. */
     //@{
     EXPORT void compile_to_object(const std::string &filename, const std::vector<Argument> &, const std::string &fn_name,
                                   const Target &target = get_target_from_environment());
@@ -484,7 +594,7 @@ public:
      * third. The name defaults to the same name as this halide
      * function. You don't actually have to have defined this function
      * yet to call this. You probably don't want to use this directly;
-     * call compile_to_file instead. */
+     * call compile_to_static_library or compile_to_file instead. */
     EXPORT void compile_to_header(const std::string &filename, const std::vector<Argument> &, const std::string &fn_name = "",
                                   const Target &target = get_target_from_environment());
 
@@ -523,11 +633,31 @@ public:
     EXPORT void print_loop_nest();
 
     /** Compile to object file and header pair, with the given
-     * arguments. Also names the C function to match the first
-     * argument.
+     * arguments. The name defaults to the same name as this halide
+     * function.
      */
     EXPORT void compile_to_file(const std::string &filename_prefix, const std::vector<Argument> &args,
+                                const std::string &fn_name = "",
                                 const Target &target = get_target_from_environment());
+
+    /** Compile to static-library file and header pair, with the given
+     * arguments. The name defaults to the same name as this halide
+     * function.
+     */
+    EXPORT void compile_to_static_library(const std::string &filename_prefix, const std::vector<Argument> &args,
+                                          const std::string &fn_name = "",
+                                          const Target &target = get_target_from_environment());
+
+    /** Compile to static-library file and header pair once for each target;
+     * each resulting function will be considered (in order) via halide_can_use_target_features()
+     * at runtime, with the first appropriate match being selected for subsequent use.
+     * This is typically useful for specializations that may vary unpredictably by machine
+     * (e.g., SSE4.1/AVX/AVX2 on x86 desktop machines).
+     * All targets must have identical arch-os-bits.
+     */
+    EXPORT void compile_to_multitarget_static_library(const std::string &filename_prefix,
+                                                      const std::vector<Argument> &args,
+                                                      const std::vector<Target> &targets);
 
     /** Store an internal representation of lowered code as a self
      * contained Module suitable for further compilation. */
@@ -740,9 +870,9 @@ public:
      * functions that return a single value. */
     EXPORT Tuple update_values(int idx = 0) const;
 
-    /** Get the reduction domain for an update definition, if there is
+    /** Get the RVars of the reduction domain for an update definition, if there is
      * one. */
-    EXPORT RDom reduction_domain(int idx = 0) const;
+    EXPORT std::vector<RVar> rvars(int idx = 0) const;
 
     /** Does this function have at least one update definition? */
     EXPORT bool has_update_definition() const;
@@ -795,42 +925,142 @@ public:
      * enough implicit vars are added to the end of the argument list
      * to make up the difference (see \ref Var::implicit) */
     // @{
-    EXPORT FuncRefVar operator()(std::vector<Var>) const;
+    EXPORT FuncRef operator()(std::vector<Var>) const;
 
     template <typename... Args>
-    NO_INLINE typename std::enable_if<Internal::all_are_convertible<Var, Args...>::value, FuncRefVar>::type
-    operator()(Args... args) const {
-        std::vector<Var> collected_args;
-        Internal::collect_args(collected_args, args...);
+    NO_INLINE typename std::enable_if<Internal::all_are_convertible<Var, Args...>::value, FuncRef>::type
+    operator()(Args&&... args) const {
+        std::vector<Var> collected_args{std::forward<Args>(args)...};
         return this->operator()(collected_args);
     }
     // @}
 
-    /** Either calls to the function, or the left-hand-side of a
-     * update definition (see \ref RDom). If the function has
+    /** Either calls to the function, or the left-hand-side of
+     * an update definition (see \ref RDom). If the function has
      * already been defined, and fewer arguments are given than the
      * function has dimensions, then enough implicit vars are added to
      * the end of the argument list to make up the difference. (see
      * \ref Var::implicit)*/
     // @{
-    EXPORT FuncRefExpr operator()(std::vector<Expr>) const;
+    EXPORT FuncRef operator()(std::vector<Expr>) const;
 
     template <typename... Args>
-    NO_INLINE typename std::enable_if<Internal::all_are_convertible<Expr, Args...>::value, FuncRefExpr>::type
-    operator()(Expr x, Args... args) const {
-        std::vector<Expr> collected_args;
-        collected_args.push_back(x);
-        Internal::collect_args(collected_args, args...);
+    NO_INLINE typename std::enable_if<Internal::all_are_convertible<Expr, Args...>::value, FuncRef>::type
+    operator()(Expr x, Args&&... args) const {
+        std::vector<Expr> collected_args{x, std::forward<Args>(args)...};
         return (*this)(collected_args);
     }
     // @}
+
+    /** Creates and returns a new Func that wraps this Func. During
+     * compilation, Halide replaces all calls to this Func done by 'f'
+     * with calls to the wrapper. If this Func is already wrapped for
+     * use in 'f', will return the existing wrapper.
+     *
+     * For example, g.in(f) would rewrite a pipeline like this:
+     \code
+     g(x, y) = ...
+     f(x, y) = ... g(x, y) ...
+     \endcode
+     * into a pipeline like this:
+     \code
+     g(x, y) = ...
+     g_wrap(x, y) = g(x, y)
+     f(x, y) = ... g_wrap(x, y)
+     \endcode
+     *
+     * This has a variety of uses. You can use it to schedule this
+     * Func differently in the different places it is used:
+     \code
+     g(x, y) = ...
+     f1(x, y) = ... g(x, y) ...
+     f2(x, y) = ... g(x, y) ...
+     g.in(f1).compute_at(f1, y).vectorize(x, 8);
+     g.in(f2).compute_at(f2, x).unroll(x);
+     \endcode
+     *
+     * You can also use it to stage loads from this Func via some
+     * intermediate buffer (perhaps on the stack as in
+     * test/performance/block_transpose.cpp, or in shared GPU memory
+     * as in test/performance/wrap.cpp). In this we compute the
+     * wrapper at tiles of the consuming Funcs like so:
+     \code
+     g.compute_root()...
+     g.in(f).compute_at(f, tiles)...
+     \endcode
+     *
+     * Func::in() can also be used to compute pieces of a Func into a
+     * smaller scratch buffer (perhaps on the GPU) and then copy them
+     * into a larger output buffer one tile at a time. See
+     * apps/interpolate/interpolate.cpp for an example of this. In
+     * this case we compute the Func at tiles of its own wrapper:
+     \code
+     f.in(g).compute_root().gpu_tile(...)...
+     f.compute_at(f.in(g), tiles)...
+     \endcode
+     *
+     * A similar use of Func::in() wrapping Funcs with multiple update
+     * stages in a pure wrapper. The following code:
+     \code
+     f(x, y) = x + y;
+     f(x, y) += 5;
+     g(x, y) = f(x, y);
+     f.compute_root();
+     \endcode
+     *
+     * Is equivalent to:
+     \code
+     for y:
+       for x:
+         f(x, y) = x + y;
+     for y:
+       for x:
+         f(x, y) += 5
+     for y:
+       for x:
+         g(x, y) = f(x, y)
+     \endcode
+     * using Func::in(), we can write:
+     \code
+     f(x, y) = x + y;
+     f(x, y) += 5;
+     g(x, y) = f(x, y);
+     f.in(g).compute_root();
+     \endcode
+     * which instead produces:
+     \code
+     for y:
+       for x:
+         f(x, y) = x + y;
+         f(x, y) += 5
+         f_wrap(x, y) = f(x, y)
+     for y:
+       for x:
+         g(x, y) = f_wrap(x, y)
+     \endcode
+     */
+    EXPORT Func in(const Func &f);
+
+    /** Create and return a wrapper shared by all the Funcs in
+     * 'fs'. If any of the Funcs in 'fs' already have a custom
+     * wrapper, this will throw an error. */
+    EXPORT Func in(const std::vector<Func> &fs);
+
+    /** Create and return a global wrapper, which wraps all calls to
+     * this Func by any other Func. If a global wrapper already
+     * exists, returns it. The global wrapper is only used by callers
+     * for which no custom wrapper has been specified.
+    */
+    EXPORT Func in();
 
     /** Split a dimension into inner and outer subdimensions with the
      * given names, where the inner dimension iterates from 0 to
      * factor-1. The inner and outer subdimensions can then be dealt
      * with using the other scheduling calls. It's ok to reuse the old
-     * variable name as either the inner or outer variable. */
-    EXPORT Func &split(VarOrRVar old, VarOrRVar outer, VarOrRVar inner, Expr factor);
+     * variable name as either the inner or outer variable. The final
+     * argument specifies how the tail should be handled if the split
+     * factor does not provably divide the extent. */
+    EXPORT Func &split(VarOrRVar old, VarOrRVar outer, VarOrRVar inner, Expr factor, TailStrategy tail = TailStrategy::Auto);
 
     /** Join two dimensions into a single fused dimenion. The fused
      * dimension covers the product of the extents of the inner and
@@ -849,7 +1079,7 @@ public:
      * the split. The inner dimension has a new anonymous name. If you
      * wish to mutate it, or schedule with respect to it, do the split
      * manually. */
-    EXPORT Func &parallel(VarOrRVar var, Expr task_size);
+    EXPORT Func &parallel(VarOrRVar var, Expr task_size, TailStrategy tail = TailStrategy::Auto);
 
     /** Mark a dimension to be computed all-at-once as a single
      * vector. The dimension should have constant extent -
@@ -870,13 +1100,13 @@ public:
      * size. The variable to be vectorized should be the innermost
      * one. After this call, var refers to the outer dimension of the
      * split. */
-    EXPORT Func &vectorize(VarOrRVar var, int factor);
+    EXPORT Func &vectorize(VarOrRVar var, int factor, TailStrategy tail = TailStrategy::Auto);
 
     /** Split a dimension by the given factor, then unroll the inner
      * dimension. This is how you unroll a loop of unknown size by
      * some constant factor. After this call, var refers to the outer
      * dimension of the split. */
-    EXPORT Func &unroll(VarOrRVar var, int factor);
+    EXPORT Func &unroll(VarOrRVar var, int factor, TailStrategy tail = TailStrategy::Auto);
 
     /** Statically declare that the range over which a function should
      * be evaluated is given by the second and third arguments. This
@@ -885,9 +1115,26 @@ public:
      * vectorize the color channel dimension without the overhead of
      * splitting it up. If bounds inference decides that it requires
      * more of this function than the bounds you have stated, a
-     * runtime error will occur when you try to run your pipeline.
-     */
+     * runtime error will occur when you try to run your pipeline. */
     EXPORT Func &bound(Var var, Expr min, Expr extent);
+
+    /** Expand the region computed so that the min coordinates is
+     * congruent to 'remainder' modulo 'modulus', and the extent is a
+     * multiple of 'modulus'. For example, f.align_bounds(x, 2) forces
+     * the min and extent realized to be even, and calling
+     * f.align_bounds(x, 2, 1) forces the min to be odd and the extent
+     * to be even. The region computed always contains the region that
+     * would have been computed without this directive, so no
+     * assertions are injected. */
+    EXPORT Func &align_bounds(Var var, Expr modulus, Expr remainder = 0);
+
+    /** Bound the extent of a Func's realization, but not its
+     * min. This means the dimension can be unrolled or vectorized
+     * even when its min is not fixed (for example because it is
+     * compute_at tiles of another Func). This can also be useful for
+     * forcing a function's allocation to be a fixed size, which often
+     * means it can go on the stack. */
+    EXPORT Func &bound_extent(Var var, Expr extent);
 
     /** Split two dimensions at once by the given factors, and then
      * reorder the resulting dimensions to be xi, yi, xo, yo from
@@ -895,13 +1142,15 @@ public:
     EXPORT Func &tile(VarOrRVar x, VarOrRVar y,
                       VarOrRVar xo, VarOrRVar yo,
                       VarOrRVar xi, VarOrRVar yi,
-                      Expr xfactor, Expr yfactor);
+                      Expr xfactor, Expr yfactor,
+                      TailStrategy tail = TailStrategy::Auto);
 
     /** A shorter form of tile, which reuses the old variable names as
      * the new outer dimensions */
     EXPORT Func &tile(VarOrRVar x, VarOrRVar y,
                       VarOrRVar xi, VarOrRVar yi,
-                      Expr xfactor, Expr yfactor);
+                      Expr xfactor, Expr yfactor,
+                      TailStrategy tail = TailStrategy::Auto);
 
     /** Reorder variables to have the given nesting order, from
      * innermost out */
@@ -909,11 +1158,8 @@ public:
 
     template <typename... Args>
     NO_INLINE typename std::enable_if<Internal::all_are_convertible<VarOrRVar, Args...>::value, Func &>::type
-    reorder(VarOrRVar x, VarOrRVar y, Args... args) {
-        std::vector<VarOrRVar> collected_args;
-        collected_args.push_back(x);
-        collected_args.push_back(y);
-        Internal::collect_args(collected_args, args...);
+    reorder(VarOrRVar x, VarOrRVar y, Args&&... args) {
+        std::vector<VarOrRVar> collected_args{x, y, std::forward<Args>(args)...};
         return reorder(collected_args);
     }
 
@@ -1182,28 +1428,20 @@ public:
      * GPU thread indices. Consumes the variables given, so do all
      * other scheduling first. */
     // @{
-    EXPORT Func &gpu_tile(VarOrRVar x, int x_size, DeviceAPI device_api = DeviceAPI::Default_GPU);
-    EXPORT Func &gpu_tile(VarOrRVar x, VarOrRVar y, int x_size, int y_size, DeviceAPI device_api = DeviceAPI::Default_GPU);
+    EXPORT Func &gpu_tile(VarOrRVar x, int x_size,
+                          TailStrategy tail = TailStrategy::Auto,
+                          DeviceAPI device_api = DeviceAPI::Default_GPU);
+    EXPORT Func &gpu_tile(VarOrRVar x, VarOrRVar y, int x_size, int y_size,
+                          TailStrategy tail = TailStrategy::Auto,
+                          DeviceAPI device_api = DeviceAPI::Default_GPU);
     EXPORT Func &gpu_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
-                          int x_size, int y_size, int z_size, DeviceAPI device_api = DeviceAPI::Default_GPU);
-    // @}
-
-    /** \deprecated Old name for #gpu_tile. */
-    // @{
-    EXPORT Func &cuda_tile(VarOrRVar x, int x_size) {
-        return gpu_tile(x, x_size);
-    }
-    EXPORT Func &cuda_tile(VarOrRVar x, VarOrRVar y, int x_size, int y_size) {
-        return gpu_tile(x, y, x_size, y_size);
-    }
-    EXPORT Func &cuda_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
-                           int x_size, int y_size, int z_size) {
-        return gpu_tile(x, y, z, x_size, y_size, z_size);
-    }
+                          int x_size, int y_size, int z_size,
+                          TailStrategy tail = TailStrategy::Auto,
+                          DeviceAPI device_api = DeviceAPI::Default_GPU);
     // @}
 
     /** Schedule for execution using coordinate-based hardware api.
-     * GLSL and Renderscript are examples of those. Conceptually, this is
+     * GLSL is an example of this. Conceptually, this is
      * similar to parallelization over 'x' and 'y' (since GLSL shaders compute
      * individual output pixels in parallel) and vectorization over 'c'
      * (since GLSL/RS implicitly vectorizes the color channel). */
@@ -1211,6 +1449,16 @@ public:
 
     /** Schedule for execution as GLSL kernel. */
     EXPORT Func &glsl(Var x, Var y, Var c);
+
+    /** Schedule for execution on Hexagon. When a loop is marked with
+     * Hexagon, that loop is executed on a Hexagon DSP. */
+    EXPORT Func &hexagon(VarOrRVar x = Var::outermost());
+
+    /** Prefetch data read by a subsequent loop iteration, at an
+     * optionally specified iteration offset. This is currently only
+     * implemented on Hexagon, prefetch directives are ignored on
+     * other targets. */
+    EXPORT Func &prefetch(VarOrRVar var, Expr offset = 1);
 
     /** Specify how the storage for the function is laid out. These
      * calls let you specify the nesting order of the dimensions. For
@@ -1232,14 +1480,55 @@ public:
     EXPORT Func &reorder_storage(Var x, Var y);
     template <typename... Args>
     NO_INLINE typename std::enable_if<Internal::all_are_convertible<Var, Args...>::value, Func &>::type
-    reorder_storage(Var x, Var y, Args... args) {
-        std::vector<Var> collected_args;
-        collected_args.push_back(x);
-        collected_args.push_back(y);
-        Internal::collect_args(collected_args, args...);
+    reorder_storage(Var x, Var y, Args&&... args) {
+        std::vector<Var> collected_args{x, y, std::forward<Args>(args)...};
         return reorder_storage(collected_args);
     }
     // @}
+
+    /** Pad the storage extent of a particular dimension of
+     * realizations of this function up to be a multiple of the
+     * specified alignment. This guarantees that the strides for the
+     * dimensions stored outside of dim will be multiples of the
+     * specified alignment, where the strides and alignment are
+     * measured in numbers of elements.
+     *
+     * For example, to guarantee that a function foo(x, y, c)
+     * representing an image has scanlines starting on offsets
+     * aligned to multiples of 16, use foo.align_storage(x, 16). */
+    EXPORT Func &align_storage(Var dim, Expr alignment);
+
+    /** Store realizations of this function in a circular buffer of a
+     * given extent. This is more efficient when the extent of the
+     * circular buffer is a power of 2. If the fold factor is too
+     * small, or the dimension is not accessed monotonically, the
+     * pipeline will generate an error at runtime.
+     *
+     * The fold_forward option indicates that the new values of the
+     * producer are accessed by the consumer in a monotonically
+     * increasing order. Folding storage of producers is also
+     * supported if the new values are accessed in a monotonically
+     * decreasing order by setting fold_forward to false.
+     *
+     * For example, consider the pipeline:
+     \code
+     Func f, g;
+     Var x, y;
+     g(x, y) = x*y;
+     f(x, y) = g(x, y) + g(x, y+1);
+     \endcode
+     *
+     * If we schedule f like so:
+     *
+     \code
+     g.compute_at(f, y).store_root().fold_storage(y, 2);
+     \endcode
+     *
+     * Then g will be computed at each row of f and stored in a buffer
+     * with an extent in y of 2, alternately storing each computed row
+     * of g in row y=0 or y=1.
+     */
+    EXPORT Func &fold_storage(Var dim, Expr extent, bool fold_forward = true);
 
     /** Compute this function as needed for each unique value of the
      * given var for the given calling function f.
@@ -1316,6 +1605,10 @@ public:
      * some dimension of an update domain. Produces equivalent code
      * to the version of compute_at that takes a Var. */
     EXPORT Func &compute_at(Func f, RVar var);
+
+    /** Schedule a function to be computed within the iteration over
+     * a given LoopLevel. */
+    EXPORT Func &compute_at(LoopLevel loop_level);
 
     /** Compute all of this function once ahead of time. Reusing
      * the example in \ref Func::compute_at :
@@ -1461,6 +1754,11 @@ public:
      * reduction domain */
     EXPORT Func &store_at(Func f, RVar var);
 
+
+    /** Equivalent to the version of store_at that takes a Var, but
+     * schedules storage at a given LoopLevel. */
+    EXPORT Func &store_at(LoopLevel loop_level);
+
     /** Equivalent to \ref Func::store_at, but schedules storage
      * outside the outermost loop. */
     EXPORT Func &store_root();
@@ -1529,24 +1827,6 @@ public:
     EXPORT std::vector<OutputImageParam> output_buffers() const;
     // @}
 
-    /** Casting a function to an expression is equivalent to calling
-     * the function with zero arguments. Implicit variables will be
-     * injected according to the function's dimensionality
-     * (see \ref Var::implicit).
-     *
-     * This lets you write things like:
-     *
-     \code
-     Func f, g;
-     Var x;
-     g(x) = ...
-     f(_) = g * 2;
-     \endcode
-    */
-    operator Expr() const {
-        return (*this)(_);
-    }
-
     /** Use a Func as an argument to an external stage. */
     operator ExternFuncArgument() const {
         return ExternFuncArgument(func);
@@ -1561,12 +1841,42 @@ public:
      \endcode
      */
     EXPORT std::vector<Argument> infer_arguments() const;
-
 };
 
- /** JIT-Compile and run enough code to evaluate a Halide
-  * expression. This can be thought of as a scalar version of
-  * \ref Func::realize */
+namespace Internal {
+
+template <typename Last>
+inline void check_types(const Tuple &t, int idx) {
+    using T = typename std::remove_pointer<typename std::remove_reference<Last>::type>::type;
+    user_assert(t[idx].type() == type_of<T>())
+        << "Can't evaluate expression "
+        << t[idx] << " of type " << t[idx].type()
+        << " as a scalar of type " << type_of<T>() << "\n";
+}
+
+template <typename First, typename Second, typename... Rest>
+inline void check_types(const Tuple &t, int idx) {
+    check_types<First>(t, idx);
+    check_types<Second, Rest...>(t, idx+1);
+}
+
+template <typename Last>
+inline void assign_results(Realization &r, int idx, Last last) {
+    using T = typename std::remove_pointer<typename std::remove_reference<Last>::type>::type;
+    *last = Buffer<T>(r[idx])();
+}
+
+template <typename First, typename Second, typename... Rest>
+inline void assign_results(Realization &r, int idx, First first, Second second, Rest&&... rest) {
+    assign_results<First>(r, idx, first);
+    assign_results<Second, Rest...>(r, idx+1, second, rest...);
+}
+
+}  // namespace Internal
+
+/** JIT-Compile and run enough code to evaluate a Halide
+ * expression. This can be thought of as a scalar version of
+ * \ref Func::realize */
 template<typename T>
 NO_INLINE T evaluate(Expr e) {
     user_assert(e.type() == type_of<T>())
@@ -1575,82 +1885,35 @@ NO_INLINE T evaluate(Expr e) {
         << " as a scalar of type " << type_of<T>() << "\n";
     Func f;
     f() = e;
-    Image<T> im = f.realize();
-    return im(0);
+    Buffer<T> im = f.realize();
+    return im();
 }
 
 /** JIT-compile and run enough code to evaluate a Halide Tuple. */
-// @{
-template<typename A, typename B>
-NO_INLINE void evaluate(Tuple t, A *a, B *b) {
-    user_assert(t[0].type() == type_of<A>())
-        << "Can't evaluate expression "
-        << t[0] << " of type " << t[0].type()
-        << " as a scalar of type " << type_of<A>() << "\n";
-    user_assert(t[1].type() == type_of<B>())
-        << "Can't evaluate expression "
-        << t[1] << " of type " << t[1].type()
-        << " as a scalar of type " << type_of<B>() << "\n";
+template <typename First, typename... Rest>
+NO_INLINE void evaluate(Tuple t, First first, Rest&&... rest) {
+    Internal::check_types<First, Rest...>(t, 0);
 
     Func f;
     f() = t;
     Realization r = f.realize();
-    *a = Image<A>(r[0])(0);
-    *b = Image<B>(r[1])(0);
+    Internal::assign_results(r, 0, first, rest...);
 }
 
-template<typename A, typename B, typename C>
-NO_INLINE void evaluate(Tuple t, A *a, B *b, C *c) {
-    user_assert(t[0].type() == type_of<A>())
-        << "Can't evaluate expression "
-        << t[0] << " of type " << t[0].type()
-        << " as a scalar of type " << type_of<A>() << "\n";
-    user_assert(t[1].type() == type_of<B>())
-        << "Can't evaluate expression "
-        << t[1] << " of type " << t[1].type()
-        << " as a scalar of type " << type_of<B>() << "\n";
-    user_assert(t[2].type() == type_of<C>())
-        << "Can't evaluate expression "
-        << t[2] << " of type " << t[2].type()
-        << " as a scalar of type " << type_of<C>() << "\n";
 
-    Func f;
-    f() = t;
-    Realization r = f.realize();
-    *a = Image<A>(r[0])(0);
-    *b = Image<B>(r[1])(0);
-    *c = Image<C>(r[2])(0);
+namespace Internal {
+
+inline void schedule_scalar(Func f) {
+    Target t = get_jit_target_from_environment();
+    if (t.has_gpu_feature()) {
+        f.gpu_single_thread();
+    }
+    if (t.has_feature(Target::HVX_64) || t.has_feature(Target::HVX_128)) {
+        f.hexagon();
+    }
 }
 
-template<typename A, typename B, typename C, typename D>
-NO_INLINE void evaluate(Tuple t, A *a, B *b, C *c, D *d) {
-    user_assert(t[0].type() == type_of<A>())
-        << "Can't evaluate expression "
-        << t[0] << " of type " << t[0].type()
-        << " as a scalar of type " << type_of<A>() << "\n";
-    user_assert(t[1].type() == type_of<B>())
-        << "Can't evaluate expression "
-        << t[1] << " of type " << t[1].type()
-        << " as a scalar of type " << type_of<B>() << "\n";
-    user_assert(t[2].type() == type_of<C>())
-        << "Can't evaluate expression "
-        << t[2] << " of type " << t[2].type()
-        << " as a scalar of type " << type_of<C>() << "\n";
-    user_assert(t[3].type() == type_of<D>())
-        << "Can't evaluate expression "
-        << t[3] << " of type " << t[3].type()
-        << " as a scalar of type " << type_of<D>() << "\n";
-
-    Func f;
-    f() = t;
-    Realization r = f.realize();
-    *a = Image<A>(r[0])(0);
-    *b = Image<B>(r[1])(0);
-    *c = Image<C>(r[2])(0);
-    *d = Image<D>(r[3])(0);
-}
- // @}
-
+}  // namespace Internal
 
 /** JIT-Compile and run enough code to evaluate a Halide
  * expression. This can be thought of as a scalar version of
@@ -1663,97 +1926,25 @@ NO_INLINE T evaluate_may_gpu(Expr e) {
         << "Can't evaluate expression "
         << e << " of type " << e.type()
         << " as a scalar of type " << type_of<T>() << "\n";
-    bool has_gpu_feature = get_jit_target_from_environment().has_gpu_feature();
     Func f;
     f() = e;
-    if (has_gpu_feature) {
-        f.gpu_single_thread();
-    }
-    Image<T> im = f.realize();
-    return im(0);
+    Internal::schedule_scalar(f);
+    Buffer<T> im = f.realize();
+    return im();
 }
 
 /** JIT-compile and run enough code to evaluate a Halide Tuple. Can
  *  use GPU if jit target from environment specifies one. */
 // @{
-template<typename A, typename B>
-NO_INLINE void evaluate_may_gpu(Tuple t, A *a, B *b) {
-    user_assert(t[0].type() == type_of<A>())
-        << "Can't evaluate expression "
-        << t[0] << " of type " << t[0].type()
-        << " as a scalar of type " << type_of<A>() << "\n";
-    user_assert(t[1].type() == type_of<B>())
-        << "Can't evaluate expression "
-        << t[1] << " of type " << t[1].type()
-        << " as a scalar of type " << type_of<B>() << "\n";
+template <typename First, typename... Rest>
+NO_INLINE void evaluate_may_gpu(Tuple t, First first, Rest&&... rest) {
+    Internal::check_types<First, Rest...>(t, 0);
 
-    bool has_gpu_feature = get_jit_target_from_environment().has_gpu_feature();
     Func f;
     f() = t;
-    if (has_gpu_feature) {
-        f.gpu_single_thread();
-    }
+    Internal::schedule_scalar(f);
     Realization r = f.realize();
-    *a = Image<A>(r[0])(0);
-    *b = Image<B>(r[1])(0);
-}
-
-template<typename A, typename B, typename C>
-NO_INLINE void evaluate_may_gpu(Tuple t, A *a, B *b, C *c) {
-    user_assert(t[0].type() == type_of<A>())
-        << "Can't evaluate expression "
-        << t[0] << " of type " << t[0].type()
-        << " as a scalar of type " << type_of<A>() << "\n";
-    user_assert(t[1].type() == type_of<B>())
-        << "Can't evaluate expression "
-        << t[1] << " of type " << t[1].type()
-        << " as a scalar of type " << type_of<B>() << "\n";
-    user_assert(t[2].type() == type_of<C>())
-        << "Can't evaluate expression "
-        << t[2] << " of type " << t[2].type()
-        << " as a scalar of type " << type_of<C>() << "\n";
-    bool has_gpu_feature = get_jit_target_from_environment().has_gpu_feature();
-    Func f;
-    f() = t;
-    if (has_gpu_feature) {
-        f.gpu_single_thread();
-    }
-    Realization r = f.realize();
-    *a = Image<A>(r[0])(0);
-    *b = Image<B>(r[1])(0);
-    *c = Image<C>(r[2])(0);
-}
-
-template<typename A, typename B, typename C, typename D>
-NO_INLINE void evaluate_may_gpu(Tuple t, A *a, B *b, C *c, D *d) {
-    user_assert(t[0].type() == type_of<A>())
-        << "Can't evaluate expression "
-        << t[0] << " of type " << t[0].type()
-        << " as a scalar of type " << type_of<A>() << "\n";
-    user_assert(t[1].type() == type_of<B>())
-        << "Can't evaluate expression "
-        << t[1] << " of type " << t[1].type()
-        << " as a scalar of type " << type_of<B>() << "\n";
-    user_assert(t[2].type() == type_of<C>())
-        << "Can't evaluate expression "
-        << t[2] << " of type " << t[2].type()
-        << " as a scalar of type " << type_of<C>() << "\n";
-    user_assert(t[3].type() == type_of<D>())
-        << "Can't evaluate expression "
-        << t[3] << " of type " << t[3].type()
-        << " as a scalar of type " << type_of<D>() << "\n";
-
-    bool has_gpu_feature = get_jit_target_from_environment().has_gpu_feature();
-    Func f;
-    f() = t;
-    if (has_gpu_feature) {
-        f.gpu_single_thread();
-    }
-    Realization r = f.realize();
-    *a = Image<A>(r[0])(0);
-    *b = Image<B>(r[1])(0);
-    *c = Image<C>(r[2])(0);
-    *d = Image<D>(r[3])(0);
+    Internal::assign_results(r, 0, first, rest...);
 }
 // @}
 

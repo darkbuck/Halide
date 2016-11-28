@@ -42,17 +42,17 @@ ostream &operator<<(ostream &stream, const Expr &ir) {
     return stream;
 }
 
-ostream &operator <<(ostream &stream, const Buffer &buffer) {
+ostream &operator <<(ostream &stream, const Internal::BufferPtr &buffer) {
     return stream << "buffer " << buffer.name() << " = {...}\n";
 }
 
 ostream &operator<<(ostream &stream, const Module &m) {
     stream << "Target = " << m.target().to_string() << "\n";
-    for (size_t i = 0; i < m.buffers.size(); i++) {
-        stream << m.buffers[i] << "\n";
+    for (const auto &b : m.buffers()) {
+        stream << b << "\n";
     }
-    for (size_t i = 0; i < m.functions.size(); i++) {
-        stream << m.functions[i] << "\n";
+    for (const auto &f : m.functions()) {
+        stream << f << "\n";
     }
     return stream;
 }
@@ -60,9 +60,7 @@ ostream &operator<<(ostream &stream, const Module &m) {
 ostream &operator<<(ostream &out, const DeviceAPI &api) {
     switch (api) {
     case DeviceAPI::Host:
-        break;
-    case DeviceAPI::Parent:
-        out << "<Parent>";
+    case DeviceAPI::None:
         break;
     case DeviceAPI::Default_GPU:
         out << "<Default_GPU>";
@@ -79,11 +77,11 @@ ostream &operator<<(ostream &out, const DeviceAPI &api) {
     case DeviceAPI::GLSL:
         out << "<GLSL>";
         break;
-    case DeviceAPI::Renderscript:
-        out << "<Renderscript>";
-        break;
     case DeviceAPI::Metal:
         out << "<Metal>";
+        break;
+    case DeviceAPI::Hexagon:
+        out << "<Hexagon>";
         break;
     }
     return out;
@@ -100,13 +98,17 @@ void IRPrinter::test() {
     expr_source << (x + 3) * (y / 2 + 17);
     internal_assert(expr_source.str() == "((x + 3)*((y/2) + 17))");
 
-    Stmt store = Store::make("buf", (x * 17) / (x - 3), y - 1);
+    Stmt store = Store::make("buf", (x * 17) / (x - 3), y - 1,  Parameter());
     Stmt for_loop = For::make("x", -2, y + 2, ForType::Parallel, DeviceAPI::Host, store);
     vector<Expr> args(1); args[0] = x % 3;
     Expr call = Call::make(i32, "buf", args, Call::Extern);
-    Stmt store2 = Store::make("out", call + 1, x);
+    Stmt store2 = Store::make("out", call + 1, x, Parameter());
     Stmt for_loop2 = For::make("x", 0, y, ForType::Vectorized , DeviceAPI::Host, store2);
-    Stmt pipeline = ProducerConsumer::make("buf", for_loop, Stmt(), for_loop2);
+
+    Stmt producer = ProducerConsumer::make("buf", true, for_loop);
+    Stmt consumer = ProducerConsumer::make("buf", false, for_loop2);
+    Stmt pipeline = Block::make(producer, consumer);
+
     Stmt assertion = AssertStmt::make(y >= 3, Call::make(Int(32), "halide_error_param_too_small_i64",
                                                          {string("y"), y, 3}, Call::Extern));
     Stmt block = Block::make(assertion, pipeline);
@@ -491,25 +493,17 @@ void IRPrinter::visit(const AssertStmt *op) {
 }
 
 void IRPrinter::visit(const ProducerConsumer *op) {
-
-    do_indent();
-    stream << "produce " << op->name << " {\n";
-    indent += 2;
-    print(op->produce);
-    indent -= 2;
-
-    if (op->update.defined()) {
+    if (op->is_producer) {
         do_indent();
-        stream << "} update " << op->name << " {\n";
+        stream << "produce " << op->name << " {\n";
         indent += 2;
-        print(op->update);
+        print(op->body);
         indent -= 2;
+        do_indent();
+        stream << "}\n";
+    } else {
+        print(op->body);
     }
-
-    do_indent();
-    stream << "}\n";
-
-    print(op->consume);
 
 }
 

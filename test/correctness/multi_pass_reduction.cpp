@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
         f(xl) = f(xl - 1) + f(xl);
         f(xr) = f(xr + 1) + f(xr);
 
-        Image<float> result = f.realize(11);
+        Buffer<float> result = f.realize(11);
 
         // The same thing in C
         float ref[11];
@@ -62,7 +62,7 @@ int main(int argc, char **argv) {
         f(r2) = g(r2);
 
         g.compute_at(f, r2);
-        Image<int> result = f.realize(110);
+        Buffer<int> result = f.realize(110);
 
         int correct[110];
         for (int i = 0; i < 110; i++) {
@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
             f(i) = f(i-1) + f(i-2);
         }
 
-        Image<int> result = f.realize(20);
+        Buffer<int> result = f.realize(20);
 
         int ref[20];
         ref[0] = 1;
@@ -127,10 +127,10 @@ int main(int argc, char **argv) {
         // we don't have the ability to reorder vars with rvars yet.
         f.update(1).reorder(Var(r.x.name()), y).parallel(y);
 
-        Image<float> result = f.realize(100, 100);
+        Buffer<float> result = f.realize(100, 100);
 
         // Now the equivalent in C (cheating and using Halide for the initial image)
-        Image<float> ref = lambda(x, y, sin(x+y)).realize(100, 100);
+        Buffer<float> ref = lambda(x, y, sin(x+y)).realize(100, 100);
         for (int y = 1; y < 100; y++) {
             for (int x = 0; x < 100; x++) {
                 ref(x, y) += ref(x, y - 1);
@@ -151,35 +151,6 @@ int main(int argc, char **argv) {
                     return -1;
                 }
             }
-        }
-    }
-
-    {
-        // Walk down an image using a few different factors of splits
-        Func f;
-        RDom r(1, 99);
-        Var xo, xi;
-        ImageParam input(Float(32), 2);
-        f(x, y) = input(x, y);
-        f(x, r) += f(x, r-1) + input(x, r);
-        f(x, r) += f(x, r-1) + input(x, r);
-        f(x, r) += f(x, r-1) + input(x, r);
-        f(x, r) += f(x, r-1) + input(x, r);
-        f.update(0).split(x, x, xi, 11);
-        f.update(1).split(x, x, xi, 13);
-        f.update(2).split(x, x, xi, 17);
-        f.update(3);
-
-        // So if we ask for an output of size 100x10, we'll need an
-        // input of size 110 x 100. 110 is enough to cover rounding up
-        // 100 to be a multiple of 11, 13, and 17.
-        f.infer_input_bounds(100, 10);
-
-        Image<float> in = input.get();
-        if (in.width() != 110 || in.height() != 100) {
-            printf("Unexpected image size: %d x %d instead of 144 x 100\n",
-                   in.width(), in.height());
-            return -1;
         }
     }
 

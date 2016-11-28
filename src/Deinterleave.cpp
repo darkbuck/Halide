@@ -1,5 +1,4 @@
 #include "Deinterleave.h"
-#include "BlockFlattening.h"
 #include "Debug.h"
 #include "IRMutator.h"
 #include "IROperator.h"
@@ -465,7 +464,9 @@ class Interleaver : public IRMutator {
     void visit(const Mod *op) {
         const Ramp *r = op->a.as<Ramp>();
         for (int i = 2; i <= 4; ++i) {
-            if (r && is_const(op->b, i)) {
+            if (r &&
+                is_const(op->b, i) &&
+                (r->type.lanes() % i) == 0) {
                 should_deinterleave = true;
                 num_lanes = i;
                 break;
@@ -517,7 +518,7 @@ class Interleaver : public IRMutator {
             value = deinterleave_expr(value);
         }
 
-        stmt = Store::make(op->name, value, idx);
+        stmt = Store::make(op->name, value, idx, op->param);
 
         should_deinterleave = old_should_deinterleave;
         num_lanes = old_num_lanes;
@@ -579,7 +580,7 @@ class Interleaver : public IRMutator {
             std::vector<int> offsets(stores.size());
 
             std::string load_name;
-            Buffer load_image;
+            BufferPtr load_image;
             Parameter load_param;
             for (size_t i = 0; i < stores.size(); ++i) {
                 const Ramp *ri = stores[i].as<Store>()->index.as<Ramp>();
@@ -653,9 +654,9 @@ class Interleaver : public IRMutator {
 
             // Generate a single interleaving store.
             t = t.with_lanes(lanes*stores.size());
-            Expr index = Ramp::make(base, make_one(Int(32)), t.lanes());
+            Expr index = Ramp::make(base, make_one(base.type()), t.lanes());
             Expr value = Call::make(t, Call::interleave_vectors, args, Call::PureIntrinsic);
-            Stmt new_store = Store::make(store->name, value, index);
+            Stmt new_store = Store::make(store->name, value, index, store->param);
 
             // Continue recursively into the stuff that
             // collect_strided_stores didn't collect.
@@ -682,7 +683,6 @@ class Interleaver : public IRMutator {
 };
 
 Stmt rewrite_interleavings(Stmt s) {
-    s = flatten_blocks(s);
     return Interleaver().mutate(s);
 }
 
@@ -713,9 +713,9 @@ void deinterleave_vector_test() {
     check(ramp, ramp_a, ramp_b);
     check(broadcast, broadcast_a, broadcast_b);
 
-    check(Load::make(ramp.type(), "buf", ramp, Buffer(), Parameter()),
-          Load::make(ramp_a.type(), "buf", ramp_a, Buffer(), Parameter()),
-          Load::make(ramp_b.type(), "buf", ramp_b, Buffer(), Parameter()));
+    check(Load::make(ramp.type(), "buf", ramp, BufferPtr(), Parameter()),
+          Load::make(ramp_a.type(), "buf", ramp_a, BufferPtr(), Parameter()),
+          Load::make(ramp_b.type(), "buf", ramp_b, BufferPtr(), Parameter()));
 
     std::cout << "deinterleave_vector test passed" << std::endl;
 }

@@ -166,4 +166,32 @@ WEAK int halide_error_debug_to_file_failed(void *user_context, const char *func,
     return halide_error_code_debug_to_file_failed;
 }
 
+WEAK int halide_error_unaligned_host_ptr(void *user_context, const char *func,
+                                         int alignment) {
+    error(user_context)
+        << "The host pointer of " << func
+        << " is not aligned to a " << alignment
+        << " bytes boundary.";
+    return halide_error_code_unaligned_host_ptr;
 }
+
+WEAK int halide_error_bad_fold(void *user_context, const char *func_name, const char *var_name,
+                               const char *loop_name) {
+    error(user_context)
+        << "The folded storage dimension " << var_name << " of " << func_name
+        << " was accessed out of order by loop " << loop_name << ".";
+    return halide_error_code_bad_fold;
+}
+
+WEAK int halide_error_fold_factor_too_small(void *user_context, const char *func_name, const char *var_name,
+                                            int fold_factor, const char *loop_name, int required_extent) {
+    error(user_context)
+        << "The fold factor (" << fold_factor
+        << ") of dimension " << var_name << " of " << func_name
+        << " is too small to store the required region accessed by loop "
+        << loop_name << " (" << required_extent << ").";
+    return halide_error_code_fold_factor_too_small;
+}
+
+
+}  // extern "C"

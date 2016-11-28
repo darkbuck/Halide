@@ -1,7 +1,10 @@
 #include "RDom.h"
 #include "Util.h"
+#include "ImageParam.h"
+#include "IREquality.h"
 #include "IROperator.h"
 #include "IRPrinter.h"
+#include "Simplify.h"
 
 namespace Halide {
 
@@ -61,7 +64,7 @@ void RDom::init_vars(string name) {
         if (i < dom_vars.size()) {
             *(vars[i]) = RVar(dom, i);
         } else {
-            *(vars[i]) = RVar(name + "." + var_names[i]);
+            *(vars[i]) = RVar(name + "$" + var_names[i]);
         }
     }
 }
@@ -129,7 +132,7 @@ void RDom::initialize_from_ranges(const std::vector<std::pair<Expr, Expr>> &rang
             default: rvar_uniquifier = std::to_string(i); break;
         }
         ReductionVariable rv;
-        rv.var = name + "." + rvar_uniquifier + "$r";
+        rv.var = name + "$" + rvar_uniquifier;
         rv.min = cast<int32_t>(ranges[i].first);
         rv.extent = cast<int32_t>(ranges[i].second);
         vars.push_back(rv);
@@ -138,28 +141,29 @@ void RDom::initialize_from_ranges(const std::vector<std::pair<Expr, Expr>> &rang
     init_vars(name);
 }
 
-RDom::RDom(Buffer b) {
-    static string var_names[] = {"x$r", "y$r", "z$r", "w$r"};
+RDom::RDom(const Buffer<> &b) {
+    string name = unique_name('r');
+    static string var_names[] = {"x", "y", "z", "w"};
     std::vector<ReductionVariable> vars;
     for (int i = 0; i < b.dimensions(); i++) {
         ReductionVariable var = {
-            b.name() + "." + var_names[i],
-            b.min(i),
-            b.extent(i)
+            name + "$" + var_names[i],
+            b.dim(i).min(),
+            b.dim(i).extent()
         };
         vars.push_back(var);
     }
 
     dom = ReductionDomain(vars);
-    init_vars(b.name());
+    init_vars(name);
 }
 
 RDom::RDom(ImageParam p) {
-    static string var_names[] = {"x$r", "y$r", "z$r", "w$r"};
+    static string var_names[] = {"x", "y", "z", "w"};
     std::vector<ReductionVariable> vars;
     for (int i = 0; i < p.dimensions(); i++) {
         ReductionVariable var = {
-            p.name() + "." + var_names[i],
+            p.name() + "$" + var_names[i],
             p.min(i),
             p.extent(i)
         };
@@ -205,6 +209,14 @@ RDom::operator RVar() const {
     return x;
 }
 
+void RDom::where(Expr predicate) {
+    user_assert(!dom.frozen())
+        << (*this) << " cannot be given a new predicate, because it has already"
+        << " been used in the update definition of some function.\n";
+    user_assert(dom.defined()) << "Error: Can't add predicate to undefined RDom.\n";
+    dom.where(predicate);
+}
+
 /** Emit an RVar in a human-readable form */
 std::ostream &operator<<(std::ostream &stream, RVar v) {
     stream << v.name() << "(" << v.min() << ", " << v.extent() << ")";
@@ -217,7 +229,12 @@ std::ostream &operator<<(std::ostream &stream, RDom dom) {
     for (int i = 0; i < dom.dimensions(); i++) {
         stream << "  " << dom[i] << "\n";
     }
-    stream << ")\n";
+    stream << ")";
+    Expr pred = simplify(dom.domain().predicate());
+    if (!equal(const_true(), pred)) {
+        stream << " where (\n  " << pred << ")";
+    }
+    stream << "\n";
     return stream;
 }
 

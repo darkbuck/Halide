@@ -45,29 +45,6 @@ class InjectThreadBarriers : public IRMutator {
         in_threads = old_in_threads;
     }
 
-    void visit(const ProducerConsumer *op) {
-        if (!in_threads) {
-            Stmt produce = mutate(op->produce);
-            if (!is_no_op(produce)) {
-                produce = Block::make(produce, barrier);
-            }
-
-            Stmt update;
-            if (op->update.defined()) {
-                update = mutate(op->update);
-                if (!is_no_op(update)) {
-                    update = Block::make(update, barrier);
-                }
-            }
-
-            Stmt consume = mutate(op->consume);
-
-            stmt = ProducerConsumer::make(op->name, produce, update, consume);
-        } else {
-            IRMutator::visit(op);
-        }
-    }
-
     void visit(const Block *op) {
         if (!in_threads && op->rest.defined()) {
             Stmt first = mutate(op->first);
@@ -171,23 +148,6 @@ class NormalizeDimensionality : public IRMutator {
             max_depth++;
         }
         return s;
-    }
-
-    void visit(const ProducerConsumer *op) {
-        Stmt produce = wrap(op->produce);
-        Stmt update;
-        if (op->update.defined()) {
-            update = wrap(op->update);
-        }
-        Stmt consume = wrap(op->consume);
-
-        if (produce.same_as(op->produce) &&
-            update.same_as(op->update) &&
-            consume.same_as(op->consume)) {
-            stmt = op;
-        } else {
-            stmt = ProducerConsumer::make(op->name, produce, update, consume);
-        }
     }
 
     void visit(const Block *op) {
@@ -347,34 +307,6 @@ class ExtractSharedAllocations : public IRMutator {
         }
     }
 
-
-    void visit(const ProducerConsumer *op) {
-        if (!in_threads) {
-            Stmt produce = mutate(op->produce);
-            if (!is_no_op(produce)) {
-                barrier_stage++;
-            }
-            Stmt update;
-            if (op->update.defined()) {
-                update = mutate(op->update);
-                if (!is_no_op(update)) {
-                    barrier_stage++;
-                }
-            }
-            Stmt consume = mutate(op->consume);
-
-            if (produce.same_as(op->produce) &&
-                update.same_as(op->update) &&
-                consume.same_as(op->consume)) {
-                stmt = op;
-            } else {
-                stmt = ProducerConsumer::make(op->name, produce, update, consume);
-            }
-        } else {
-            IRMutator::visit(op);
-        }
-    }
-
     void visit(const Block *op) {
         if (!in_threads && op->rest.defined()) {
             Stmt first = mutate(op->first);
@@ -416,9 +348,8 @@ class ExtractSharedAllocations : public IRMutator {
         }
         alloc.size = simplify(alloc.size);
         allocations.push_back(alloc);
-        stmt = op->body;
-
         shared.erase(op->name);
+        stmt = op->body;
     }
 
     void visit(const Load *op) {
@@ -443,10 +374,10 @@ class ExtractSharedAllocations : public IRMutator {
             Expr index = mutate(op->index);
             Expr value = mutate(op->value);
             if (device_api == DeviceAPI::OpenGLCompute) {
-                stmt = Store::make(shared_mem_name + "_" + op->name, value, index);
+                stmt = Store::make(shared_mem_name + "_" + op->name, value, index, op->param);
             } else {
                 Expr base = Variable::make(Int(32), op->name + ".shared_offset");
-                stmt = Store::make(shared_mem_name, value, base + index);
+                stmt = Store::make(shared_mem_name, value, base + index, op->param);
             }
         } else {
             IRMutator::visit(op);
@@ -749,7 +680,7 @@ class ZeroGPULoopMins : public IRMutator {
     void visit(const For *op) {
         bool old_in_non_glsl_gpu = in_non_glsl_gpu;
 
-        in_non_glsl_gpu = (in_non_glsl_gpu && op->device_api == DeviceAPI::Parent) ||
+        in_non_glsl_gpu = (in_non_glsl_gpu && op->device_api == DeviceAPI::None) ||
           (op->device_api == DeviceAPI::CUDA) || (op->device_api == DeviceAPI::OpenCL) ||
           (op->device_api == DeviceAPI::Metal);
 

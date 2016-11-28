@@ -3,6 +3,10 @@
 #include <mutex>
 #include <set>
 
+#ifndef _WIN32
+#include <sys/mman.h>
+#endif
+
 #include "CodeGen_Internal.h"
 #include "JITModule.h"
 #include "LLVM_Headers.h"
@@ -145,12 +149,6 @@ EXPORT void destroy<JITModuleContents>(const JITModuleContents *f) { delete f; }
 
 namespace {
 
-#ifdef __arm__
-// On ARM we need to track the addresses of all the functions we
-// retrieve so that we can flush the icache.
-char *start, *end;
-#endif
-
 // Retrieve a function pointer from an llvm module, possibly by compiling it.
 JITModule::Symbol compile_and_get_function(ExecutionEngine &ee, const string &name) {
     debug(2) << "JIT Compiling " << name << "\n";
@@ -164,16 +162,6 @@ JITModule::Symbol compile_and_get_function(ExecutionEngine &ee, const string &na
 
     debug(2) << "Function " << name << " is at " << f << "\n";
 
-#ifdef __arm__
-    if (start == nullptr) {
-        start = (char *)f;
-        end = (char *)f;
-    } else {
-        start = std::min(start, (char *)f);
-        end = std::max(end, (char *)f + 32);
-    }
-#endif
-
     return symbol;
 }
 
@@ -181,11 +169,13 @@ JITModule::Symbol compile_and_get_function(ExecutionEngine &ee, const string &na
 // TODO: Does this need to be conditionalized to llvm 3.6?
 class HalideJITMemoryManager : public SectionMemoryManager {
     std::vector<JITModule> modules;
+    std::vector<std::pair<uint8_t *, size_t>> code_pages;
 
 public:
+
     HalideJITMemoryManager(const std::vector<JITModule> &modules) : modules(modules) {}
 
-    virtual uint64_t getSymbolAddress(const std::string &name) {
+    virtual uint64_t getSymbolAddress(const std::string &name) override {
         for (size_t i = 0; i < modules.size(); i++) {
             const JITModule &m = modules[i];
             std::map<std::string, JITModule::Symbol>::const_iterator iter = m.exports().find(name);
@@ -198,6 +188,47 @@ public:
         }
         return SectionMemoryManager::getSymbolAddress(name);
     }
+
+    virtual uint8_t *allocateCodeSection(uintptr_t size, unsigned alignment, unsigned section_id, StringRef section_name) override {
+        uint8_t *result = SectionMemoryManager::allocateCodeSection(size, alignment, section_id, section_name);
+        code_pages.push_back({result, size});
+        return result;
+    }
+
+    void work_around_llvm_bugs() {
+
+        for (auto p : code_pages) {
+            uint8_t *start = p.first;
+            uint8_t *end = p.first + p.second;
+
+            (void)start;
+            (void)end;
+#ifdef __arm__
+            // Flush each function from the dcache so that it gets pulled into
+            // the icache correctly.
+
+            // finalizeMemory should have done the trick, but as of Aug 28
+            // 2013, it doesn't work unless we also manually flush the
+            // cache. Otherwise the icache's view of the code is missing the
+            // relocations, which gets really confusing to debug, because
+            // gdb's view of the code uses the dcache, so the disassembly
+            // isn't right.
+            debug(2) << "Flushing cache from " << (void *)start
+                     << " to " << (void *)end << "\n";
+            __builtin___clear_cache(start, end);
+#endif
+
+#ifndef _WIN32
+            // As of November 2016, llvm doesn't always mark the right pages
+            // as executable either.
+            // https://llvm.org/bugs/show_bug.cgi?id=30905
+
+            start = (uint8_t *)(((uintptr_t)start) & ~4095);
+            end = (uint8_t *)(((uintptr_t)end + 4095) & ~4095);
+            mprotect((void *)start, end - start, PROT_READ | PROT_EXEC);
+#endif
+        }
+    }
 };
 
 }
@@ -209,7 +240,7 @@ JITModule::JITModule() {
 JITModule::JITModule(const Module &m, const LoweredFunc &fn,
                      const std::vector<JITModule> &dependencies) {
     jit_module = new JITModuleContents();
-    std::unique_ptr<llvm::Module> llvm_module(compile_module_to_llvm_module(m, jit_module.ptr->context));
+    std::unique_ptr<llvm::Module> llvm_module(compile_module_to_llvm_module(m, jit_module->context));
     std::vector<JITModule> deps_with_runtime = dependencies;
     std::vector<JITModule> shared_runtime = JITSharedRuntime::get(llvm_module.get(), m.target());
     deps_with_runtime.insert(deps_with_runtime.end(), shared_runtime.begin(), shared_runtime.end());
@@ -230,62 +261,37 @@ void JITModule::compile_module(std::unique_ptr<llvm::Module> m, const string &fu
     llvm::TargetOptions options;
     get_target_options(*m, options, mcpu, mattrs);
 
-    #if LLVM_VERSION >= 37
     DataLayout initial_module_data_layout = m->getDataLayout();
-    #endif
     string module_name = m->getModuleIdentifier();
 
-    #if LLVM_VERSION > 35
     llvm::EngineBuilder engine_builder((std::move(m)));
-    #else
-    llvm::EngineBuilder engine_builder(m.release());
-    #endif
     engine_builder.setTargetOptions(options);
     engine_builder.setErrorStr(&error_string);
     engine_builder.setEngineKind(llvm::EngineKind::JIT);
-    #if LLVM_VERSION < 36 || WITH_NATIVE_CLIENT
-    // >= 3.6 there is only mcjit. Native client is currently in a
-    // place between 3.5 and 3.6
-    #if !WITH_NATIVE_CLIENT
-    engine_builder.setUseMCJIT(true);
-    #endif
-    //JITMemoryManager *memory_manager = JITMemoryManager::CreateDefaultMemManager();
-    //engine_builder.setJITMemoryManager(memory_manager);
     HalideJITMemoryManager *memory_manager = new HalideJITMemoryManager(dependencies);
-    engine_builder.setMCJITMemoryManager(memory_manager);
-    #else
-    engine_builder.setMCJITMemoryManager(std::unique_ptr<RTDyldMemoryManager>(new HalideJITMemoryManager(dependencies)));
-    #endif
+    engine_builder.setMCJITMemoryManager(std::unique_ptr<RTDyldMemoryManager>(memory_manager));
 
     engine_builder.setOptLevel(CodeGenOpt::Aggressive);
     engine_builder.setMCPU(mcpu);
     std::vector<string> mattrs_array = {mattrs};
     engine_builder.setMAttrs(mattrs_array);
 
-    #if LLVM_VERSION >= 37
-        TargetMachine *tm = engine_builder.selectTarget();
-        #if LLVM_VERSION == 37
-            DataLayout target_data_layout(*(tm->getDataLayout()));
-        #else
-            DataLayout target_data_layout(tm->createDataLayout());
-        #endif
-        if (initial_module_data_layout != target_data_layout) {
-                internal_error << "Warning: data layout mismatch between module ("
-                               << initial_module_data_layout.getStringRepresentation()
-                               << ") and what the execution engine expects ("
-                               << target_data_layout.getStringRepresentation() << ")\n";
-        }
-        ExecutionEngine *ee = engine_builder.create(tm);
+    TargetMachine *tm = engine_builder.selectTarget();
+    #if LLVM_VERSION == 37
+    DataLayout target_data_layout(*(tm->getDataLayout()));
     #else
-        ExecutionEngine *ee = engine_builder.create();
+    DataLayout target_data_layout(tm->createDataLayout());
     #endif
+    if (initial_module_data_layout != target_data_layout) {
+        internal_error << "Warning: data layout mismatch between module ("
+                       << initial_module_data_layout.getStringRepresentation()
+                       << ") and what the execution engine expects ("
+                       << target_data_layout.getStringRepresentation() << ")\n";
+    }
+    ExecutionEngine *ee = engine_builder.create(tm);
 
     if (!ee) std::cerr << error_string << "\n";
     internal_assert(ee) << "Couldn't create execution engine\n";
-
-    #ifdef __arm__
-    start = end = nullptr;
-    #endif
 
     // Do any target-specific initialization
     std::vector<llvm::JITEventListener *> listeners;
@@ -321,6 +327,7 @@ void JITModule::compile_module(std::unique_ptr<llvm::Module> m, const string &fu
 
     debug(2) << "Finalizing object\n";
     ee->finalizeObject();
+    memory_manager->work_around_llvm_bugs();
 
     // Do any target-specific post-compilation module meddling
     for (size_t i = 0; i < listeners.size(); i++) {
@@ -329,43 +336,28 @@ void JITModule::compile_module(std::unique_ptr<llvm::Module> m, const string &fu
     }
     listeners.clear();
 
-#ifdef __arm__
-    // Flush each function from the dcache so that it gets pulled into
-    // the icache correctly.
-
-    // finalizeMemory should have done the trick, but as of Aug 28
-    // 2013, it doesn't work unless we also manually flush the
-    // cache. Otherwise the icache's view of the code is missing the
-    // relocations, which gets really confusing to debug, because
-    // gdb's view of the code uses the dcache, so the disassembly
-    // isn't right.
-    debug(2) << "Flushing cache from " << (void *)start
-             << " to " << (void *)end << "\n";
-    __builtin___clear_cache(start, end);
-#endif
-
     // TODO: I don't think this is necessary, we shouldn't have any static constructors
     ee->runStaticConstructorsDestructors(false);
 
     // Stash the various objects that need to stay alive behind a reference-counted pointer.
-    jit_module.ptr->exports = exports;
-    jit_module.ptr->execution_engine = ee;
-    jit_module.ptr->dependencies = dependencies;
-    jit_module.ptr->entrypoint = entrypoint;
-    jit_module.ptr->argv_entrypoint = argv_entrypoint;
-    jit_module.ptr->name = function_name;
+    jit_module->exports = exports;
+    jit_module->execution_engine = ee;
+    jit_module->dependencies = dependencies;
+    jit_module->entrypoint = entrypoint;
+    jit_module->argv_entrypoint = argv_entrypoint;
+    jit_module->name = function_name;
 }
 
 const std::map<std::string, JITModule::Symbol> &JITModule::exports() const {
-    return jit_module.ptr->exports;
+    return jit_module->exports;
 }
 
 JITModule::Symbol JITModule::find_symbol_by_name(const std::string &name) const {
-    std::map<std::string, JITModule::Symbol>::iterator it = jit_module.ptr->exports.find(name);
-    if (it != jit_module.ptr->exports.end()) {
+    std::map<std::string, JITModule::Symbol>::iterator it = jit_module->exports.find(name);
+    if (it != jit_module->exports.end()) {
         return it->second;
     }
-    for (const JITModule &dep : jit_module.ptr->dependencies) {
+    for (const JITModule &dep : jit_module->dependencies) {
         JITModule::Symbol s = dep.find_symbol_by_name(name);
         if (s.address) return s;
     }
@@ -373,19 +365,19 @@ JITModule::Symbol JITModule::find_symbol_by_name(const std::string &name) const 
 }
 
 void *JITModule::main_function() const {
-    return jit_module.ptr->entrypoint.address;
+    return jit_module->entrypoint.address;
 }
 
 JITModule::Symbol JITModule::entrypoint_symbol() const {
-    return jit_module.ptr->entrypoint;
+    return jit_module->entrypoint;
 }
 
 int (*JITModule::argv_function() const)(const void **) {
-    return (int (*)(const void **))jit_module.ptr->argv_entrypoint.address;
+    return (int (*)(const void **))jit_module->argv_entrypoint.address;
 }
 
 JITModule::Symbol JITModule::argv_entrypoint_symbol() const {
-    return jit_module.ptr->argv_entrypoint;
+    return jit_module->argv_entrypoint;
 }
 
 static bool module_already_in_graph(const JITModuleContents *start, const JITModuleContents *target, std::set <const JITModuleContents *> &already_seen) {
@@ -397,7 +389,7 @@ static bool module_already_in_graph(const JITModuleContents *start, const JITMod
     }
     already_seen.insert(start);
     for (const JITModule &dep_holder : start->dependencies) {
-        const JITModuleContents *dep = dep_holder.jit_module.ptr;
+        const JITModuleContents *dep = dep_holder.jit_module.get();
         if (module_already_in_graph(dep, target, already_seen)) {
             return true;
         }
@@ -407,12 +399,12 @@ static bool module_already_in_graph(const JITModuleContents *start, const JITMod
 
 void JITModule::add_dependency(JITModule &dep) {
     std::set<const JITModuleContents *> already_seen;
-    internal_assert(!module_already_in_graph(dep.jit_module.ptr, jit_module.ptr, already_seen)) << "JITModule::add_dependency: creating circular dependency graph.\n";
-    jit_module.ptr->dependencies.push_back(dep);
+    internal_assert(!module_already_in_graph(dep.jit_module.get(), jit_module.get(), already_seen)) << "JITModule::add_dependency: creating circular dependency graph.\n";
+    jit_module->dependencies.push_back(dep);
 }
 
 void JITModule::add_symbol_for_export(const std::string &name, const Symbol &extern_symbol) {
-    jit_module.ptr->exports[name] = extern_symbol;
+    jit_module->exports[name] = extern_symbol;
 }
 
 void JITModule::add_extern_for_export(const std::string &name, const ExternSignature &signature, void *address) {
@@ -421,18 +413,18 @@ void JITModule::add_extern_for_export(const std::string &name, const ExternSigna
 
     // Struct types are uniqued on the context, but the lookup API is only available
     // on the Module, not the Context.
-    llvm::Module dummy_module("ThisIsRidiculous", jit_module.ptr->context);
+    llvm::Module dummy_module("ThisIsRidiculous", jit_module->context);
     llvm::Type *buffer_t = dummy_module.getTypeByName("struct.buffer_t");
     if (buffer_t == nullptr) {
-        buffer_t = llvm::StructType::create(jit_module.ptr->context, "struct.buffer_t");
+        buffer_t = llvm::StructType::create(jit_module->context, "struct.buffer_t");
     }
     llvm::Type *buffer_t_star = llvm::PointerType::get(buffer_t, 0);
 
     llvm::Type *ret_type;
     if (signature.is_void_return) {
-        ret_type = llvm::Type::getVoidTy(jit_module.ptr->context);
+        ret_type = llvm::Type::getVoidTy(jit_module->context);
     } else {
-        ret_type = llvm_type_of(&jit_module.ptr->context, signature.ret_type);
+        ret_type = llvm_type_of(&jit_module->context, signature.ret_type);
     }
 
     std::vector<llvm::Type *> llvm_arg_types;
@@ -440,12 +432,12 @@ void JITModule::add_extern_for_export(const std::string &name, const ExternSigna
         if (scalar_or_buffer_t.is_buffer) {
             llvm_arg_types.push_back(buffer_t_star);
         } else {
-            llvm_arg_types.push_back(llvm_type_of(&jit_module.ptr->context, scalar_or_buffer_t.scalar_type));
+            llvm_arg_types.push_back(llvm_type_of(&jit_module->context, scalar_or_buffer_t.scalar_type));
         }
     }
 
     symbol.llvm_type = llvm::FunctionType::get(ret_type, llvm_arg_types, false);
-    jit_module.ptr->exports[name] = symbol;
+    jit_module->exports[name] = symbol;
 }
 
 void JITModule::memoization_cache_set_size(int64_t size) const {
@@ -457,7 +449,7 @@ void JITModule::memoization_cache_set_size(int64_t size) const {
 }
 
 bool JITModule::compiled() const {
-  return jit_module.ptr->execution_engine != nullptr;
+  return jit_module->execution_engine != nullptr;
 }
 
 namespace {
@@ -596,6 +588,7 @@ enum RuntimeKind {
     CUDA,
     OpenGL,
     OpenGLCompute,
+    Hexagon,
     MaxRuntimeKind
 };
 
@@ -624,6 +617,8 @@ JITModule &make_module(llvm::Module *for_module, Target target,
         one_gpu.set_feature(Target::OpenCL, false);
         one_gpu.set_feature(Target::Metal, false);
         one_gpu.set_feature(Target::CUDA, false);
+        one_gpu.set_feature(Target::HVX_64, false);
+        one_gpu.set_feature(Target::HVX_128, false);
         one_gpu.set_feature(Target::OpenGL, false);
         one_gpu.set_feature(Target::OpenGLCompute, false);
         string module_name;
@@ -651,6 +646,10 @@ JITModule &make_module(llvm::Module *for_module, Target target,
             module_name = "openglcompute";
             load_opengl();
             break;
+        case Hexagon:
+            one_gpu.set_feature(Target::HVX_64);
+            module_name = "hexagon";
+            break;
         default:
             module_name = "shared runtime";
             break;
@@ -658,7 +657,7 @@ JITModule &make_module(llvm::Module *for_module, Target target,
 
         // This function is protected by a mutex so this is thread safe.
         std::unique_ptr<llvm::Module> module(get_initial_module_for_target(one_gpu,
-            &runtime.jit_module.ptr->context, true, runtime_kind != MainShared));
+            &runtime.jit_module->context, true, runtime_kind != MainShared));
         clone_target_options(*for_module, *module);
         module->setModuleIdentifier(module_name);
 
@@ -705,18 +704,18 @@ JITModule &make_module(llvm::Module *for_module, Target target,
                 shared_runtimes(MainShared).memoization_cache_set_size(default_cache_size);
             }
 
-            runtime.jit_module.ptr->name = "MainShared";
+            runtime.jit_module->name = "MainShared";
         } else {
-            runtime.jit_module.ptr->name = "GPU";
+            runtime.jit_module->name = "GPU";
         }
 
         uint64_t arg_addr =
-            runtime.jit_module.ptr->execution_engine->getGlobalValueAddress("halide_jit_module_argument");
+            runtime.jit_module->execution_engine->getGlobalValueAddress("halide_jit_module_argument");
 
         internal_assert(arg_addr != 0);
-        *((void **)arg_addr) = runtime.jit_module.ptr;
+        *((void **)arg_addr) = runtime.jit_module.get();
 
-        uint64_t fun_addr = runtime.jit_module.ptr->execution_engine->getGlobalValueAddress("halide_jit_module_adjust_ref_count");
+        uint64_t fun_addr = runtime.jit_module->execution_engine->getGlobalValueAddress("halide_jit_module_adjust_ref_count");
         internal_assert(fun_addr != 0);
         *(void (**)(void *arg, int32_t count))fun_addr = &adjust_module_ref_count;
     }
@@ -766,6 +765,11 @@ std::vector<JITModule> JITSharedRuntime::get(llvm::Module *for_module, const Tar
     }
     if (target.has_feature(Target::OpenGLCompute)) {
         JITModule m = make_module(for_module, target, OpenGLCompute, result, create);
+        if (m.compiled())
+            result.push_back(m);
+    }
+    if (target.features_any_of({Target::HVX_64, Target::HVX_128})) {
+        JITModule m = make_module(for_module, target, Hexagon, result, create);
         if (m.compiled())
             result.push_back(m);
     }

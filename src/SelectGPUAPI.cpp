@@ -12,13 +12,9 @@ class SelectGPUAPI : public IRMutator {
     DeviceAPI default_api, parent_api;
 
     void visit(const For *op) {
-        DeviceAPI selected_api;
+        DeviceAPI selected_api = op->device_api;
         if (op->device_api == DeviceAPI::Default_GPU) {
             selected_api = default_api;
-        } else if (op->device_api == DeviceAPI::Parent) {
-            selected_api = parent_api;
-        } else {
-            selected_api = op->device_api;
         }
 
         DeviceAPI old_parent_api = parent_api;
@@ -43,8 +39,6 @@ public:
             default_api = DeviceAPI::CUDA;
         } else if (target.has_feature(Target::OpenGLCompute)) {
             default_api = DeviceAPI::OpenGLCompute;
-        } else if (target.has_feature(Target::Renderscript)) {
-            default_api = DeviceAPI::Renderscript;
         } else if (target.has_feature(Target::OpenGL)) {
             default_api = DeviceAPI::GLSL;
         } else {

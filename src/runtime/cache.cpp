@@ -1,4 +1,5 @@
 #include "HalideRuntime.h"
+#include "device_buffer_utils.h"
 #include "printer.h"
 #include "scoped_mutex_lock.h"
 
@@ -34,7 +35,7 @@ WEAK void debug_print_key(void *user_context, const char *msg, const uint8_t *ca
     debug(user_context) << "Key for " << msg << "\n";
     char buf[1024];
     bool append_ellipses = false;
-    if (key_size > (sizeof(buf) / 2) - 1) { // Each byte in key can take two bytes in output
+    if ((size_t)key_size > (sizeof(buf) / 2) - 1) { // Each byte in key can take two bytes in output
         append_ellipses = true;
         key_size = (sizeof(buf) / 2) - 4; // room for NUL and "..."
     }
@@ -57,23 +58,6 @@ WEAK void debug_print_key(void *user_context, const char *msg, const uint8_t *ca
 }
 #endif
 
-WEAK size_t full_extent(const buffer_t &buf) {
-    size_t result = 1;
-    for (int i = 0; i < 4; i++) {
-        int32_t stride = buf.stride[i];
-        size_t positive_stride;
-        if (stride < 0) {
-            positive_stride = (size_t)-stride;
-        } else {
-            positive_stride = (size_t)stride;
-        }
-        if ((buf.extent[i] * positive_stride) > result) {
-            result = buf.extent[i] * positive_stride;
-        }
-    }
-    return result;
-}
-
 WEAK bool keys_equal(const uint8_t *key1, const uint8_t *key2, size_t key_size) {
     return memcmp(key1, key2, key_size) == 0;
 }
@@ -91,11 +75,9 @@ WEAK bool bounds_equal(const buffer_t &buf1, const buffer_t &buf2) {
     return true;
 }
 
-// Each host block has extra space to store extra information just
-// before the contents.  16 is chosen to keep that alignment. For a
-// buffer between the first lookup and store, this holds the cache key
-// hash. For buffers where the lookup succeeded or the store has
-// occurred, this holds a pointer to the hash entry.
+// Each host block has extra space to store a header just before the contents.
+// 16 is chosen to keep that alignment.
+// The header holds the cache key hash and pointer to the hash entry.
 //
 // This is an optimization the number of cycles it takes for the cache
 // to operate.
@@ -121,6 +103,15 @@ struct CacheEntry {
     buffer_t &buffer(int32_t i);
 
 };
+
+struct CacheBlockHeader {
+    CacheEntry *entry;
+    uint32_t hash;
+};
+
+WEAK CacheBlockHeader *get_pointer_to_header(uint8_t * host) {
+    return (CacheBlockHeader *)(host - extra_bytes_host_bytes);
+}
 
 WEAK bool CacheEntry::init(const uint8_t *cache_key, size_t cache_key_size,
                            uint32_t key_hash, const buffer_t &computed_buf,
@@ -153,7 +144,7 @@ WEAK void CacheEntry::destroy() {
     halide_free(NULL, key);
     for (uint32_t i = 0; i < tuple_count; i++) {
         halide_device_free(NULL, &buffer(i));
-        halide_free(NULL, buffer(i).host - extra_bytes_host_bytes);
+        halide_free(NULL, get_pointer_to_header(buffer(i).host));
     }
 }
 
@@ -189,7 +180,7 @@ WEAK void validate_cache() {
                 << "current size " << current_cache_size
                 << " of maximum " << max_cache_size << "\n";
     int entries_in_hash_table = 0;
-    for (int i = 0; i < kHashTableSize; i++) {
+    for (size_t i = 0; i < kHashTableSize; i++) {
         CacheEntry *entry = cache_entries[i];
         while (entry != NULL) {
             entries_in_hash_table++;
@@ -273,7 +264,7 @@ WEAK void prune_cache() {
 
             // Decrease cache used amount.
             for (uint32_t i = 0; i < prune_candidate->tuple_count; i++) {
-                current_cache_size -= full_extent(prune_candidate->buffer(i));
+                current_cache_size -= buf_size(&prune_candidate->buffer(i));
             }
 
             // Deallocate the entry.
@@ -374,19 +365,20 @@ WEAK int halide_memoization_cache_lookup(void *user_context, const uint8_t *cach
 
     for (int32_t i = 0; i < tuple_count; i++) {
         buffer_t *buf = tuple_buffers[i];
-        size_t buffer_size = full_extent(*buf);
 
         // See documentation on extra_bytes_host_bytes
-        buf->host = ((uint8_t *)halide_malloc(user_context, buffer_size * buf->elem_size + extra_bytes_host_bytes));
+        buf->host = ((uint8_t *)halide_malloc(user_context, buf_size(buf) + extra_bytes_host_bytes));
         if (buf->host == NULL) {
             for (int32_t j = i; j > 0; j--) {
-                halide_free(user_context, tuple_buffers[j - 1]->host  - extra_bytes_host_bytes);
+                halide_free(user_context, get_pointer_to_header(tuple_buffers[j - 1]->host));
                 tuple_buffers[j - 1]->host = NULL;
             }
             return -1;
         }
         buf->host += extra_bytes_host_bytes;
-        *(uint32_t *)(buf->host - extra_bytes_host_bytes) = h;
+        CacheBlockHeader *header = get_pointer_to_header(buf->host);
+        header->hash = h;
+        header->entry = NULL;
     }
 
 #if CACHE_DEBUGGING
@@ -396,11 +388,12 @@ WEAK int halide_memoization_cache_lookup(void *user_context, const uint8_t *cach
     return 1;
 }
 
-WEAK void halide_memoization_cache_store(void *user_context, const uint8_t *cache_key, int32_t size,
+WEAK int halide_memoization_cache_store(void *user_context, const uint8_t *cache_key, int32_t size,
                                         buffer_t *computed_bounds, int32_t tuple_count, buffer_t **tuple_buffers) {
     debug(user_context) << "halide_memoization_cache_store\n";
 
-    uint32_t h = *(uint32_t *)(tuple_buffers[0]->host - extra_bytes_host_bytes);
+    uint32_t h = get_pointer_to_header(tuple_buffers[0]->host)->hash;
+
     uint32_t index = h % kHashTableSize;
 
     ScopedMutexLock lock(&memoization_lock);
@@ -441,9 +434,10 @@ WEAK void halide_memoization_cache_store(void *user_context, const uint8_t *cach
                 // This entry is still in use by the caller. Mark it as having no cache entry
                 // so halide_memoization_cache_release can free the buffer.
                 for (int32_t i = 0; i < tuple_count; i++) {
-                    *(CacheEntry **)(tuple_buffers[i]->host - extra_bytes_host_bytes) = NULL;
+                    get_pointer_to_header(tuple_buffers[i]->host)->entry = NULL;
+
                 }
-                return;
+                return 0;
             }
         }
         entry = entry->next;
@@ -453,7 +447,7 @@ WEAK void halide_memoization_cache_store(void *user_context, const uint8_t *cach
     {
         for (int32_t i = 0; i < tuple_count; i++) {
             buffer_t *buf = tuple_buffers[i];
-            added_size += full_extent(*buf);
+            added_size += buf_size(buf);
         }
     }
     current_cache_size += added_size;
@@ -466,9 +460,9 @@ WEAK void halide_memoization_cache_store(void *user_context, const uint8_t *cach
         // This entry is still in use by the caller. Mark it as having no cache entry
         // so halide_memoization_cache_release can free the buffer.
         for (int32_t i = 0; i < tuple_count; i++) {
-            *(CacheEntry **)(tuple_buffers[i]->host - extra_bytes_host_bytes) = NULL;
+            get_pointer_to_header(tuple_buffers[i]->host)->entry = NULL;
         }
-        return;
+        return 0;
     }
 
     CacheEntry *new_entry = (CacheEntry *)entry_storage;
@@ -479,11 +473,11 @@ WEAK void halide_memoization_cache_store(void *user_context, const uint8_t *cach
         // This entry is still in use by the caller. Mark it as having no cache entry
         // so halide_memoization_cache_release can free the buffer.
         for (int32_t i = 0; i < tuple_count; i++) {
-            *(CacheEntry **)(tuple_buffers[i]->host - extra_bytes_host_bytes) = NULL;
+            get_pointer_to_header(tuple_buffers[i]->host)->entry = NULL;
         }
 
         halide_free(user_context, new_entry);
-        return;
+        return 0;
     }
 
     new_entry->next = cache_entries[index];
@@ -500,22 +494,24 @@ WEAK void halide_memoization_cache_store(void *user_context, const uint8_t *cach
     new_entry->in_use_count = tuple_count;
 
     for (int32_t i = 0; i < tuple_count; i++) {
-        *(CacheEntry **)(tuple_buffers[i]->host - extra_bytes_host_bytes) = new_entry;
+        get_pointer_to_header(tuple_buffers[i]->host)->entry = new_entry;
     }
 
 #if CACHE_DEBUGGING
     validate_cache();
 #endif
     debug(user_context) << "Exiting halide_memoization_cache_store\n";
+
+    return 0;
 }
 
 WEAK void halide_memoization_cache_release(void *user_context, void *host) {
-    uint8_t *base = (uint8_t *)host - extra_bytes_host_bytes;
+    CacheBlockHeader *header = get_pointer_to_header((uint8_t *)host);
     debug(user_context) << "halide_memoization_cache_release\n";
-    CacheEntry *entry = *(CacheEntry **)(base);
+    CacheEntry *entry = header->entry;
 
     if (entry == NULL) {
-        halide_free(user_context, base);
+        halide_free(user_context, header);
     } else {
         ScopedMutexLock lock(&memoization_lock);
 
@@ -542,7 +538,7 @@ WEAK void halide_memoization_cache_cleanup() {
         }
     }
     current_cache_size = 0;
-    halide_mutex_cleanup(&memoization_lock);
+    halide_mutex_destroy(&memoization_lock);
 }
 
 namespace {

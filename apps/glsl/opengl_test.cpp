@@ -3,6 +3,10 @@
 #include <string.h>
 
 #include "HalideRuntime.h"
+#include "HalideRuntimeOpenGL.h"
+
+#include "halide_blur_glsl.h"
+#include "halide_ycc_glsl.h"
 
 
 class Image {
@@ -39,16 +43,13 @@ public:
     }
 };
 
-#include "blur.h"
-#include "ycc.h"
-
 void test_blur() {
     const int W = 12, H = 32, C = 3;
     Image input(W, H, C, sizeof(uint8_t), Image::Planar);
     Image output(W, H, C, sizeof(uint8_t), Image::Planar);
 
     fprintf(stderr, "test_blur\n");
-    blur(&input.buf, &output.buf);
+    halide_blur_glsl(&input.buf, &output.buf);
     fprintf(stderr, "test_blur complete\n");
 }
 
@@ -58,11 +59,29 @@ void test_ycc() {
     Image output(W, H, C, sizeof(uint8_t), Image::Planar);
 
     fprintf(stderr, "test_ycc\n");
-    ycc(&input.buf, &output.buf);
+    halide_ycc_glsl(&input.buf, &output.buf);
     fprintf(stderr, "Ycc complete\n");
+}
+
+void test_device_sync() {
+    const int W = 12, H = 32, C = 3;
+    Image temp(W, H, C, sizeof(uint8_t), Image::Planar);
+
+    int result = halide_device_malloc(nullptr, &temp.buf, halide_opengl_device_interface());
+    if (result != 0) {
+        fprintf(stderr, "halide_device_malloc failed with return %d.\n", result);
+    } else {
+        result = halide_device_sync(nullptr, &temp.buf);
+        if (result != 0) {
+            fprintf(stderr, "halide_device_sync failed with return %d.\n", result);
+        } else {
+            fprintf(stderr, "Test device sync complete.\n");
+        }
+    }
 }
 
 int main(int argc, char* argv[]) {
     test_blur();
     test_ycc();
+    test_device_sync();
 }
