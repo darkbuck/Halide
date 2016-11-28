@@ -25,13 +25,18 @@ using std::string;
 
 using namespace llvm;
 
-enum AddressSpace {
+// Use a namespace instead of an enum class because LLVM accepts
+// paramaters of these values as int. This avoids the csating that
+// would be necessary if it were an enum class.
+namespace AddressSpace {
+enum {
     Generic = 0,
     Global = 1,
     Shared = 3,
     Constant = 4,
     Local = 5,
 };
+}
 
 CodeGen_PTX_Dev::CodeGen_PTX_Dev(Target host) : CodeGen_LLVM(host) {
     #if !(WITH_PTX)
@@ -110,10 +115,7 @@ void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
     vector<llvm::Type *> arg_types(args.size());
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i].is_buffer) {
-            int addr_space = Global;
-            if (is_constant[i]) {
-                addr_space = Constant;
-            }
+            int addr_space = is_constant[i] ? AddressSpace::Constant : AddressSpace::Global;
             arg_types[i] = llvm_type_of(UInt(8))->getPointerTo(addr_space);
         } else {
             arg_types[i] = llvm_type_of(args[i].type);
