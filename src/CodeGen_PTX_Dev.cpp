@@ -152,6 +152,30 @@ void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
                 // as foo.host in this scope.
                 arg_sym_name += ".host";
             }
+
+            if (is_constant[i]) {
+                // The CUDA driver API doesn't automatically copy
+                // arguments to constant buffers (as the runtime API
+                // does), so, we need to do it ourselves.  This is
+                // done by defining globals with a special name. If
+                // the runtime finds this specially named global, it
+                // will copy the argument to this array, and pass this
+                // as the argument to the function instead of the
+                // argument.
+                llvm::ArrayType *buf_type = ArrayType::get(i8_t, args[i].size);
+                GlobalVariable *const_arg = new GlobalVariable(
+                    *module,
+                    buf_type,
+                    /*isConstant*/ true,
+                    GlobalValue::ExternalLinkage,
+                    llvm::ConstantAggregateZero::get(buf_type),  // Necessary to get .visible linkage(!)
+                    name + "_const_arg" + std::to_string(i),
+                    /*InsertBefore*/ nullptr,
+                    llvm::GlobalValue::NotThreadLocal,
+                    AddressSpace::Constant);
+                debug(0) << "Added constant global " << const_arg->getName().str() << "\n";
+            }
+
             sym_push(arg_sym_name, &fn_arg);
             fn_arg.setName(arg_sym_name);
             arg_sym_names.push_back(arg_sym_name);
