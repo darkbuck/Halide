@@ -154,14 +154,13 @@ void CodeGen_PTX_Dev::add_kernel(Stmt stmt,
             }
 
             if (is_constant[i]) {
-                // The CUDA driver API doesn't automatically copy
-                // arguments to constant buffers (as the runtime API
-                // does), so, we need to do it ourselves.  This is
-                // done by defining globals with a special name. If
-                // the runtime finds this specially named global, it
-                // will copy the argument to this array, and pass this
-                // as the argument to the function instead of the
-                // argument.
+                // The buffer that will be passed to the kernel will
+                // be a global buffer, but the argument needs a buffer
+                // in constant memory, which we need to declare as a
+                // global. If the runtime finds this specially named
+                // global, it will copy the argument to this array,
+                // and pass this as the argument to the function
+                // instead of the argument.
                 llvm::ArrayType *buf_type = ArrayType::get(i8_t, args[i].size);
                 GlobalVariable *const_arg = new GlobalVariable(
                     *module,
