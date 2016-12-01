@@ -515,9 +515,9 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
 
     //TODO(psuriana): Find a tighter bound
     auto lower = table.begin();
-    auto upper = std::upper_bound(table.begin(), table.end(), expr_ops, compare_expr_opcode);
+    //auto upper = std::upper_bound(table.begin(), table.end(), expr_ops, compare_expr_opcode);
 
-    //auto upper = table.end();
+    auto upper = table.end();
 
     //std::cout << "****lower: " << lower << ", upper: " << upper << "\n";
 
@@ -543,7 +543,9 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
         debug(5) << "**** expr: " << exprs[i] << " -> " << sub_exprs[i] << "\n";
     }
 
+    debug(5) << "Table size: " << (upper-lower) << "\n";
     for (; lower < upper; lower++) {
+        debug(5) << "Index " << (upper-lower) << "\n";
         vector<AssociativePair> patterns = *lower;
         internal_assert(patterns.size() == op_x_names.size());
         map<string, Expr> pattern_match;
@@ -619,7 +621,7 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
     }
 
     bool success = false;
-    /*if (const Add *a = e.as<Add>()) {
+    if (const Add *a = e.as<Add>()) {
         assoc_ops.ops[index] = {x + y, make_const(t, 0)};
         success = visit_associative_binary_op<Add>(index, op_x, op_y, x_part, a->a, a->b, assoc_ops);
     } else if (const Sub *s = e.as<Sub>()) {
@@ -642,7 +644,7 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
         success = visit_associative_binary_op<Or>(index, op_x, op_y, x_part, o->a, o->b, assoc_ops);
     } else if (e.as<Let>()) {
         internal_error << "Let should have been substituted before calling this function\n";
-    }*/
+    }
 
     if (!success && t.is_int() && (t.bits() == 32)) {
         // It's non-trivial binary ops. Try looking at the associative ops table for int32

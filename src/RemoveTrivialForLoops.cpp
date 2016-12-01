@@ -20,7 +20,7 @@ class RemoveTrivialForLoops : public IRMutator {
         Stmt body = mutate(for_loop->body);
 
         if (is_one(for_loop->extent)) {
-            if (for_loop->for_type == ForType::Parallel) {
+            /*if (for_loop->for_type == ForType::Parallel) {
                 std::cerr << "Warning: Parallel for loop over "
                           << for_loop->name << " has extent one. "
                           << "Can't do one piece of work in parallel.\n";
@@ -28,7 +28,7 @@ class RemoveTrivialForLoops : public IRMutator {
                 std::cerr << "Warning: Vectorized for loop over "
                           << for_loop->name << " has extent one. "
                           << "Not vectorizing.\n";
-            }
+            }*/
             stmt = LetStmt::make(for_loop->name, for_loop->min, body);
         } else if (is_zero(for_loop->extent)) {
             stmt = Evaluate::make(0);

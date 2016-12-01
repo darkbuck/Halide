@@ -83,8 +83,8 @@ int matrix_multiply() {
 int parallel_dot_product_rfactor_test() {
     const int size = 1024 * 1024 * N1 * N2;
 
-    ImageParam A(Int(8), 1);
-    ImageParam B(Int(8), 1);
+    ImageParam A(Float(32), 1);
+    ImageParam B(Float(32), 1);
 
     Param<int> p;
 
@@ -92,11 +92,11 @@ int parallel_dot_product_rfactor_test() {
 
     // Reference implementation
     Func dot_ref("dot_ref");
-    dot_ref() = 0;
+    dot_ref() = 0.0f;
     dot_ref() += cast<int>(A(r.x))*B(r.x);
 
     Func dot("dot");
-    dot() = 0;
+    dot() = 0.0f;
     dot() += cast<int>(A(r.x))*B(r.x);
     RVar rxo, rxi, rxio, rxii;
     dot.update().split(r.x, rxo, rxi, 4*8192);
@@ -116,9 +116,9 @@ int parallel_dot_product_rfactor_test() {
     const int trials = 10;
     const int iterations = 10;
 
-    Image<int8_t> vec_A(size), vec_B(size);
-    Image<int32_t> ref_output = Image<int32_t>::make_scalar();
-    Image<int32_t> output = Image<int32_t>::make_scalar();
+    Image<float> vec_A(size), vec_B(size);
+    Image<float> ref_output = Image<float>::make_scalar();
+    Image<float> output = Image<float>::make_scalar();
 
     // init randomly
     for (int ix = 0; ix < size; ix++) {
@@ -141,7 +141,7 @@ int parallel_dot_product_rfactor_test() {
     //dot.compile_to_assembly("/dev/stdout", {A, B}, Target("host-no_asserts-no_runtime-no_bounds_query"));
     //dot_ref.compile_to_assembly("/dev/stdout", {A, B}, Target("host-no_asserts-no_runtime-no_bounds_query"));
 
-    float gbits = 8 * size * (2 / 1e9); // bits per seconds
+    float gbits = 32 * size * (2 / 1e9); // bits per seconds
 
     printf("Dot-product ref: %fms, %f Gbps\n", t_ref * 1e3, (gbits / t_ref));
     printf("Dot-product with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
@@ -178,6 +178,7 @@ int parallel_dot_product_with_rfactor_test() {
         .vectorize(v)
         .update()
         .vectorize(v);
+    dot.compile_jit();
     return 0;
 }
 
@@ -195,24 +196,26 @@ int parallel_dot_product_no_rfactor_test() {
     Func dot_ref("dot_ref");
     dot_ref() = 0;
     dot_ref() += cast<int>(A(r.x))*B(r.x);
+
+    dot_ref.compile_jit();
     return 0;
 }
 
 int max_test() {
     const int size = 1024 * 1024 * N1 * N2;
 
-    ImageParam A(Int(32), 1);
+    ImageParam A(Float(32), 1);
 
     RDom r(0, size);
 
     Func max_ref("max_ref");
-    max_ref() = 0;
-    max_ref() = max(max_ref(), A(r));
+    max_ref() = 0.0f;
+    max_ref() = max(max_ref(), abs(A(r)));
 
     Func maxf("maxf");
-    maxf() = 0;
+    maxf() = 0.0f;
     RVar rxo, rxi, rxio, rxii;
-    maxf() = max(maxf(), A(r));
+    maxf() = max(maxf(), abs(A(r)));
     maxf.update().split(r.x, rxo, rxi, 4*8192);
 
     Var u, v;
@@ -230,9 +233,9 @@ int max_test() {
     const int trials = 10;
     const int iterations = 10;
 
-    Image<int32_t> vec_A(size);
-    Image<int32_t> ref_output = Image<int32_t>::make_scalar();
-    Image<int32_t> output = Image<int32_t>::make_scalar();
+    Image<float> vec_A(size);
+    Image<float> ref_output = Image<float>::make_scalar();
+    Image<float> output = Image<float>::make_scalar();
 
     // init randomly
     for (int ix = 0; ix < size; ix++) {
@@ -285,6 +288,7 @@ int max_with_rfactor_test() {
         .vectorize(v)
         .update()
         .vectorize(v);
+    maxf.compile_jit();
     return 0;
 }
 
@@ -295,23 +299,11 @@ int max_no_rfactor_test() {
 
     RDom r(0, size);
 
-    Func maxf("maxf");
-    maxf() = 0;
-    RVar rxo, rxi, rxio, rxii;
-    maxf() = max(maxf(), A(r));
-    maxf.update().split(r.x, rxo, rxi, 4*8192);
+    Func max_ref("max_ref");
+    max_ref() = 0;
+    max_ref() = max(max_ref(), A(r));
 
-    Var u, v;
-    Func intm = maxf.update().rfactor(rxo, u);
-    intm.compute_root()
-        .update()
-        .parallel(u)
-        .split(rxi, rxio, rxii, 8)
-        .rfactor(rxii, v)
-        .compute_at(intm, u)
-        .vectorize(v)
-        .update()
-        .vectorize(v);
+    max_ref.compile_jit();
     return 0;
 }
 
@@ -541,13 +533,15 @@ int argmin_with_rfactor_test() {
     Func intm2 = intm1.update(0).split(r.x, rxo, rxi, 16).rfactor(rxi, v);
     intm2.compute_at(intm1, u);
     intm2.update(0).vectorize(v);
+
+    amin.compile_jit();
     return 0;
 }
 
 int argmin_no_rfactor_test() {
     const int size = 64;
 
-    Func amin("amin"), ref("ref");
+    Func ref("ref");
 
     ImageParam input(UInt(8), 4);
 
@@ -559,6 +553,7 @@ int argmin_no_rfactor_test() {
                   select(ref()[0] < input(r.x, r.y, r.y, r.z), ref()[2], r.y),
                   select(ref()[0] < input(r.x, r.y, r.z, r.w), ref()[3], r.z),
                   select(ref()[0] < input(r.x, r.y, r.z, r.w), ref()[4], r.w));
+    ref.compile_jit();
     return 0;
 }
 
@@ -663,13 +658,15 @@ int complex_multiply_with_rfactor_test() {
         .vectorize(v)
         .update()
         .vectorize(v);
+
+    mult.compile_jit();
     return 0;
 }
 
 int complex_multiply_no_rfactor_test() {
     const int size = 1024*1024*N1 * N2;
 
-    Func mult("mult"), ref("ref");
+    Func ref("ref");
 
     // TODO: change to float
     ImageParam input0(Int(32), 1);
@@ -680,6 +677,8 @@ int complex_multiply_no_rfactor_test() {
     ref() = Tuple(1, 0);
     ref() = Tuple(ref()[0]*input0(r.x) - ref()[1]*input1(r.x),
                   ref()[0]*input1(r.x) + ref()[1]*input0(r.x));
+
+    ref.compile_jit();
     return 0;
 }
 
@@ -857,6 +856,7 @@ int kitchen_sink_no_rfactor_test() {
                   sink_ref()[7] + select(A(r) % 2 == 0, 1, 0) // Number of even items
     };
 
+    sink_ref.compile_jit();
     return 0;
 }
 
@@ -894,6 +894,7 @@ int kitchen_sink_with_rfactor_test() {
         .update()
         .vectorize(v);
 
+    sink.compile_jit();
     return 0;
 }
 
@@ -908,6 +909,8 @@ int histogram_no_rfactor_test() {
 
     ref(x) = 0;
     ref(in(r.x, r.y)) += 1;
+
+    ref.compile_jit();
     return 0;
 }
 
@@ -933,10 +936,50 @@ int histogram_with_rfactor_test() {
         .vectorize(x, 8)
         .update().parallel(u);
     hist.update().vectorize(x, 8);
+
+    hist.compile_jit();
+    return 0;
+}
+
+int non_associative_rfactor_test() {
+    const int size = 1024 * 1024 * N1 * N2;
+
+    ImageParam A(Int(32), 1);
+    RVar rxo, rxi, rxio, rxii;
+    Var u("u"), v("v"), x("x");
+    RDom r(0, size);
+
+    Func f("f");
+    f() = 0;
+    f() = max(f(), A(r));
+    f.update().split(r.x, rxo, rxi, 4*8192);
+    f.update().rfactor(rxo, u);
+    f.compile_jit();
+
+    Func maxf("maxf");
+    maxf() = 0;
+    maxf() = max(maxf() % 10, A(r));
+    maxf.update().split(r.x, rxo, rxi, 4*8192);
+
+    Func intm = maxf.update().rfactor(rxo, u);
+    intm.compute_root()
+        .update()
+        .parallel(u)
+        .split(rxi, rxio, rxii, 8)
+        .rfactor(rxii, v)
+        .compute_at(intm, u)
+        .vectorize(v)
+        .update()
+        .vectorize(v);
+
+    maxf.compile_jit();
     return 0;
 }
 
 int main(int argc, char **argv) {
+    //parallel_dot_product_rfactor_test();
+    max_test();
+
     //bandwidth_test();
     //memcpy_test();
     /*histogram_rfactor_test();
@@ -947,7 +990,7 @@ int main(int argc, char **argv) {
     /*parallel_dot_product_rfactor_test();
     kitchen_sink_test();*/
 
-    {
+    /*{
         double t = benchmark(10, 10, [&]() {max_with_rfactor_test();});
         printf("Max rfactor compile time: %fms\n", t * 1e3);
 
@@ -993,7 +1036,13 @@ int main(int argc, char **argv) {
 
         double t_ref = benchmark(10, 10, [&]() {kitchen_sink_no_rfactor_test();});
         printf("Kitchen-sink ref compile time: %fms\n", t_ref * 1e3);
-    }
+    }*/
+
+    /*{
+        printf("\nRunning non-associative test\n");
+        double t = benchmark(10, 10, [&]() {non_associative_rfactor_test();});
+        printf("Non-associative rfactor test: %fms\n", t * 1e3);
+    }*/
 
     printf("Success!\n");
     return 0;
