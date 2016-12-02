@@ -303,16 +303,13 @@ Stmt AssertStmt::make(Expr condition, Expr message) {
     return node;
 }
 
-Stmt ProducerConsumer::make(std::string name, Stmt produce, Stmt update, Stmt consume) {
-    internal_assert(produce.defined()) << "ProducerConsumer of undefined\n";
-    // update is allowed to be null
-    internal_assert(consume.defined()) << "ProducerConsumer of undefined\n";
+Stmt ProducerConsumer::make(std::string name, bool is_producer, Stmt body) {
+    internal_assert(body.defined()) << "ProducerConsumer of undefined\n";
 
     ProducerConsumer *node = new ProducerConsumer;
     node->name = name;
-    node->produce = produce;
-    node->update = update;
-    node->consume = consume;
+    node->is_producer = is_producer;
+    node->body = body;
     return node;
 }
 
@@ -493,6 +490,15 @@ Stmt Evaluate::make(Expr v) {
     return node;
 }
 
+Expr Call::make(Function func, const std::vector<Expr> &args, int idx) {
+    internal_assert(idx >= 0 &&
+                    idx < func.outputs())
+        << "Value index out of range in call to halide function\n";
+    internal_assert(func.has_pure_definition() || func.has_extern_definition())
+        << "Call to undefined halide function\n";
+    return make(func.output_types()[(size_t)idx], func.name(), args, Halide, func.get_contents(), idx, BufferPtr(), Parameter());
+}
+
 Expr Call::make(Type type, std::string name, const std::vector<Expr> &args, CallType call_type,
                 IntrusivePtr<FunctionContents> func, int value_index,
                 BufferPtr image, Parameter param) {
@@ -626,6 +632,8 @@ Call::ConstString Call::div_round_to_zero = "div_round_to_zero";
 Call::ConstString Call::mod_round_to_zero = "mod_round_to_zero";
 Call::ConstString Call::slice_vector = "slice_vector";
 Call::ConstString Call::call_cached_indirect_function = "call_cached_indirect_function";
+Call::ConstString Call::prefetch = "prefetch";
+Call::ConstString Call::prefetch_2d = "prefetch_2d";
 Call::ConstString Call::signed_integer_overflow = "signed_integer_overflow";
 Call::ConstString Call::indeterminate_expression = "indeterminate_expression";
 Call::ConstString Call::bool_to_mask = "bool_to_mask";

@@ -977,8 +977,8 @@ int non_associative_rfactor_test() {
 }
 
 int main(int argc, char **argv) {
-    //parallel_dot_product_rfactor_test();
-    max_test();
+    parallel_dot_product_rfactor_test();
+    //max_test();
 
     //bandwidth_test();
     //memcpy_test();
