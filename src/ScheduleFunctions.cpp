@@ -152,8 +152,10 @@ Stmt build_provide_loop_nest_helper(string func_name,
         Expr var = Variable::make(Int(32), prefix + dim.var);
         Expr max = Variable::make(Int(32), prefix + dim.var + ".loop_max");
         Expr min = Variable::make(Int(32), prefix + dim.var + ".loop_min");
-        Container c1 = {Container::IfInner, 0, "", likely(min <= var)};
-        Container c2 = {Container::IfInner, 0, "", likely(var <= max)};
+        // Use 'var' which bounds we're constraining as the container name, so
+        // that we can use it later to check if a LetStmt value depends on 'var'.
+        Container c1 = {Container::IfInner, 0, prefix + dim.var, likely(min <= var)};
+        Container c2 = {Container::IfInner, 0, prefix + dim.var, likely(var <= max)};
         nest.push_back(c1);
         nest.push_back(c2);
         n_predicates_inner += 2;
@@ -199,18 +201,18 @@ Stmt build_provide_loop_nest_helper(string func_name,
 
         for (int j = i-1; j >= 0; j--) {
             // Try to push it up by one.
-            internal_assert(nest[j+1].value.defined()) << "i: " << i << " -> " << nest[j+1].name << "\n";
+            internal_assert(nest[j+1].value.defined());
 
             if (!expr_uses_var(nest[j+1].value, nest[j].name)) {
                 if (nest[j].type != Container::For) {
                     std::swap(nest[j+1], nest[j]);
                 } else {
-                    // We need to reduplicate all the LetStmts outside this for-loop; otherwise,
-                    // it may mess up with bounds_touched since some of the LetStmts depend
-                    // on the fused vars.
+                    // We need to reduplicate all the LetStmts outside this for-loop that use
+                    // the variable constrained by this predicate; otherwise, it may mess up
+                    // with bounds_touched since some of the LetStmts depend on the fused vars.
                     int count = 0;
                     for (int k = 0; k < j; ++k) {
-                        if (nest[k].type == Container::Let) {
+                        if ((nest[k].type == Container::Let) && (expr_uses_var(nest[k].value, nest[j+1].name))) {
                             nest.insert(nest.begin() + j + 2, nest[k]);
                             count += 1;
                         }
