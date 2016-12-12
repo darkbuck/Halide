@@ -28,9 +28,11 @@ using std::set;
 
 namespace {
 // A structure representing a containing LetStmt, IfThenElse, or For
-// loop. Used in build_provide_loop_nest below.
+// loop. Used in build_provide_loop_nest below. Both If and IfInner represent
+// IfThenElse stmts, however, IfInner should not be reordered to outside of
+// a for loop.
 struct Container {
-    enum Type {For, Let, If};
+    enum Type {For, Let, If, IfInner};
     Type type;
     // If it's a for loop, the index in the dims list.
     int dim_idx;
@@ -38,12 +40,10 @@ struct Container {
     Expr value;
 };
 
-bool var_name_match(string candidate, string var) {
-    internal_assert(var.find('.') == string::npos)
-        << "var_name_match expects unqualified names for the second argument. "
-        << "Name passed: " << var << "\n";
-    if (candidate == var) return true;
-    return Internal::ends_with(candidate, "." + var);
+bool var_name_match(string v1, string v2) {
+    if (v1 == v2) return true;
+    if (Internal::ends_with(v1, "." + v2)) return true;
+    return Internal::ends_with(v2, "." + v1);
 }
 
 } // anonymous namespace
@@ -85,18 +85,6 @@ Stmt build_provide_loop_nest_helper(string func_name,
 
     // Make the (multi-dimensional multi-valued) store node.
     Stmt stmt = Provide::make(func_name, values, site);
-
-    // Add appopriate predicates on the fused loop vars to ensure we don't
-    // go out of bounds. Ignore the __outermost dims since it's going to be
-    // removed later anyway.
-    for (int i = start_fuse; (i >= 0) && (i < (int)s.dims().size()-1); ++i) {
-        const Dim &dim = s.dims()[i];
-        Expr var = Variable::make(Int(32), prefix + dim.var);
-        Expr max = Variable::make(Int(32), prefix + dim.var + ".loop_max");
-        Expr min = Variable::make(Int(32), prefix + dim.var + ".loop_min");
-        stmt = IfThenElse::make(likely(min <= var), stmt);
-        stmt = IfThenElse::make(likely(var <= max), stmt);
-    }
 
     // A map of the dimensions for which we know the extent is a
     // multiple of some Expr. This can happen due to a bound, or
@@ -153,6 +141,24 @@ Stmt build_provide_loop_nest_helper(string func_name,
         stmt = let->body;
     }
 
+    // Add appropriate predicates on the fused loop vars to ensure we don't
+    // go out of bounds. Ignore the __outermost dims since it's going to be
+    // removed later anyway. These have to be added as outermost as possible as
+    // some let stmts (e.g. the rebase let stmt) might depend on this vars;
+    // otherwise, this may mess up the bounds_touched computation.
+    int n_predicates_inner = 0;
+    for (int i = start_fuse; (i >= 0) && (i < (int)s.dims().size()-1); ++i) {
+        const Dim &dim = s.dims()[i];
+        Expr var = Variable::make(Int(32), prefix + dim.var);
+        Expr max = Variable::make(Int(32), prefix + dim.var + ".loop_max");
+        Expr min = Variable::make(Int(32), prefix + dim.var + ".loop_min");
+        Container c1 = {Container::IfInner, 0, "", likely(min <= var)};
+        Container c2 = {Container::IfInner, 0, "", likely(var <= max)};
+        nest.push_back(c1);
+        nest.push_back(c2);
+        n_predicates_inner += 2;
+    }
+
     // Put all the reduction domain predicates into the containers vector.
     int n_predicates = predicates.size();
     for (Expr pred : predicates) {
@@ -163,7 +169,7 @@ Stmt build_provide_loop_nest_helper(string func_name,
 
     // Resort the containers vector so that lets are as far outwards
     // as possible. Use reverse insertion sort. Start at the first letstmt.
-    for (int i = (int)s.dims().size(); i < (int)nest.size() - n_predicates; i++) {
+    for (int i = (int)s.dims().size(); i < (int)nest.size() - n_predicates_inner - n_predicates; i++) {
         // Only push up LetStmts.
         internal_assert(nest[i].value.defined());
         internal_assert(nest[i].type == Container::Let);
@@ -180,8 +186,45 @@ Stmt build_provide_loop_nest_helper(string func_name,
     }
 
     // Sort the predicate guards so they are as far outwards as possible.
+    // IfInnner should not be reordered to outside of a for loop.
+    for (int i = (int)nest.size() - n_predicates_inner - n_predicates; i < (int)nest.size() - n_predicates; i++) {
+        // Only push up IfThenElse.
+        internal_assert(nest[i].value.defined());
+        internal_assert(nest[i].type == Container::IfInner);
+
+        // Cannot lift out the predicate guard if it contains call to non-pure function
+        if (contains_impure_call(nest[i].value)) {
+            continue;
+        }
+
+        for (int j = i-1; j >= 0; j--) {
+            // Try to push it up by one.
+            internal_assert(nest[j+1].value.defined()) << "i: " << i << " -> " << nest[j+1].name << "\n";
+
+            if (!expr_uses_var(nest[j+1].value, nest[j].name)) {
+                if (nest[j].type != Container::For) {
+                    std::swap(nest[j+1], nest[j]);
+                } else {
+                    // We need to reduplicate all the LetStmts outside this for-loop; otherwise,
+                    // it may mess up with bounds_touched since some of the LetStmts depend
+                    // on the fused vars.
+                    int count = 0;
+                    for (int k = 0; k < j; ++k) {
+                        if (nest[k].type == Container::Let) {
+                            nest.insert(nest.begin() + j + 2, nest[k]);
+                            count += 1;
+                        }
+                    }
+                    i += count;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
     for (int i = (int)nest.size() - n_predicates; i < (int)nest.size(); i++) {
-        // Only push up LetStmts.
+        // Only push up IfThenElse.
         internal_assert(nest[i].value.defined());
         internal_assert(nest[i].type == Container::If);
 
@@ -193,6 +236,7 @@ Stmt build_provide_loop_nest_helper(string func_name,
         for (int j = i-1; j >= 0; j--) {
             // Try to push it up by one.
             internal_assert(nest[j+1].value.defined());
+
             if (!expr_uses_var(nest[j+1].value, nest[j].name)) {
                 std::swap(nest[j+1], nest[j]);
             } else {
@@ -206,7 +250,7 @@ Stmt build_provide_loop_nest_helper(string func_name,
         if (nest[i].type == Container::Let) {
             internal_assert(nest[i].value.defined());
             stmt = LetStmt::make(nest[i].name, nest[i].value, stmt);
-        } else if (nest[i].type == Container::If) {
+        } else if ((nest[i].type == Container::If) || (nest[i].type == Container::IfInner)) {
             internal_assert(nest[i].value.defined());
             stmt = IfThenElse::make(nest[i].value, stmt, Stmt());
         } else {
@@ -1041,16 +1085,16 @@ private:
             return s;
         }
 
-        user_assert(!skip[group[0].name()])
-            << "Invalid compute_with: the 'parent' function " << group[0].name()
+        user_assert(!skip[group[group.size()-1].name()])
+            << "Invalid compute_with: the 'parent' function " << group[group.size()-1].name()
             << " in fused group " << group << " is not used at the compute_at level "
             << compute_level.to_string() << ".\n";
 
         // Add the consumer nodes.
         Stmt consume = s;
-        for (size_t i = group.size(); i > 0; --i) {
-            if (!skip[group[i-1].name()]) {
-                consume = ProducerConsumer::make(group[i-1].name(), false, consume);
+        for (size_t i = 0; i < group.size(); ++i) {
+            if (!skip[group[i].name()]) {
+                consume = ProducerConsumer::make(group[i].name(), false, consume);
             }
         }
 
@@ -1060,7 +1104,7 @@ private:
         int parent_index = -1; // The first function in the group that is not skipped
         vector<pair<string, Expr>> add_lets;
         Stmt produce;
-        for (size_t i = 0; i < group.size(); ++i) {
+        for (int i = (int)group.size() - 1; i >= 0; --i) {
             if (!skip[group[i].name()]) {
                 produce = build_produce(skip, group[i], produce, replacements, add_lets);
                 if (parent_index == -1) {
@@ -1082,7 +1126,7 @@ private:
 
         // Shifts the loops according to the alignment strategies.
         map<string, Expr> shifts;
-        for (size_t i = 0; i < group.size(); ++i) {
+        for (int i = (int)group.size() - 1; i >= 0; --i) {
             if (!skip[group[i].name()]) {
                 const Function &f = group[i];
                 compute_shift_factor(skip, f, f.name() + ".s0.", f.definition(), subs.bounds, shifts);
@@ -1106,9 +1150,9 @@ private:
         produce = replace_parent_bound_with_union_bound(skip, group[parent_index], produce, subs.bounds);
 
         // Add the producer nodes.
-        for (size_t i = group.size(); i > 0; --i) {
-            if (!skip[group[i-1].name()]) {
-                produce = ProducerConsumer::make(group[i-1].name(), true, produce);
+        for (size_t i = 0; i < group.size(); ++i) {
+            if (!skip[group[i].name()]) {
+                produce = ProducerConsumer::make(group[i].name(), true, produce);
             }
         }
 
@@ -1230,12 +1274,21 @@ private:
             start_fuse = std::min(start_fuse, (size_t)(iter - dims.begin()));
             // Should ignore the __outermost dummy dimension.
             for (size_t i = iter - dims.begin(); i < dims.size() - 1; ++i) {
-                string var = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + dims[i].var;
                 string var_orig = pair.func_1 + ".s" + std::to_string(pair.stage_1) + "." + dims[i].var;
                 Expr val = Variable::make(Int(32), var_orig);
+
+
+                internal_assert(env.count(pair.func_2));
+                const Function &f2 = env.find(pair.func_2)->second;
+                const vector<Dim> &dims_2 =
+                    (pair.stage_2 == 0) ? f2.definition().schedule().dims() : f2.update(pair.stage_2-1).schedule().dims();
+                int dim2_idx = dims_2.size() - (dims.size() - i);
+                internal_assert(dim2_idx < (int)dims_2.size());
+                string var = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + dims_2[dim2_idx].var;
+
+                replacements.emplace(var + ".loop_extent", make_const(Int(32), 1));
                 replacements.emplace(var + ".loop_min", val);
                 replacements.emplace(var + ".loop_max", val);
-                replacements.emplace(var + ".loop_extent", make_const(Int(32), 1));
             }
         }
 
@@ -1319,8 +1372,17 @@ private:
             internal_assert(iter != dims.end());
             // Should ignore the __outermost dummy dimension.
             for (size_t i = iter - dims.begin(); i < dims.size() - 1; ++i) {
-                string var_2 = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + dims[i].var;
-                internal_assert(bounds.count(var_2 + ".loop_min"));
+                // The child's dim might have slightly different name from the parent, e.g
+                // y.yi and yi.
+                internal_assert(env.count(pair.func_2));
+                const Function &f2 = env.find(pair.func_2)->second;
+                const vector<Dim> &dims_2 =
+                    (pair.stage_2 == 0) ? f2.definition().schedule().dims() : f2.update(pair.stage_2-1).schedule().dims();
+                int dim2_idx = dims_2.size() - (dims.size() - i);
+                internal_assert(dim2_idx < (int)dims_2.size());
+
+                string var_2 = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + dims_2[dim2_idx].var;
+                internal_assert(bounds.count(var_2 + ".loop_min")) << "Fail to find bound of " << var_2 + ".loop_min" << "\n";
                 internal_assert(bounds.count(var_2 + ".loop_max"));
                 internal_assert(bounds.count(var_2 + ".loop_extent"));
                 Expr min_2 = bounds.find(var_2 + ".loop_min")->second;
@@ -1357,9 +1419,9 @@ private:
     }
 
     Stmt build_realize_group(Stmt s) {
-        for (size_t i = group.size(); i > 0; --i) {
-            if (function_is_used_in_stmt(group[i-1], s) || is_output_list[i-1]) {
-                s = build_realize(s, group[i-1], is_output_list[i-1]);
+        for (size_t i = 0; i < group.size(); ++i) {
+            if (function_is_used_in_stmt(group[i], s) || is_output_list[i]) {
+                s = build_realize(s, group[i], is_output_list[i]);
             }
         }
         return s;
@@ -1814,7 +1876,6 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
             << ") and " << p.func_2 << ".s" << p.stage_2 << " ("
             << func_2.definition().schedule().compute_level().to_string() << ") do not match.\n";
 
-        // Verify that their dimensions up to "var_name" are the same.
         const vector<Dim> &dims_1 = def_1.schedule().dims();
         const vector<Dim> &dims_2 = def_2.schedule().dims();
 
@@ -1831,6 +1892,7 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
             << "Invalid compute_with: cannot find " << p.var_name << " in "
             << p.func_2 << ".s" << p.stage_2 << "\n";
 
+        // Verify that their dimensions up to "var_name" are the same.
         size_t start_fuse_1 = iter_1 - dims_1.begin();
         size_t start_fuse_2 = iter_2 - dims_2.begin();
 
@@ -1840,7 +1902,11 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
             << p.stage_1 << " and " << p.func_2 << ".s" << p.stage_2 << " do not match.\n";
 
         for (int i = 0; i < n_fused; ++i) {
-            if (dims_1[start_fuse_1 + i] != dims_2[start_fuse_2 + i]) {
+            const Dim &d1 = dims_1[start_fuse_1 + i];
+            const Dim &d2 = dims_2[start_fuse_2 + i];
+            bool equal = var_name_match(d1.var, d2.var) && (d1.for_type == d2.for_type) &&
+               (d1.device_api == d2.device_api) && (d1.dim_type == d2.dim_type);
+            if (!equal) {
                 user_error << "Invalid compute_with: dims " << i << " of " << p.func_1 << ".s"
                            << p.stage_1 << "(" << dims_1[start_fuse_1 + i].var << ") and " << p.func_2
                            << ".s" << p.stage_2 << "(" << dims_2[start_fuse_2 + i].var << ") do not match.\n";

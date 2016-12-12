@@ -514,46 +514,72 @@ int rowsum_test() {
 
 int rgb_yuv420_test() {
     // Somewhat approximating the behavior of rgb -> yuv420 (downsample by half in the u and v channels)
-    const int size = 100;
+    const int size = 1024;
     Buffer<int> y_im(size, size), u_im(size/2, size/2), v_im(size/2, size/2);
     Buffer<int> y_im_ref(size, size), u_im_ref(size/2, size/2), v_im_ref(size/2, size/2);
 
     // Compute a random image
     Buffer<int> input(size, size, 3);
-    for (int r = 0; r < size; r++) {
-        for (int g = 0; g < size; g++) {
-            for (int b = 0; b < 3; b++) {
-                input(r, g, b) = (rand() & 0x000000ff);
+    for (int x = 0; x < size; x++) {
+        for (int y = 0; y < size; y++) {
+            for (int c = 0; c < 3; c++) {
+                input(x, y, c) = (rand() & 0x000000ff);
             }
         }
     }
 
     {
         Var x("x"), y("y"), z("z");
-        Func y_part("y_part"), u_part("u_part"), v_part("v_part"), rgb("rgb");
+        Func y_part("y_part"), u_part("u_part"), v_part("v_part"), rgb("rgb"), rgb_x("rgb_x");
 
-        rgb(x, y, z) = input(x, y, z);
-        y_part(x, y) = ((66 * rgb(x, y, 0) + 129 * rgb(x, y, 1) +  25 * rgb(x, y, 2) + 128) >> 8) +  16;
+        Func clamped = BoundaryConditions::repeat_edge(input);
+        rgb_x(x, y, z) = (clamped(x - 1, y, z) + 2*clamped(x, y, z) + clamped(x + 1, y, z));
+        rgb(x, y, z) = (rgb_x(x, y - 1, z) + 2*rgb_x(x, y, z) + rgb_x(x, y - 1, z))/16;
+
+        y_part(x, y) = ((66 * input(x, y, 0) + 129 * input(x, y, 1) +  25 * input(x, y, 2) + 128) >> 8) +  16;
         u_part(x, y) = (( -38 * rgb(2*x, 2*y, 0) -  74 * rgb(2*x, 2*y, 1) + 112 * rgb(2*x, 2*y, 2) + 128) >> 8) + 128;
         v_part(x, y) = (( 112 * rgb(2*x, 2*y, 0) -  94 * rgb(2*x, 2*y, 1) -  18 * rgb(2*x, 2*y, 2) + 128) >> 8) + 128;
 
-        y_part.realize(y_im_ref);
-        u_part.realize(u_im_ref);
-        v_part.realize(v_im_ref);
+        Pipeline({y_part, u_part, v_part}).realize({y_im_ref, u_im_ref, v_im_ref});
     }
 
     {
         Var x("x"), y("y"), z("z");
-        Func y_part("y_part"), u_part("u_part"), v_part("v_part"), rgb("rgb");
+        Func y_part("y_part"), u_part("u_part"), v_part("v_part"), rgb("rgb"), rgb_x("rgb_x");
 
-        rgb(x, y, z) = input(x, y, z);
-        y_part(x, y) = ((66 * rgb(x, y, 0) + 129 * rgb(x, y, 1) +  25 * rgb(x, y, 2) + 128) >> 8) +  16;
+        Func clamped = BoundaryConditions::repeat_edge(input);
+        rgb_x(x, y, z) = (clamped(x - 1, y, z) + 2*clamped(x, y, z) + clamped(x + 1, y, z));
+        rgb(x, y, z) = (rgb_x(x, y - 1, z) + 2*rgb_x(x, y, z) + rgb_x(x, y - 1, z))/16;
+
+        y_part(x, y) = ((66 * input(x, y, 0) + 129 * input(x, y, 1) +  25 * input(x, y, 2) + 128) >> 8) +  16;
         u_part(x, y) = (( -38 * rgb(2*x, 2*y, 0) -  74 * rgb(2*x, 2*y, 1) + 112 * rgb(2*x, 2*y, 2) + 128) >> 8) + 128;
         v_part(x, y) = (( 112 * rgb(2*x, 2*y, 0) -  94 * rgb(2*x, 2*y, 1) -  18 * rgb(2*x, 2*y, 2) + 128) >> 8) + 128;
 
-        u_part.compute_with(y_part, y);
-        v_part.compute_with(u_part, y);
-        rgb.compute_at(y_part, y);
+        Var xi("xi"), yi("yi");
+        y_part.tile(x, y, xi, yi, 16, 2, TailStrategy::RoundUp);
+        u_part.tile(x, y, xi, yi, 8, 1, TailStrategy::RoundUp);
+        v_part.tile(x, y, xi, yi, 8, 1, TailStrategy::RoundUp);
+
+        y_part.unroll(yi);
+        y_part.vectorize(xi);
+        u_part.vectorize(xi);
+        v_part.vectorize(xi);
+
+        u_part.compute_with(y_part, x);
+        v_part.compute_with(u_part, x);
+
+        Expr width = v_part.output_buffer().width();
+        Expr height = v_part.output_buffer().height();
+        width = (width/8)*8;
+
+        u_part.bound(x, 0, width).bound(y, 0, height);
+        v_part.bound(x, 0, width).bound(y, 0, height);
+        y_part.bound(x, 0, 2*width).bound(y, 0, 2*height);
+
+        rgb_x.fold_storage(y, 4);
+        rgb_x.store_root();
+        rgb_x.compute_at(y_part, y).vectorize(x, 8);
+        rgb.compute_at(y_part, y).vectorize(x, 8);
 
         Pipeline({y_part, u_part, v_part}).realize({y_im, u_im, v_im});
     }
@@ -728,6 +754,80 @@ int multiple_outputs_on_gpu_test() {
     return 0;
 }
 
+int mixed_tile_factor_test() {
+    const int size = 512;
+    Buffer<int> f_im(size, size), g_im(size/2, size/2), h_im(size/2, size/2);
+    Buffer<int> f_im_ref(size, size), g_im_ref(size/2, size/2), h_im_ref(size/2, size/2);
+
+    // Compute a random image
+    Buffer<int> A(size, size, 3);
+    for (int x = 0; x < size; x++) {
+        for (int y = 0; y < size; y++) {
+            for (int c = 0; c < 3; c++) {
+                A(x, y, c) = (rand() & 0x000000ff);
+            }
+        }
+    }
+
+    {
+        Var x("x"), y("y"), z("z");
+        Func f("f_ref"), g("g_ref"), h("h_ref"), input("A_ref");
+
+        input(x, y, z) = 2*A(x, y, z) + 3;
+        f(x, y) = input(x, y, 0) + 2 * input(x, y, 1);
+        g(x, y) = input(2*x, 2*y, 1) + 2 * input(2*x, 2*y, 2);
+        h(x, y) = input(2*x, 2*y, 2) + 3 * input(2*x, 2*y, 1);
+
+        Pipeline({f, g, h}).realize({f_im_ref, g_im_ref, h_im_ref});
+    }
+
+    {
+        Var x("x"), y("y"), z("z");
+        Func f("f"), g("g"), h("h"), input("A");
+
+        input(x, y, z) = 2*A(x, y, z) + 3;
+        f(x, y) = input(x, y, 0) + 2 * input(x, y, 1);
+        g(x, y) = input(2*x, 2*y, 1) + 2 * input(2*x, 2*y, 2);
+        h(x, y) = input(2*x, 2*y, 2) + 3 * input(2*x, 2*y, 1);
+
+        Var xi("xi"), yi("yi");
+        f.tile(x, y, xi, yi, 32, 16, TailStrategy::ShiftInwards);
+        g.tile(x, y, xi, yi, 7, 9, TailStrategy::GuardWithIf);
+        h.tile(x, y, xi, yi, 4, 16, TailStrategy::RoundUp);
+
+        g.compute_with(f, yi);
+        h.compute_with(g, yi);
+
+        input.store_root();
+        input.compute_at(f, y).vectorize(x, 8);
+
+        Pipeline({f, g, h}).realize({f_im, g_im, h_im});
+    }
+
+    auto f_func = [f_im_ref](int x, int y) {
+        return f_im_ref(x, y);
+    };
+    if (check_image(f_im, f_func)) {
+        return -1;
+    }
+
+    auto g_func = [g_im_ref](int x, int y) {
+        return g_im_ref(x, y);
+    };
+    if (check_image(g_im, g_func)) {
+        return -1;
+    }
+
+    auto h_func = [h_im_ref](int x, int y) {
+        return h_im_ref(x, y);
+    };
+    if (check_image(h_im, h_func)) {
+        return -1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     printf("Running split reorder test\n");
     if (split_test() != 0) {
@@ -801,6 +901,11 @@ int main(int argc, char **argv) {
 
     printf("Running multiple outputs on gpu test\n");
     if (multiple_outputs_on_gpu_test() != 0) {
+        return -1;
+    }
+
+    printf("Running mixed tile factor test\n");
+    if (mixed_tile_factor_test() != 0) {
         return -1;
     }
 

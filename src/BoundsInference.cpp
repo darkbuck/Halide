@@ -310,7 +310,7 @@ public:
                         [&pair](const Dim& d) { return var_name_match(d.var, pair.var_name); });
                     internal_assert(iter != dims.end());
                     int index = iter - dims.begin();
-                    if (index >= var_index) {
+                    if (var_index >= index) {
                         return true;
                     }
                 }

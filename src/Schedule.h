@@ -206,12 +206,6 @@ struct Dim {
 
     bool is_pure() const {return (dim_type == PureVar) || (dim_type == PureRVar);}
     bool is_rvar() const {return (dim_type == PureRVar) || (dim_type == ImpureRVar);}
-
-    bool operator==(const Dim &other) const {
-        return (var == other.var) && (for_type == other.for_type) &&
-               (device_api == other.device_api) && (dim_type == other.dim_type);
-    }
-    bool operator!=(const Dim &other) const { return !(*this == other); }
 };
 
 struct Bound {

@@ -157,7 +157,7 @@ void collect_fused_pairs(const string &fn, size_t stage,
         fuse_adjacency_list[p.func_2].insert(p.func_1);
 
         func_fused_pairs.push_back(p);
-        graph[p.func_2].insert(p.func_1);
+        graph[p.func_1].insert(p.func_2);
     }
 }
 
