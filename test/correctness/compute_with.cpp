@@ -828,6 +828,157 @@ int mixed_tile_factor_test() {
     return 0;
 }
 
+int multi_tile_mixed_tile_factor_test() {
+    const int size = 512;
+    Buffer<int> f_im(size, size), g_im(size/2, size/2), h_im(size/2, size/2);
+    Buffer<int> f_im_ref(size, size), g_im_ref(size/2, size/2), h_im_ref(size/2, size/2);
+
+    // Compute a random image
+    Buffer<int> A(size, size, 3);
+    for (int x = 0; x < size; x++) {
+        for (int y = 0; y < size; y++) {
+            for (int c = 0; c < 3; c++) {
+                A(x, y, c) = (rand() & 0x000000ff);
+            }
+        }
+    }
+
+    {
+        Var x("x"), y("y"), z("z");
+        Func f("f_ref"), g("g_ref"), h("h_ref"), input("A_ref");
+
+        input(x, y, z) = 2*A(x, y, z) + 3;
+        f(x, y) = input(x, y, 0) + 2 * input(x, y, 1);
+        g(x, y) = input(2*x, 2*y, 1) + 2 * input(2*x, 2*y, 2);
+        h(x, y) = input(2*x, 2*y, 2) + 3 * input(2*x, 2*y, 1);
+
+        Pipeline({f, g, h}).realize({f_im_ref, g_im_ref, h_im_ref});
+    }
+
+    {
+        Var x("x"), y("y"), z("z");
+        Func f("f"), g("g"), h("h"), input("A");
+
+        input(x, y, z) = 2*A(x, y, z) + 3;
+        f(x, y) = input(x, y, 0) + 2 * input(x, y, 1);
+        g(x, y) = input(2*x, 2*y, 1) + 2 * input(2*x, 2*y, 2);
+        h(x, y) = input(2*x, 2*y, 2) + 3 * input(2*x, 2*y, 1);
+
+        Var xi("xi"), yi("yi");
+        f.tile(x, y, xi, yi, 32, 16, TailStrategy::ShiftInwards);
+        g.tile(x, y, xi, yi, 7, 9, TailStrategy::GuardWithIf);
+        h.tile(x, y, xi, yi, 4, 16, TailStrategy::RoundUp);
+
+        Var xii("xii"), yii("yii");
+        f.tile(xi, yi, xii, yii, 8, 8, TailStrategy::ShiftInwards);
+        g.tile(xi, yi, xii, yii, 16, 8, TailStrategy::GuardWithIf);
+        h.tile(xi, yi, xii, yii, 4, 16, TailStrategy::GuardWithIf);
+
+        g.compute_with(f, yii);
+        h.compute_with(g, yii);
+
+        input.store_root();
+        input.compute_at(f, y).vectorize(x, 8);
+
+        Pipeline({f, g, h}).realize({f_im, g_im, h_im});
+    }
+
+    auto f_func = [f_im_ref](int x, int y) {
+        return f_im_ref(x, y);
+    };
+    if (check_image(f_im, f_func)) {
+        return -1;
+    }
+
+    auto g_func = [g_im_ref](int x, int y) {
+        return g_im_ref(x, y);
+    };
+    if (check_image(g_im, g_func)) {
+        return -1;
+    }
+
+    auto h_func = [h_im_ref](int x, int y) {
+        return h_im_ref(x, y);
+    };
+    if (check_image(h_im, h_func)) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int only_some_are_tiled_test() {
+    const int size = 512;
+    Buffer<int> f_im(size, size), g_im(size/2, size/2), h_im(size/2, size/2);
+    Buffer<int> f_im_ref(size, size), g_im_ref(size/2, size/2), h_im_ref(size/2, size/2);
+
+    // Compute a random image
+    Buffer<int> A(size, size, 3);
+    for (int x = 0; x < size; x++) {
+        for (int y = 0; y < size; y++) {
+            for (int c = 0; c < 3; c++) {
+                A(x, y, c) = (rand() & 0x000000ff);
+            }
+        }
+    }
+
+    {
+        Var x("x"), y("y"), z("z");
+        Func f("f_ref"), g("g_ref"), h("h_ref"), input("A_ref");
+
+        input(x, y, z) = 2*A(x, y, z) + 3;
+        f(x, y) = input(x, y, 0) + 2 * input(x, y, 1);
+        g(x, y) = input(2*x, 2*y, 1) + 2 * input(2*x, 2*y, 2);
+        h(x, y) = input(2*x, 2*y, 2) + 3 * input(2*x, 2*y, 1);
+
+        Pipeline({f, g, h}).realize({f_im_ref, g_im_ref, h_im_ref});
+    }
+
+    {
+        Var x("x"), y("y"), z("z");
+        Func f("f"), g("g"), h("h"), input("A");
+
+        input(x, y, z) = 2*A(x, y, z) + 3;
+        f(x, y) = input(x, y, 0) + 2 * input(x, y, 1);
+        g(x, y) = input(2*x, 2*y, 1) + 2 * input(2*x, 2*y, 2);
+        h(x, y) = input(2*x, 2*y, 2) + 3 * input(2*x, 2*y, 1);
+
+        Var xi("xi"), yi("yi");
+        f.tile(x, y, xi, yi, 32, 16, TailStrategy::ShiftInwards);
+
+        g.compute_with(f, y);
+        h.compute_with(g, y);
+
+        input.store_root();
+        input.compute_at(f, y).vectorize(x, 8);
+
+        Pipeline({f, g, h}).realize({f_im, g_im, h_im});
+    }
+
+    auto f_func = [f_im_ref](int x, int y) {
+        return f_im_ref(x, y);
+    };
+    if (check_image(f_im, f_func)) {
+        return -1;
+    }
+
+    auto g_func = [g_im_ref](int x, int y) {
+        return g_im_ref(x, y);
+    };
+    if (check_image(g_im, g_func)) {
+        return -1;
+    }
+
+    auto h_func = [h_im_ref](int x, int y) {
+        return h_im_ref(x, y);
+    };
+    if (check_image(h_im, h_func)) {
+        return -1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     printf("Running split reorder test\n");
     if (split_test() != 0) {
@@ -906,6 +1057,16 @@ int main(int argc, char **argv) {
 
     printf("Running mixed tile factor test\n");
     if (mixed_tile_factor_test() != 0) {
+        return -1;
+    }
+
+    printf("Running multi tile mixed tile factor test\n");
+    if (multi_tile_mixed_tile_factor_test() != 0) {
+        return -1;
+    }
+
+    printf("Running only some are tiled test\n");
+    if (only_some_are_tiled_test() != 0) {
         return -1;
     }
 

@@ -207,12 +207,15 @@ Stmt build_provide_loop_nest_helper(string func_name,
                 if (nest[j].type != Container::For) {
                     std::swap(nest[j+1], nest[j]);
                 } else {
-                    // We need to reduplicate all the LetStmts outside this for-loop that use
-                    // the variable constrained by this predicate; otherwise, it may mess up
+                    // We need to duplicate all the LetStmts outside this for-loop that depend
+                    // on the variable constrained by this predicate; otherwise, it may mess up
                     // with bounds_touched since some of the LetStmts depend on the fused vars.
                     int count = 0;
-                    for (int k = 0; k < j; ++k) {
-                        if ((nest[k].type == Container::Let) && (expr_uses_var(nest[k].value, nest[j+1].name))) {
+                    Scope<int> scope; // Use scope to track transitive dependencies.
+                    scope.push(nest[j+1].name, 0);
+                    for (int k = j-1; k >= 0; --k) {
+                        if ((nest[k].type == Container::Let) && (expr_uses_vars(nest[k].value, scope))) {
+                            scope.push(nest[k].name, 0);
                             nest.insert(nest.begin() + j + 2, nest[k]);
                             count += 1;
                         }
