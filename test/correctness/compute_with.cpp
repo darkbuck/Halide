@@ -979,6 +979,48 @@ int only_some_are_tiled_test() {
     return 0;
 }
 
+int with_specialization_test() {
+    Buffer<int> im_ref, im;
+    {
+        Var x("x"), y("y");
+        Func f("f"), g("g"), h("h");
+
+        f(x, y) = x + y;
+        g(x, y) = x - y;
+        h(x, y) = f(x - 1, y + 1) + g(x + 2, y - 2);
+        im_ref = h.realize(200, 200);
+    }
+
+    {
+        Var x("x"), y("y");
+        Func f("f"), g("g"), h("h");
+
+        f(x, y) = x + y;
+        g(x, y) = x - y;
+        h(x, y) = f(x - 1, y + 1) + g(x + 2, y - 2);
+
+        f.compute_root();
+        g.compute_root();
+
+        Param<bool> tile;
+        Var xo("xo"), xi("xi");
+        f.specialize(tile).split(x, xo, xi, 7);
+
+        g.compute_with(f, y, AlignStrategy::AlignEnd);
+
+        tile.set(true);
+        im = h.realize(200, 200);
+    }
+
+    auto func = [im_ref](int x, int y) {
+        return im_ref(x, y);
+    };
+    if (check_image(im, func)) {
+        return -1;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     printf("Running split reorder test\n");
     if (split_test() != 0) {
@@ -1067,6 +1109,11 @@ int main(int argc, char **argv) {
 
     printf("Running only some are tiled test\n");
     if (only_some_are_tiled_test() != 0) {
+        return -1;
+    }
+
+    printf("Running with specialization test\n");
+    if (with_specialization_test() != 0) {
         return -1;
     }
 
