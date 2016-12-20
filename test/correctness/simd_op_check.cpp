@@ -1775,6 +1775,7 @@ void check_hvx_all() {
     check("vmpy(v*.h,r*.h):<<1:rnd:sat", hvx_width/2, i16_sat((32767*i32(i16_1) + 16384)/32768));
 
     check("vmpyo(v*.w,v*.h)", hvx_width/4, i32((i64(i32_1)*i64(i32_2))/(i64(1) << 32)));
+    check("vmpy(v*.uh,v*.uh)", hvx_width/4, u32((u64(u32_1)*u64(u32_2))/(u64(1) << 32)));
     check("vmpyo(v*.w,v*.h):<<1:sat", hvx_width/4, i32_sat((i64(i32_1)*i64(i32_2))/(i64(1) << 31)));
     check("vmpyo(v*.w,v*.h):<<1:rnd:sat", hvx_width/4, i32_sat((i64(i32_1)*i64(i32_2) + (1 << 30))/(i64(1) << 31)));
 

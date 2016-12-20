@@ -535,6 +535,7 @@ private:
 
             // Multiply keep high half
             { "halide.hexagon.trunc_mpy.vw.vw", i32((wild_i64x*wild_i64x)/Expr(static_cast<int64_t>(1) << 32)), Pattern::NarrowOps },
+            { "halide.hexagon.trunc_mpy.vuw.vuw", u32((wild_u64x*wild_u64x)/Expr(static_cast<uint64_t>(1) << 32)), Pattern::NarrowOps },
 
             // Scalar multiply keep high half, with multiplication by 2.
             { "halide.hexagon.trunc_satw_mpy2.vh.h", i16_sat((wild_i32x*bc(wild_i32))/32768), Pattern::NarrowOps },

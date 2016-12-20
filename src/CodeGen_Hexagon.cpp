@@ -1276,27 +1276,37 @@ void CodeGen_Hexagon::visit(const Mul *op) {
 
 Expr CodeGen_Hexagon::mulhi_shr(Expr a, Expr b, int shr) {
     Type ty = a.type();
-    if (ty.is_vector() && (ty.bits() == 8 || ty.bits() == 16)) {
-        Type wide_ty = ty.with_bits(ty.bits() * 2);
+    if (ty.is_vector()) {
+        Expr ab;
+        if (ty.bits() == 8 || ty.bits() == 16) {
+            Type wide_ty = ty.with_bits(ty.bits() * 2);
 
-        // Generate a widening multiply.
-        Expr p_wide = Call::make(wide_ty, "halide.hexagon.mpy" + type_suffix(a, b),
-                                 {a, b}, Call::PureExtern);
+            // Generate a widening multiply.
+            Expr ab_wide = Call::make(wide_ty, "halide.hexagon.mpy" + type_suffix(a, b),
+                                     {a, b}, Call::PureExtern);
 
-        // Keep the high half (truncate the low half). This also
-        // re-interleaves after mpy deinterleaved.
-        Expr p = Call::make(ty, "halide.hexagon.trunclo" + type_suffix(p_wide, false),
-                            {p_wide}, Call::PureExtern);
+            // Keep the high half (truncate the low half). This also
+            // re-interleaves after mpy deinterleaved.
+            ab = Call::make(ty, "halide.hexagon.trunclo" + type_suffix(ab_wide, false),
+                           {ab_wide}, Call::PureExtern);
+        } else if (ty.bits() == 32) {
+            // For 32 bit multiply, we can't use the above, it requires 64 bit
+            // arithmetic. However, we have instruction sequences that compute
+            // the multiply-keep-high-half result.
+            ab = Call::make(ty, "halide.hexagon.trunc_mpy" + type_suffix(a, b),
+                           {a, b}, Call::PureExtern);
+        } else {
+            return CodeGen_Posix::mulhi_shr(a, b, shr);
+        }
 
         // Apply the remaining shift.
         if (shr != 0) {
-            p = p >> shr;
+            ab = ab >> shr;
         }
 
-        return p;
-    } else {
-        return CodeGen_Posix::mulhi_shr(a, b, shr);
+        return ab;
     }
+    return CodeGen_Posix::mulhi_shr(a, b, shr);
 }
 
 Expr CodeGen_Hexagon::sorted_avg(Expr a, Expr b) {
