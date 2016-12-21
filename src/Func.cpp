@@ -595,12 +595,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     // Check whether the operator is associative and determine the operator and
     // its identity for each value in the definition if it is a Tuple
-    auto t1 = std::chrono::high_resolution_clock::now();
     const auto &assoc_result = prove_associativity(func_name, args, values);
-    auto t2 = std::chrono::high_resolution_clock::now();
-    double dt = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1e6;
-    //std::cout << "Prove associativity takes: " << dt * 1e3 << "ms\n";
-    std::cout << dt * 1e3 << "\n";
 
     user_assert(assoc_result.associative())
         << "Failed to call rfactor() on " << stage_name
