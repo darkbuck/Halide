@@ -101,6 +101,8 @@ set (RUNTIME_LL
   arm_no_neon
   hvx_64
   hvx_128
+  hvx_v62
+  hvx_dlbuf
   mips
   posix_math
   ptx_dev

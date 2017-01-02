@@ -213,7 +213,7 @@ public:
     TemporaryFile(const std::string &prefix, const std::string &suffix)
         : temp_path(file_make_temp(prefix, suffix)) {}
     const std::string &pathname() const { return temp_path; }
-    ~TemporaryFile() { file_unlink(temp_path); }
+    ~TemporaryFile() { } //  file_unlink(temp_path); }
 private:
     const std::string temp_path;
     TemporaryFile(const TemporaryFile &) = delete;

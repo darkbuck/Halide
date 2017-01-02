@@ -10,6 +10,9 @@
 #include "log.h"
 #include "elf.h"
 
+bool use_dlbuf = false;
+bool use_dlopen = false;
+
 typedef halide_hexagon_remote_handle_t handle_t;
 typedef halide_hexagon_remote_buffer buffer;
 
@@ -232,21 +235,79 @@ typedef int (*set_runtime_t)(halide_malloc_t user_malloc,
                              void *(*)(const char *),
                              void *(*)(void *, const char *));
 
-int initialize_kernels(const unsigned char *code, int codeLen,
-                       handle_t *module_ptr) {
-    elf_t *lib = obj_dlopen_mem(code, codeLen);
-    if (!lib) {
-        halide_print(NULL, "dlopen_mem failed\n");
-        return -1;
+extern "C" int write(int fd, const char* data, int size);
+
+__attribute__((weak))
+ void* dlopenbuf(const char*filename, const char* data, int size, int perms) {
+    int so_fd = open(filename, O_RDWR | O_TRUNC, 00775);
+    if (so_fd == -1) {
+        halide_print(NULL, "Failed to open shared object file\n");
+        return NULL;
     }
 
+    ssize_t written = write(so_fd, data, size);
+    close(so_fd);
+    if (written < (ssize_t)size) {
+        halide_print(NULL, "Failed to write shared object file\n");
+        return NULL;
+    }
+    return dlopen(filename, perms);
+}
+
+static void dllib_init() {
+    // The simulator needs this call to enable dlopen to work...
+    const char *builtin[] = {"libgcc.so", "libc.so", "libstdc++.so"};
+    dlinit(3, const_cast<char**>(builtin));
+}
+
+int initialize_kernels(const unsigned char *code, int codeLen,
+                       handle_t *module_ptr) {
+
+    // Keep this false, even for dlbuf usage, as we do not yet have api for dlopenbuf from standalone.
+    void *lib = NULL;
+    elf_t *elib = NULL;
+    if (use_dlbuf) {
+        dllib_init();
+        halide_print(NULL, "dlopenbuf started\n");
+        lib = dlopenbuf( "libhalide_hexagon_host_dlbuf.so", (const char*)code, codeLen, RTLD_LOCAL | RTLD_LAZY);
+        if (!lib) {
+            halide_print(NULL, "dlopenbuf failed");
+            return -1;
+        }
+    } else if (use_dlopen) {
+        dllib_init();
+        halide_print(NULL, "dlopen started\n");
+        const char *filename = (const char *) code;
+        //lib = dlopen(filename, RTLD_LOCAL | RTLD_LAZY);
+        lib = halide_load_library(filename);
+        if (!lib) {
+            halide_print(NULL, dlerror());
+            halide_print(NULL, "\ndlopen failed\n");
+            halide_print(NULL, filename);
+            halide_print(NULL, "\n");
+            return -1;
+        }
+    } else {
+        elib = obj_dlopen_mem(code, codeLen);
+        if (!elib) {
+            halide_print(NULL, "dlopen_mem failed\n");
+            return -1;
+        }
+    }
     // Initialize the runtime. The Hexagon runtime can't call any
     // system functions (because we can't link them), so we put all
     // the implementations that need to do so here, and pass poiners
     // to them in here.
-    set_runtime_t set_runtime = (set_runtime_t)obj_dlsym(lib, "halide_noos_set_runtime");
+    set_runtime_t set_runtime;
+    if (use_dlbuf || use_dlopen)
+        set_runtime = (set_runtime_t)dlsym(lib, "halide_noos_set_runtime");
+    else
+        set_runtime = (set_runtime_t)obj_dlsym(elib, "halide_noos_set_runtime");
     if (!set_runtime) {
-        obj_dlclose(lib);
+        if (use_dlbuf || use_dlopen)
+            dlclose(lib);
+        else
+            obj_dlclose(elib);
         halide_print(NULL, "halide_noos_set_runtime not found in shared object\n");
         return -1;
     }
@@ -261,17 +322,26 @@ int initialize_kernels(const unsigned char *code, int codeLen,
                              halide_load_library,
                              halide_get_library_symbol);
     if (result != 0) {
-        obj_dlclose(lib);
+        if (use_dlbuf || use_dlopen)
+            dlclose(lib);
+        else
+            obj_dlclose(elib);
         halide_print(NULL, "set_runtime failed\n");
         return result;
     }
-    *module_ptr = reinterpret_cast<handle_t>(lib);
+    if (use_dlbuf || use_dlopen)
+        *module_ptr = reinterpret_cast<handle_t>(lib);
+    else
+        *module_ptr = reinterpret_cast<handle_t>(elib);
 
     return 0;
 }
 
 handle_t get_symbol(handle_t module_ptr, const char* name, int nameLen) {
-    return reinterpret_cast<handle_t>(obj_dlsym(reinterpret_cast<elf_t*>(module_ptr), name));
+    if (use_dlbuf || use_dlopen)
+        return reinterpret_cast<handle_t>(dlsym(reinterpret_cast<elf_t*>(module_ptr), name));
+    else
+        return reinterpret_cast<handle_t>(obj_dlsym(reinterpret_cast<elf_t*>(module_ptr), name));
 }
 
 int run(handle_t module_ptr, handle_t function,
@@ -357,6 +427,14 @@ void set_rpc_return(int value) {
 }
 
 int main(int argc, const char **argv) {
+#if 0
+    char libgcc[] = "libgcc.so";
+    char libc[] = "libc.so";
+    char libstdcpp[] = "libstdc++.so";
+    char *builtin[] = {libgcc, libc, libstdcpp};
+    dlinit(3, builtin);
+#endif
+
     while(true) {
         switch (rpc_call) {
         case Message::None:

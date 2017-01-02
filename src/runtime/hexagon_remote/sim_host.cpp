@@ -103,6 +103,7 @@ int init_sim() {
         printf("HexagonWrapper::LoadExecutableBinary failed: %d\n", status);
         return -1;
     }
+printf("Done with init_sim\n");
     return 0;
 }
 
@@ -197,7 +198,6 @@ int send_message(int msg, const std::vector<int> &arguments) {
         printf("HexagonWrapper::ReadSymbolValue(rpc_ret) failed: %d\n", status);
         return -1;
     }
-
     // Get the remote address of the current func. There's a remote
     // pointer to it, so we need to walk through a few levels of
     // indirection.
@@ -311,7 +311,6 @@ int halide_hexagon_remote_initialize_kernels(const unsigned char *code, int code
                                              handle_t *module_ptr) {
     int ret = init_sim();
     if (ret != 0) return -1;
-
     // Copy the pointer arguments to the simulator.
     remote_buffer remote_code(code, codeLen);
     remote_buffer remote_module_ptr(module_ptr, 4);

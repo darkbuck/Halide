@@ -93,7 +93,7 @@ template <typename T>
 __attribute__((always_inline)) void get_symbol(void *user_context, const char* name, T &sym, bool required = true) {
     debug(user_context) << "    halide_get_library_symbol('" << name << "') -> \n";
     sym = (T)halide_hexagon_host_get_symbol(user_context, name);
-    debug(user_context) << "        " << (void *)sym << "\n";
+    debug(user_context) << "        " <<  (void *)sym << "\n";
     if (!sym && required) {
         error(user_context) << "Required Hexagon runtime symbol '" << name << "' not found.\n";
     }
@@ -160,21 +160,63 @@ using namespace Halide::Runtime::Internal::Hexagon;
 
 extern "C" {
 
+namespace {
+
+#define O_TRUNC 00001000
+#define O_CREAT 00000100
+#define O_EXCL  00000200
+// This function writes the given data to a shared object file, returning the filename.
+WEAK int write_shared_object(void *user_context, const uint8_t *data, size_t size,
+                             char *filename, size_t filename_size) {
+    int result = halide_create_temp_file(user_context, "halide_kernels_", ".so", filename, filename_size);
+    if (result != 0) {
+        error(user_context) << "Unable to create temporary shared object file\n" ;
+        return result;
+    }
+    int so_fd = open(filename, O_RDWR | O_TRUNC, 00775);
+    if (so_fd == -1) {
+        error(user_context) << "Failed to open shared object file " << filename << "\n";
+        return halide_error_code_internal_error;
+    }
+    extern int chmod(const char *path, int mode);
+    int res = chmod(filename, 0775);
+    if (res == -1) {
+        error(user_context) << "Failed to chmod " << filename << "\n";
+        return halide_error_code_internal_error;
+    }
+
+    ssize_t written = write(so_fd, data, size);
+    close(so_fd);
+    if (written < (ssize_t)size) {
+        error(user_context) << "Failed to write shared object file " << filename << "\n";
+        return halide_error_code_internal_error;
+    }
+
+    debug(user_context) << "    Wrote temporary shared object '" << filename << "'\n";
+    return 0;
+}
+
+}  // namespace
+
 WEAK bool halide_is_hexagon_available(void *user_context) {
     int result = init_hexagon_runtime(user_context);
     return result == 0;
 }
 
 WEAK int halide_hexagon_initialize_kernels(void *user_context, void **state_ptr,
-                                           const uint8_t *code, uint64_t code_size) {
+                                           const uint8_t *code, uint64_t code_size
+) {
     int result = init_hexagon_runtime(user_context);
     if (result != 0) return result;
-
+bool use_dlbuf = false;
+bool use_dlopen = false;
     debug(user_context) << "Hexagon: halide_hexagon_initialize_kernels (user_context: " << user_context
                         << ", state_ptr: " << state_ptr
                         << ", *state_ptr: " << *state_ptr
                         << ", code: " << code
-                        << ", code_size: " << (int)code_size << ")\n";
+                        << ", code_size: " << (int)code_size
+                        << ", use_dlbuf: " << use_dlbuf
+                        << ", use_dlopen: " << use_dlopen << ")\n";
     halide_assert(user_context, state_ptr != NULL);
 
     #ifdef DEBUG_RUNTIME
@@ -202,9 +244,31 @@ WEAK int halide_hexagon_initialize_kernels(void *user_context, void **state_ptr,
 
     // Create the module itself if necessary.
     if (!(*state)->module) {
-        debug(user_context) << "    halide_remote_initialize_kernels -> ";
         halide_hexagon_handle_t module = 0;
-        result = remote_initialize_kernels(code, code_size, &module);
+        if (use_dlbuf) {
+            debug(user_context) << "    dlbuf halide_remote_initialize_kernels -> \n";
+            result = remote_initialize_kernels(code, code_size, &module);
+        } else if (use_dlopen) {
+            char filename[260];
+            result = write_shared_object(user_context, code, code_size, filename, sizeof(filename));
+            if (result != 0) {
+                return result;
+            }
+            debug(user_context) << "    dlopen halide_remote_initialize_kernels -> \n";
+            result = remote_initialize_kernels((uint8_t*)filename, strlen(filename) + 1, &module);
+            debug(user_context) << " After remote_initialize_kernels \n";
+            // Unfortunately, dlopen on the Hexagon side doesn't keep the
+            // shared object alive in the file system. To work around
+            // this, we open the shared object, then remove the file. The
+            // file will still exist until our process exits, at which
+            // time the file handle will be closed, and then the file will
+            // be removed from the file system.
+            open(filename, O_RDONLY, 0);
+//          remove(filename);
+        } else {
+            debug(user_context) << "    halide_remote_initialize_kernels -> \n";
+            result = remote_initialize_kernels(code, code_size, &module);
+        }
         poll_log(user_context);
         if (result == 0) {
             debug(user_context) << "        " << module << "\n";

@@ -16,11 +16,18 @@ extern "C" {
 #include "pipeline_context.h"
 #include "log.h"
 
+bool use_dlbuf = false;
+bool use_dlopen = false;
+
 const int stack_alignment = 128;
 const int stack_size = 1024 * 1024;
 
 typedef halide_hexagon_remote_handle_t handle_t;
 typedef halide_hexagon_remote_buffer buffer;
+
+void *sim_halide_load_library(const char *name) {
+    return dlopen(name, RTLD_LOCAL|RTLD_LAZY);
+}
 
 extern "C" {
 
@@ -106,19 +113,49 @@ PipelineContext run_context(stack_alignment, stack_size);
 
 int halide_hexagon_remote_initialize_kernels(const unsigned char *code, int codeLen,
                                              handle_t *module_ptr) {
-    elf_t *lib = obj_dlopen_mem(code, codeLen);
-    if (!lib) {
-        log_printf("dlopen failed");
-        return -1;
-    }
+    log_printf("halide_hexagon_remote_initialize_kernels ->\n");
+    void *lib = NULL;
+    elf_t *elib = NULL;
+    if (use_dlbuf) {
+        log_printf("dlopenbuf started\n");
+        lib = dlopenbuf( "libhalide_hexagon_host_dlbuf.so", (const char*)code, codeLen, RTLD_LOCAL | RTLD_LAZY);
+        if (!lib) {
+            log_printf("dlopenbuf failed");
+            return -1;
+        }
+        log_printf("dlopenbuf succeeded (%d)\n", lib);
+    } else if (use_dlopen) {
+        log_printf("dlopen started\n");
+        const char *filename = (const char *)code;
+        //lib = dlopen(filename, RTLD_LOCAL | RTLD_LAZY);
+        lib = sim_halide_load_library(filename);
+        if (!lib) {
+            log_printf("dlopen .so failed");
+            return -1;
+        }
 
+    } else {
+        elib = obj_dlopen_mem(code, codeLen);
+        if (!elib) {
+            log_printf("dlopen obj failed");
+            return -1;
+        }
+    }
     // Initialize the runtime. The Hexagon runtime can't call any
     // system functions (because we can't link them), so we put all
     // the implementations that need to do so here, and pass poiners
     // to them in here.
-    set_runtime_t set_runtime = (set_runtime_t)obj_dlsym(lib, "halide_noos_set_runtime");
+    set_runtime_t set_runtime;
+    if (use_dlbuf || use_dlopen)
+        set_runtime = (set_runtime_t)dlsym(lib, "halide_noos_set_runtime");
+    else
+        set_runtime = (set_runtime_t)obj_dlsym(elib, "halide_noos_set_runtime");
     if (!set_runtime) {
-        obj_dlclose(lib);
+        if (use_dlbuf || use_dlopen)
+            dlclose(lib);
+        else
+            obj_dlclose(elib);
+
         log_printf("halide_noos_set_runtime not found in shared object\n");
         return -1;
     }
@@ -133,17 +170,26 @@ int halide_hexagon_remote_initialize_kernels(const unsigned char *code, int code
                              halide_load_library,
                              halide_get_library_symbol);
     if (result != 0) {
-        obj_dlclose(lib);
+        if (use_dlbuf || use_dlopen)
+            dlclose(lib);
+        else
+            obj_dlclose(elib);
         log_printf("set_runtime failed (%d)\n", result);
         return result;
     }
-    *module_ptr = reinterpret_cast<handle_t>(lib);
+    if (use_dlbuf || use_dlopen)
+        *module_ptr = reinterpret_cast<handle_t>(lib);
+    else
+        *module_ptr = reinterpret_cast<handle_t>(elib);
 
     return 0;
 }
 
 handle_t halide_hexagon_remote_get_symbol(handle_t module_ptr, const char* name, int nameLen) {
-    return reinterpret_cast<handle_t>(obj_dlsym(reinterpret_cast<elf_t*>(module_ptr), name));
+    if (use_dlbuf || use_dlopen)
+        return reinterpret_cast<handle_t>(dlsym(reinterpret_cast<elf_t*>(module_ptr), name));
+    else
+        return reinterpret_cast<handle_t>(obj_dlsym(reinterpret_cast<elf_t*>(module_ptr), name));
 }
 
 volatile int power_ref_count = 0;
@@ -320,7 +366,10 @@ int halide_hexagon_remote_power_hvx_off() {
 
 int halide_hexagon_remote_get_symbol_v2(handle_t module_ptr, const char* name, int nameLen,
                                         handle_t *sym_ptr) {
-    *sym_ptr = reinterpret_cast<handle_t>(obj_dlsym(reinterpret_cast<elf_t*>(module_ptr), name));
+    if (use_dlbuf || use_dlopen)
+        *sym_ptr = reinterpret_cast<handle_t>(dlsym(reinterpret_cast<elf_t*>(module_ptr), name));
+    else
+        *sym_ptr = reinterpret_cast<handle_t>(obj_dlsym(reinterpret_cast<elf_t*>(module_ptr), name));
     return *sym_ptr != 0 ? 0 : -1;
 }
 

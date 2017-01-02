@@ -30,10 +30,10 @@ pipeline_cpu-%.o: pipeline
 	HL_TARGET=$* ./pipeline pipeline_cpu-$* pipeline_cpu
 
 pipeline_hvx64-%.o: pipeline
-	HL_TARGET=$*-hvx_64 ./pipeline pipeline_hvx64-$* pipeline_hvx64
+	HL_TARGET=$*-hvx_64-debug ./pipeline pipeline_hvx64-$* pipeline_hvx64
 
 pipeline_hvx128-%.o: pipeline
-	HL_TARGET=$*-hvx_128 ./pipeline pipeline_hvx128-$* pipeline_hvx128
+	HL_TARGET=$*-hvx_128-debug ./pipeline pipeline_hvx128-$* pipeline_hvx128
 
 process-%: process.cpp pipeline_cpu-%.o pipeline_hvx64-%.o pipeline_hvx128-%.o
 	$(CXX-$*) $(CXXFLAGS) $(CXXFLAGS-$*) -Wall -O3 process.cpp pipeline_cpu-$*.o pipeline_hvx64-$*.o pipeline_hvx128-$*.o -o process-$* $(LDFLAGS-$*)
@@ -49,6 +49,7 @@ run-%-android: process-%-android
 run-host: process-host
 	./process-host cpu 10
 	./process-host hvx64 1
+	exit
 	./process-host hvx128 1
 
 clean:
