@@ -11,7 +11,7 @@
 #include "elf.h"
 
 bool use_dlbuf = false;
-bool use_dlopen = false;
+bool use_dlopen = true;
 
 typedef halide_hexagon_remote_handle_t handle_t;
 typedef halide_hexagon_remote_buffer buffer;

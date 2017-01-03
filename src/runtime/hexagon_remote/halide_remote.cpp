@@ -17,7 +17,7 @@ extern "C" {
 #include "log.h"
 
 bool use_dlbuf = false;
-bool use_dlopen = false;
+bool use_dlopen = true;
 
 const int stack_alignment = 128;
 const int stack_size = 1024 * 1024;

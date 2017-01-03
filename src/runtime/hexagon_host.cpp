@@ -209,7 +209,7 @@ WEAK int halide_hexagon_initialize_kernels(void *user_context, void **state_ptr,
     int result = init_hexagon_runtime(user_context);
     if (result != 0) return result;
 bool use_dlbuf = false;
-bool use_dlopen = false;
+bool use_dlopen = true;
     debug(user_context) << "Hexagon: halide_hexagon_initialize_kernels (user_context: " << user_context
                         << ", state_ptr: " << state_ptr
                         << ", *state_ptr: " << *state_ptr
