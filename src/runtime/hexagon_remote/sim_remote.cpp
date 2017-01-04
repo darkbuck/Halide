@@ -235,22 +235,21 @@ typedef int (*set_runtime_t)(halide_malloc_t user_malloc,
                              void *(*)(const char *),
                              void *(*)(void *, const char *));
 
-extern "C" int write(int fd, const char* data, int size);
-
+// This function should be deleted once the hexagon tools impliment the dlopenbuf api.
 __attribute__((weak))
  void* dlopenbuf(const char*filename, const char* data, int size, int perms) {
-    int so_fd = open(filename, O_RDWR | O_TRUNC, 00775);
-    if (so_fd == -1) {
-        halide_print(NULL, "Failed to open shared object file\n");
+    log_printf("dlopenbuf started %s\n", filename);
+    FILE *f = fopen(filename, "w+");
+    if (!f) {
+        log_printf("Failed to open shared object file %s\n", filename);
         return NULL;
     }
-
-    ssize_t written = write(so_fd, data, size);
-    close(so_fd);
+    ssize_t written = fwrite(data, 1, size, f);
     if (written < (ssize_t)size) {
         halide_print(NULL, "Failed to write shared object file\n");
         return NULL;
     }
+    fclose(f);
     return dlopen(filename, perms);
 }
 
