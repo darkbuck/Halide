@@ -16,7 +16,7 @@ extern "C" {
 #include "pipeline_context.h"
 #include "log.h"
 
-bool use_dlbuf = false;
+bool use_dlbuf = true;
 bool use_dlopen = true;
 
 const int stack_alignment = 128;
