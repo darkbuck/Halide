@@ -1657,6 +1657,10 @@ Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy
     // We have to mark the fuse level on the "original" definition (the one
     // without the specialization) to ensure there is no competing compute_with.
     Definition &original_def = (stage == 0) ? func.definition() : func.update(stage - 1);
+    user_assert(original_def.specializations().empty())
+            << "Func " << name() << " is scheduled to be computed with "
+            << loop_level.func().name() << ", so it must not have any specializations.\n";
+
     FuseLoopLevel &fuse_level = original_def.schedule().fuse_level();
     if (!fuse_level.level.is_inline()) {
         user_warning << name() << " already has a compute_with at " << fuse_level.level.to_string()
@@ -1683,7 +1687,7 @@ Stage &Stage::compute_with(LoopLevel loop_level, const vector<pair<VarOrRVar, Al
 }
 
 Stage &Stage::compute_with(LoopLevel loop_level, AlignStrategy align) {
-    vector<pair<VarOrRVar, AlignStrategy>> align_str = {{VarOrRVar(loop_level.var().name()), align}};
+    map<string, AlignStrategy> align_str = {{loop_level.var().name(), align}};
     return compute_with(loop_level, align_str);
 }
 
