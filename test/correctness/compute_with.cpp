@@ -726,8 +726,7 @@ int multiple_outputs_on_gpu_test() {
         f.compute_root().gpu_tile(x, y, 8, 8);
         g.compute_root().gpu_tile(x, y, 8, 8);
 
-        //TODO(psuriana): uncomment this once the refactor_gpu branch lands
-        //g.compute_with(f, Var::gpu_blocks());
+        g.compute_with(f, Var::gpu_blocks());
 
         Realization r(f_im, g_im);
         Pipeline({f, g}).realize(r);

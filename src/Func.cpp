@@ -1715,7 +1715,7 @@ Stage &Stage::prefetch(VarOrRVar var, Expr offset) {
 Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy> &align) {
     user_assert(!loop_level.is_inline() && !loop_level.is_root())
         << "Undefined loop level to compute with\n";
-    user_assert((loop_level.func().name() != func.name()) || (loop_level.stage() == (int)stage-1))
+    user_assert((loop_level.func() != func.name()) || (loop_level.stage() == (int)stage-1))
         << "Cannot schedule " << name() << " to be computed with " << loop_level.to_string()
         << ". Can only schedule an update to be computed with its immediate previous stage\n";
 
@@ -1724,7 +1724,7 @@ Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy
     Definition &original_def = (stage == 0) ? func.definition() : func.update(stage - 1);
     user_assert(original_def.specializations().empty())
             << "Func " << name() << " is scheduled to be computed with "
-            << loop_level.func().name() << ", so it must not have any specializations.\n";
+            << loop_level.func() << ", so it must not have any specializations.\n";
 
     FuseLoopLevel &fuse_level = original_def.schedule().fuse_level();
     if (!fuse_level.level.is_inline()) {
@@ -1733,13 +1733,6 @@ Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy
     }
     fuse_level.level = loop_level;
     fuse_level.align = align;
-
-    FusedPair pair(loop_level.func().name(), loop_level.stage(), func.name(), stage, loop_level.var().name());
-    if (loop_level.stage() == 0) {
-        loop_level.func().definition().schedule().fused_pairs().push_back(pair);
-    } else {
-        loop_level.func().update(loop_level.stage()-1).schedule().fused_pairs().push_back(pair);
-    }
     return *this;
 }
 
@@ -2098,19 +2091,19 @@ Func &Func::gpu(VarOrRVar bx, VarOrRVar by, VarOrRVar bz, VarOrRVar tx, VarOrRVa
 
 Func &Func::gpu_tile(VarOrRVar x, VarOrRVar bx, Var tx, int x_size, TailStrategy tail, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_tile(x, bx, tx, x_size, tail, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_tile(x, bx, tx, x_size, tail, device_api);
     return *this;
 }
 
 Func &Func::gpu_tile(VarOrRVar x, VarOrRVar bx, RVar tx, int x_size, TailStrategy tail, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_tile(x, bx, tx, x_size, tail, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_tile(x, bx, tx, x_size, tail, device_api);
     return *this;
 }
 
 Func &Func::gpu_tile(VarOrRVar x, VarOrRVar tx, int x_size, TailStrategy tail, DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims()).gpu_tile(x, tx, x_size, tail, device_api);
+    Stage(func, func.definition(), 0, args()).gpu_tile(x, tx, x_size, tail, device_api);
     return *this;
 }
 
@@ -2121,7 +2114,7 @@ Func &Func::gpu_tile(VarOrRVar x, VarOrRVar y,
                      TailStrategy tail,
                      DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims())
+    Stage(func, func.definition(), 0, args())
         .gpu_tile(x, y, bx, by, tx, ty, x_size, y_size, tail, device_api);
     return *this;
 }
@@ -2132,7 +2125,7 @@ Func &Func::gpu_tile(VarOrRVar x, VarOrRVar y,
                      TailStrategy tail,
                      DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims())
+    Stage(func, func.definition(), 0, args())
         .gpu_tile(x, y, tx, ty, x_size, y_size, tail, device_api);
     return *this;
 }
@@ -2143,7 +2136,7 @@ Func &Func::gpu_tile(VarOrRVar x, VarOrRVar y,
                      TailStrategy tail,
                      DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims())
+    Stage(func, func.definition(), 0, args())
         .gpu_tile(x, y, tx, ty, x_size, y_size, tail, device_api);
     return *this;
 }
@@ -2155,7 +2148,7 @@ Func &Func::gpu_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
                      TailStrategy tail,
                      DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims())
+    Stage(func, func.definition(), 0, args())
         .gpu_tile(x, y, z, bx, by, bz, tx, ty, tz, x_size, y_size, z_size, tail, device_api);
     return *this;
 }
@@ -2166,7 +2159,7 @@ Func &Func::gpu_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
                      TailStrategy tail,
                      DeviceAPI device_api) {
     invalidate_cache();
-    Stage(func.definition(), name(), args(), func.schedule().storage_dims())
+    Stage(func, func.definition(), 0, args())
         .gpu_tile(x, y, z, tx, ty, tz, x_size, y_size, z_size, tail, device_api);
     return *this;
 }

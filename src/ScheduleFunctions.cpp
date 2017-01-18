@@ -1183,7 +1183,7 @@ private:
 
         size_t start_fuse = dims.size();
         if (!fuse_level.is_inline() && !fuse_level.is_root()) {
-            if (!skip.find(fuse_level.func().name())->second) {
+            if (!skip.find(fuse_level.func())->second) {
                 {
                     const auto iter = std::find_if(dims.begin(), dims.end(),
                         [&fuse_level](const Dim& d) { return var_name_match(d.var, fuse_level.var().name()); });
@@ -1207,7 +1207,7 @@ private:
                         continue;
                     }
 
-                    string parent_prefix = fuse_level.func().name() + ".s" + std::to_string(fuse_level.stage()) + ".";
+                    string parent_prefix = fuse_level.func() + ".s" + std::to_string(fuse_level.stage()) + ".";
 
                     if (iter->second == AlignStrategy::AlignStart) {
                         const auto &it1 = bounds.find(parent_prefix + var + ".loop_min");
@@ -1264,7 +1264,7 @@ private:
 
         size_t start_fuse = dims.size();
         if (!fuse_level.is_inline() && !fuse_level.is_root()) {
-            if (!skip.find(fuse_level.func().name())->second) {
+            if (!skip.find(fuse_level.func())->second) {
                 const auto iter = std::find_if(dims.begin(), dims.end(),
                     [&fuse_level](const Dim& d) { return var_name_match(d.var, fuse_level.var().name()); });
                 internal_assert(iter != dims.end());
