@@ -7,30 +7,21 @@
 
 namespace Halide {
 
-LoopLevel::LoopLevel(Internal::IntrusivePtr<Internal::FunctionContents> f,
+LoopLevel::LoopLevel(const std::string &func_name,
                      const std::string &var_name,
                      bool is_rvar,
                      int stage)
-    : function_contents(f), stage_index(stage), var_name(var_name), is_rvar(is_rvar) {}
-LoopLevel::LoopLevel(Internal::Function f, VarOrRVar v, int stage) : LoopLevel(f.get_contents(), v.name(), v.is_rvar, stage) {}
-LoopLevel::LoopLevel(Func f, VarOrRVar v, int stage) : LoopLevel(f.function().get_contents(), v.name(), v.is_rvar, stage) {}
+    : func_name(func_name), stage_index(stage), var_name(var_name), is_rvar(is_rvar) {}
+LoopLevel::LoopLevel(Internal::Function f, VarOrRVar v, int stage) : LoopLevel(f.name(), v.name(), v.is_rvar, stage) {}
+LoopLevel::LoopLevel(Func f, VarOrRVar v, int stage) : LoopLevel(f.function().name(), v.name(), v.is_rvar, stage) {}
 
-std::string LoopLevel::func_name() const {
-    if (function_contents.defined()) {
-        return Internal::Function(function_contents).name();
-    }
-    return "";
-}
-
-Internal::Function LoopLevel::func() const {
+std::string LoopLevel::func() const {
     internal_assert(!is_inline() && !is_root());
-    internal_assert(function_contents.defined());
-    return Internal::Function(function_contents);
+    return func_name;
 }
 
 int LoopLevel::stage() const {
     internal_assert(stage_index >= 0);
-    internal_assert(function_contents.defined());
     return stage_index;
 }
 
@@ -45,7 +36,7 @@ bool LoopLevel::is_inline() const {
 
 /*static*/
 LoopLevel LoopLevel::root() {
-    return LoopLevel(nullptr, "__root", false, -1);
+    return LoopLevel("", "__root", false, -1);
 }
 
 bool LoopLevel::is_root() const {
@@ -54,26 +45,24 @@ bool LoopLevel::is_root() const {
 
 std::string LoopLevel::to_string() const {
     if (stage_index == -1) {
-        return func_name() + "." + var_name;
+        return func_name + "." + var_name;
     } else {
-        return func_name() + ".s" + std::to_string(stage_index) + "." + var_name;
+        return func_name + ".s" + std::to_string(stage_index) + "." + var_name;
     }
 }
 
 bool LoopLevel::match(const std::string &loop) const {
     if (stage_index == -1) {
-        return Internal::starts_with(loop, func_name() + ".") &&
+        return Internal::starts_with(loop, func_name + ".") &&
                Internal::ends_with(loop, "." + var_name);
     } else {
-        return Internal::starts_with(loop, func_name() + ".s" + std::to_string(stage_index)) &&
+        return Internal::starts_with(loop, func_name + ".s" + std::to_string(stage_index)) &&
                Internal::ends_with(loop, "." + var_name);
     }
 }
 
 bool LoopLevel::match(const LoopLevel &other) const {
-    // Must compare by name, not by pointer, since in() can make copies
-    // that we need to consider equivalent
-    return (func_name() == other.func_name() &&
+    return (func_name == other.func_name &&
             (var_name == other.var_name ||
              Internal::ends_with(var_name, "." + other.var_name) ||
              Internal::ends_with(other.var_name, "." + var_name)) &&
@@ -83,7 +72,7 @@ bool LoopLevel::match(const LoopLevel &other) const {
 bool LoopLevel::operator==(const LoopLevel &other) const {
     // Must compare by name, not by pointer, since in() can make copies
     // that we need to consider equivalent
-    return (func_name() == other.func_name()) && (stage_index == other.stage_index) &&
+    return (func_name == other.func_name) && (stage_index == other.stage_index) &&
            (var_name == other.var_name);
 }
 

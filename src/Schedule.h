@@ -92,8 +92,8 @@ enum class AlignStrategy {
  * stage (initial definition or updates).
  */
 class LoopLevel {
-    // Note: func_ is nullptr for inline or root.
-    Internal::IntrusivePtr<Internal::FunctionContents> function_contents;
+    // Note: func_name is "" for inline or root.
+    std::string func_name;
     // If set to -1, this loop level does not refer to a particular stage of the
     // function. 0 refers to initial stage, 1 refers to the 1st update stage, etc.
     int stage_index;
@@ -102,9 +102,8 @@ class LoopLevel {
     std::string var_name;
     bool is_rvar;
 
-    EXPORT LoopLevel(Internal::IntrusivePtr<Internal::FunctionContents> f,
-                     const std::string &var_name, bool is_rvar, int stage);
-    EXPORT std::string func_name() const;
+    EXPORT LoopLevel(const std::string &func_name, const std::string &var_name,
+                     bool is_rvar, int stage);
 
 public:
     /** Return the function stage associated with this loop level.
@@ -120,10 +119,10 @@ public:
     /** Construct an empty LoopLevel, which is interpreted as
      * 'inline'. This is a special LoopLevel value that implies
      * that a function should be inlined away */
-    LoopLevel() : function_contents(nullptr), stage_index(-1), var_name(""), is_rvar(false) {}
+    LoopLevel() : func_name(""), stage_index(-1), var_name(""), is_rvar(false) {}
 
-    /** Return the Function. Asserts if the LoopLevel is_root() or is_inline(). */
-    EXPORT Internal::Function func() const;
+    /** Return the Func name. Asserts if the LoopLevel is_root() or is_inline(). */
+    EXPORT std::string func() const;
 
     /** Return the VarOrRVar. Asserts if the LoopLevel is_root() or is_inline(). */
     EXPORT VarOrRVar var() const;
@@ -206,6 +205,11 @@ struct Dim {
 
     bool is_pure() const {return (dim_type == PureVar) || (dim_type == PureRVar);}
     bool is_rvar() const {return (dim_type == PureRVar) || (dim_type == ImpureRVar);}
+    bool is_parallel() const {
+        return (for_type == ForType::Parallel ||
+                for_type == ForType::GPUBlock ||
+                for_type == ForType::GPUThread);
+    }
 };
 
 struct Bound {

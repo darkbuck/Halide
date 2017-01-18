@@ -729,7 +729,7 @@ class RenormalizeGPULoops : public IRMutator {
             return;
         }
 
-        if (ends_with(op->name, Var::gpu_threads().name())) {
+        if (ends_with(op->name, "__thread_id_x")) {
             in_thread_loop = true;
             IRMutator::visit(op);
             in_thread_loop = false;
