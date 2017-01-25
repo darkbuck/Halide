@@ -116,14 +116,15 @@ int multi_split_rfactor_test(bool compile_module) {
     g(r.x, r.y) += f(r.x, r.y);
     g.update(0).reorder({r.y, r.x});
 
-    RVar rxi("rxi"), rxo("rxo"), ryi("ryi"), ryo("ryo");
-    Var u("u"), v("v");
+    RVar rxi("rxi"), rxo("rxo"), ryi("ryi"), ryo("ryo"), ryoo("ryoo"), ryoi("ryoi");
+    Var u("u"), v("v"), w("w");
 
     g.update(0).split(r.x, rxo, rxi, 2);
     Func intm1 = g.update(0).rfactor({{rxo, u}, {r.y, v}});
 
-    g.update(0).split(r.y, ryo, ryi, 2);
-    Func intm2 = g.update(0).rfactor({{rxo, u}, {ryo, v}});
+    g.update(0).split(r.y, ryo, ryi, 2, TailStrategy::GuardWithIf);
+    g.update(0).split(ryo, ryoo, ryoi, 4, TailStrategy::GuardWithIf);
+    Func intm2 = g.update(0).rfactor({{rxo, u}, {ryoo, v}, {ryoi, w}});
     intm2.compute_root();
     intm1.compute_root();
 
@@ -400,15 +401,14 @@ int histogram_rfactor_test(bool compile_module) {
             reference_hist[uint8_t(in(x, y))] += 1;
         }
     }
-    // Wrap the image in a buffer, so that we know its name.
-    BufferPtr in_buf(in);
+
 
     Func hist("hist"), g("g");
     Var x("x");
 
     RDom r(in);
     hist(x) = 0;
-    hist(clamp(cast<int>(in_buf(r.x, r.y)), 0, 255)) += 1;
+    hist(clamp(cast<int>(in(r.x, r.y)), 0, 255)) += 1;
     hist.compute_root();
 
     Var u("u");
@@ -427,7 +427,7 @@ int histogram_rfactor_test(bool compile_module) {
         CallGraphs expected = {
             {g.name(), {hist.name()}},
             {hist.name(), {intm.name(), hist.name()}},
-            {intm.name(), {in_buf.name(), intm.name()}},
+            {intm.name(), {in.name(), intm.name()}},
 
         };
         if (check_call_graphs(checker.calls, expected) != 0) {
@@ -782,6 +782,39 @@ int subtraction_rfactor_test() {
     return 0;
 }
 
+int allocation_bound_test_trace(void *user_context, const halide_trace_event_t *e) {
+    // The schedule implies that f will be stored from 0 to 1
+    if (e->event == 2 && std::string(e->func) == "f") {
+        if (e->coordinates[1] != 2) {
+            printf("Bounds on realization of f were supposed to be [0, 2]\n"
+                   "Instead they are: [%d, %d]\n", e->coordinates[0], e->coordinates[1]);
+            exit(-1);
+        }
+    }
+    return 0;
+}
+
+int check_allocation_bound_test() {
+    Var x("x"), u("u");
+    Func f("f"), g("g");
+
+    RDom r(0, 31);
+    f(x) = x;
+    g(x) = 1;
+    g(r.x) += f(r.x);
+
+    RVar rxo("rxo"), rxi("rxi");
+    g.update(0).split(r.x, rxo, rxi, 2);
+    f.compute_at(g, rxo);
+    g.update(0).rfactor({{rxo, u}});
+
+    f.trace_realizations();
+    g.set_custom_trace(allocation_bound_test_trace);
+    g.realize(23);
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     printf("Running simple rfactor test\n");
     printf("    checking call graphs...\n");
@@ -896,6 +929,17 @@ int main(int argc, char **argv) {
     printf("Running subtraction rfactor test\n");
     printf("    checking output img correctness...\n");
     if (subtraction_rfactor_test() != 0) {
+        return -1;
+    }
+
+    printf("Running subtraction rfactor test\n");
+    printf("    checking output img correctness...\n");
+    if (subtraction_rfactor_test() != 0) {
+        return -1;
+    }
+
+    printf("Running check allocation bound test\n");
+    if (check_allocation_bound_test() != 0) {
         return -1;
     }
 

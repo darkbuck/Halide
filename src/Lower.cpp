@@ -11,6 +11,7 @@
 #include "Bounds.h"
 #include "BoundsInference.h"
 #include "CSE.h"
+#include "CanonicalizeGPUVars.h"
 #include "Debug.h"
 #include "DebugToFile.h"
 #include "DeepCopy.h"
@@ -45,6 +46,7 @@
 #include "SlidingWindow.h"
 #include "Simplify.h"
 #include "SimplifySpecializations.h"
+#include "SplitTuples.h"
 #include "StorageFlattening.h"
 #include "StorageFolding.h"
 #include "Substitute.h"
@@ -100,6 +102,10 @@ Stmt lower(const vector<Function> &output_funcs, const string &pipeline_name,
     debug(1) << "Creating initial loop nests...\n";
     Stmt s = schedule_functions(outputs, order, env, t, any_memoized);
     debug(2) << "Lowering after creating initial loop nests:\n" << s << '\n';
+
+    debug(1) << "Canonicalizing GPU var names...\n";
+    s = canonicalize_gpu_vars(s);
+    debug(2) << "Lowering after canonicalizing GPU var names:\n" << s << '\n';
 
     if (any_memoized) {
         debug(1) << "Injecting memoization...\n";
@@ -174,7 +180,11 @@ Stmt lower(const vector<Function> &output_funcs, const string &pipeline_name,
     s = skip_stages(s, order);
     debug(2) << "Lowering after dynamically skipping stages:\n" << s << "\n\n";
 
-    if (t.has_feature(Target::OpenGL) || t.has_feature(Target::Renderscript)) {
+    debug(1) << "Destructuring tuple-valued realizations...\n";
+    s = split_tuples(s, env);
+    debug(2) << "Lowering after destructuring tuple-valued realizations:\n" << s << "\n\n";
+
+    if (t.has_feature(Target::OpenGL)) {
         debug(1) << "Injecting image intrinsics...\n";
         s = inject_image_intrinsics(s, env);
         debug(2) << "Lowering after image intrinsics:\n" << s << "\n\n";
@@ -195,7 +205,6 @@ Stmt lower(const vector<Function> &output_funcs, const string &pipeline_name,
     if (t.has_gpu_feature() ||
         t.has_feature(Target::OpenGLCompute) ||
         t.has_feature(Target::OpenGL) ||
-        t.has_feature(Target::Renderscript) ||
         (t.arch != Target::Hexagon && (t.features_any_of({Target::HVX_64, Target::HVX_128})))) {
         debug(1) << "Selecting a GPU API for GPU loops...\n";
         s = select_gpu_api(s, t);
@@ -213,8 +222,7 @@ Stmt lower(const vector<Function> &output_funcs, const string &pipeline_name,
     }
 
     if (t.has_gpu_feature() ||
-        t.has_feature(Target::OpenGLCompute) ||
-        t.has_feature(Target::Renderscript)) {
+        t.has_feature(Target::OpenGLCompute)) {
         debug(1) << "Injecting per-block gpu synchronization...\n";
         s = fuse_gpu_thread_loops(s);
         debug(2) << "Lowering after injecting per-block gpu synchronization:\n" << s << "\n\n";
@@ -232,7 +240,7 @@ Stmt lower(const vector<Function> &output_funcs, const string &pipeline_name,
     debug(2) << "Lowering after unrolling:\n" << s << "\n\n";
 
     debug(1) << "Vectorizing...\n";
-    s = vectorize_loops(s);
+    s = vectorize_loops(s, t);
     s = simplify(s);
     debug(2) << "Lowering after vectorizing:\n" << s << "\n\n";
 
