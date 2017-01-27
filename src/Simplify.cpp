@@ -80,6 +80,11 @@ bool is_var_simple_const_comparison(Expr e, string* name) {
            is_var_relop_simple_const<NE>(e, name);
 }
 
+bool both_slice_or_both_concat(const Shuffle *a, const Shuffle *b) {
+    return ((a->is_slice() && b->is_slice()) ||
+            (a->is_concat() && b->is_concat()));
+
+}
 // Returns true iff t is a scalar integral type where overflow is undefined
 bool no_overflow_scalar_int(Type t) {
     return (t.is_scalar() && t.is_int() && t.bits() >= 32);
@@ -531,21 +536,24 @@ private:
             // In the interest of moving constants outwards so they
             // can cancel, pull the addition outside of the cast.
             expr = mutate(Cast::make(op->type, add->a) + add->b);
-        } else if (shuffle && shuffle->is_slice()) {
+        } else if (shuffle && (shuffle->is_slice() || shuffle->is_concat())) {
+            // cast(slice_vector(a, b, ..), new_type) =>
+            // slice_vector(cast(a, new_type), cast(b, new_type), ..)
+            // cast(concat_vectors(a, b), new_type) =>
+            // concat_vectors(cast(a, new_type), cast(b, new_type))
             vector<Expr> vectors;
             for (Expr v : shuffle->vectors) {
-                lanes = v.type().lanes();
+                int lanes = v.type().lanes();
                 vectors.push_back(Cast::make(op->type.with_lanes(lanes), v));
             }
             expr = mutate(Shuffle::make(vectors, shuffle->indices));
-        } else if (call &&
-                   call->is_intrinsic(Call::concat_vectors)) {
-            vector<Expr> new_exprs;
-            for (const Expr e : call->args) {
-                int lanes = e.type().lanes();
-                new_exprs.push_back(mutate(Cast::make(op->type.with_lanes(lanes), e)));
-            }
-            expr = Call::make(op->type, Call::concat_vectors, new_exprs, Call::PureIntrinsic);
+        // }  else if (shuffle && shuffle->is_concat()) { ??PDB?? REMOVE THIS.
+        //     vector<Expr> vectors;
+        //     for (const Expr v : shuffle->vectors) {
+        //         int lanes = v.type().lanes();
+        //         vectors.push_back(mutate(Cast::make(op->type.with_lanes(lanes), v)));
+        //     }
+        //     expr = mutate(Shuffle::make(vectors, shuffle->indices));
         } else if (value.same_as(op->value)) {
             expr = op;
         } else {
@@ -674,14 +682,27 @@ private:
                    call_b->is_intrinsic(Call::signed_integer_overflow)) {
             expr = b;
         } else if (shuffle_a && shuffle_b &&
-                   shuffle_a->is_slice() &&
-                   shuffle_b->is_slice()) {
+                   both_slice_or_both_concat(shuffle_a, shuffle_b)) {
+                   // (shuffle_a->is_slice() &&
+                   //  shuffle_b->is_slice()) ||
+                   // (shuffle_a->is_concat() &&
+                   //  shuffle_b->is_concat())) {
             if (a.same_as(op->a) && b.same_as(op->b)) {
-                expr = hoist_slice_vector<Add>(op);
+                expr = hoist_shuffle<Add>(op, *this);
             } else {
-                expr = hoist_slice_vector<Add>(Add::make(a, b));
+                expr = hoist_shuffle<Add>(Add::make(a, b), *this);
             }
-        } else if (shuffle_a && shuffle_a->is_slice() && is_simple_const(op->b)) {
+        // } else if (shuffle_a && shuffle_b &&
+        //            shuffle_a->is_concat() &&
+        //            shuffle_b->is_concat()) {
+        //     if (a.same_as(op->a) && b.same_as(op->b)) {
+        //         expr = hoist_shuffle<Add>(op, *this);
+        //     } else {
+        //         expr = hoist_shuffle<Add>(Add::make(a, b), *this);
+        //     }
+        } else if (shuffle_a &&
+                   (shuffle_a->is_slice() || shuffle_a->is_concat()) &&
+                   is_simple_const(op->b)) {
             internal_assert(op->type.is_vector() && broadcast_b);
             vector<Expr> vectors;
             for (Expr v : shuffle_a->vectors) {
@@ -690,16 +711,6 @@ private:
                 vectors.push_back(v + bc);
             }
             expr = mutate(Shuffle::make(vectors, shuffle_a->indices));
-        } else if (call_a && call_a->is_intrinsic(Call::concat_vectors) &&
-                   is_simple_const(op->b)) {
-            internal_assert(op->type.is_vector() && broadcast_b);
-            vector<Expr> new_exprs;
-            for (const Expr e : call_a->args) {
-                int lanes = e.type().lanes();
-                Expr bc = Broadcast::make(broadcast_b->value, lanes);
-                new_exprs.push_back(mutate(e + bc));
-            }
-            expr = Call::make(op->type, Call::concat_vectors, new_exprs, Call::PureIntrinsic);
         } else if (ramp_a &&
                    ramp_b) {
             // Ramp + Ramp
@@ -1511,14 +1522,17 @@ private:
                    call_b->is_intrinsic(Call::signed_integer_overflow)) {
             expr = b;
         } else if (shuffle_a && shuffle_b &&
-                   shuffle_a->is_slice() &&
-                   shuffle_b->is_slice()) {
+                   both_slice_or_both_concat(shuffle_a, shuffle_a)) {
+                   // shuffle_a->is_slice() &&
+                   // shuffle_b->is_slice()) {
             if (a.same_as(op->a) && b.same_as(op->b)) {
-                expr = hoist_slice_vector<Mul>(op);
+                expr = hoist_shuffle<Mul>(op, *this);
             } else {
-                expr = hoist_slice_vector<Mul>(Mul::make(a, b));
+                expr = hoist_shuffle<Mul>(Mul::make(a, b), *this);
             }
-        } else if (shuffle_a && shuffle_a->is_slice() && is_simple_const(op->b)) {
+        } else if (shuffle_a &&
+                   (shuffle_a->is_slice() || shuffle_a->is_concat()) &&
+                   is_simple_const(op->b)) {
             internal_assert(op->type.is_vector() && broadcast_b);
             vector<Expr> vectors;
             for (Expr v : shuffle_a->vectors) {
@@ -1527,16 +1541,6 @@ private:
                 vectors.push_back(v * bc);
             }
             expr = mutate(Shuffle::make(vectors, shuffle_a->indices));
-        } else if (call_a && call_a->is_intrinsic(Call::concat_vectors) &&
-                    is_simple_const(op->b)) {
-            internal_assert(op->type.is_vector() && broadcast_b);
-            vector<Expr> new_exprs;
-            for (const Expr e : call_a->args) {
-                int lanes = e.type().lanes();
-                Expr bc = Broadcast::make(broadcast_b->value, lanes);
-                new_exprs.push_back(mutate(e * bc));
-            }
-            expr = Call::make(op->type, Call::concat_vectors, new_exprs, Call::PureIntrinsic);
         } else if (broadcast_a && broadcast_b) {
             expr = Broadcast::make(mutate(broadcast_a->value * broadcast_b->value), broadcast_a->lanes);
         } else if (ramp_a && broadcast_b) {
@@ -2501,12 +2505,13 @@ private:
             // min(a, likely(a)) -> likely(a)
             expr = b;
         } else if (shuffle_a && shuffle_b &&
-                   shuffle_a->is_slice() &&
-                   shuffle_b->is_slice()) {
+                   both_slice_or_both_concat(shuffle_a, shuffle_b)) {
+                   // shuffle_a->is_slice() &&
+                   // shuffle_b->is_slice()) {
             if (a.same_as(op->a) && b.same_as(op->b)) {
-                expr = hoist_slice_vector<Min>(op);
+                expr = hoist_shuffle<Min>(op, *this);
             } else {
-                expr = hoist_slice_vector<Min>(min(a, b));
+                expr = hoist_shuffle<Min>(min(a, b), *this);
             }
         } else if (no_overflow(op->type) &&
                    sub_a &&
@@ -2863,12 +2868,13 @@ private:
             // max(a, likely(a)) -> likely(a)
             expr = b;
         } else if (shuffle_a && shuffle_b &&
-                   shuffle_a->is_slice() &&
-                   shuffle_b->is_slice()) {
+                   both_slice_or_both_concat(shuffle_a, shuffle_b)) {
+                   // shuffle_a->is_slice() &&
+                   // shuffle_b->is_slice()) {
             if (a.same_as(op->a) && b.same_as(op->b)) {
-                expr = hoist_slice_vector<Max>(op);
+                expr = hoist_shuffle<Max>(op, *this);
             } else {
-                expr = hoist_slice_vector<Max>(max(a, b));
+                expr = hoist_shuffle<Max>(max(a, b), *this);
             }
         } else if (no_overflow(op->type) &&
                    sub_a &&
@@ -4279,7 +4285,7 @@ private:
     }
 
     template <typename T>
-    Expr hoist_slice_vector(Expr e) {
+    Expr hoist_shuffle(Expr e, IRMutator &m) {
         const T *op = e.as<T>();
         internal_assert(op);
 
@@ -4287,8 +4293,8 @@ private:
         const Shuffle *shuffle_b = op->b.template as<Shuffle>();
 
         internal_assert(shuffle_a && shuffle_b &&
-                        shuffle_a->is_slice() &&
-                        shuffle_b->is_slice());
+                        (shuffle_a->is_slice() && shuffle_b->is_slice()) ||
+                        (shuffle_a->is_concat() && shuffle_b->is_concat()));
 
         if (shuffle_a->indices != shuffle_b->indices) {
             return e;
@@ -4308,7 +4314,7 @@ private:
 
         vector<Expr> new_slices;
         for (size_t i = 0; i < slices_a.size(); i++) {
-            new_slices.push_back(T::make(slices_a[i], slices_b[i]));
+            new_slices.push_back(m.mutate(T::make(slices_a[i], slices_b[i])));
         }
 
         return Shuffle::make(new_slices, shuffle_a->indices);
