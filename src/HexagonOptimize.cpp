@@ -1298,6 +1298,11 @@ class EliminateInterleaves : public IRMutator {
                 if (deinterleave_buffers.contains(*load_from)) {
                     expr = native_interleave(expr);
                 }
+            } else {
+                // We aggressively move slice_vector(concat_vector(x, y), ..)
+                // out, higher up the expression tree. So, it is possible
+                // that concat_vectors get away from loads.
+                IRMutator::visit(op);
             }
         } else {
             IRMutator::visit(op);
@@ -1493,6 +1498,23 @@ public:
     OptimizeShuffles(int lut_alignment) : lut_alignment(lut_alignment) {}
 };
 
+// class RewriteLargeInterleaves : public IRMutator {
+//     using IRMutator::visit;
+
+//     void visit(const Shuffle *op) {
+//         if (op->is_slice()) {
+//             // op has only one operand and that is a concat vector.
+//             if (op->vectors().size() == 1) {
+//                 Expr v = op->vectors[0];
+//                 const Shuffle *concat = v.as<Shuffle>();
+//                 if (concat && concat
+//             }
+//         }
+
+//     }
+
+// };
+} //namespace
 // // typedef std::pair<Expr, int> RootWeightPair;
 // // typedef std::map<Expr, int, IRDeepCompare> WeightedRoots;
 // // class ExprHeights : public IRVisitor {
@@ -1993,17 +2015,19 @@ public:
 // // };
 // // }  // namespace
 
-// // Stmt optimize_hexagon_shuffles(Stmt s, int lut_alignment) {
-// //     // Replace indirect and other complicated loads with
-// //     // dynamic_shuffle (vlut) calls.
-// //     return OptimizeShuffles(lut_alignment).mutate(s);
-// // }
+Stmt optimize_hexagon_shuffles(Stmt s, int lut_alignment) {
+    // Replace indirect and other complicated loads with
+    // dynamic_shuffle (vlut) calls.
+    return OptimizeShuffles(lut_alignment).mutate(s);
+}
 // // Stmt balance_expression_trees(Stmt s) {
 // //     s = BalanceExpressionTrees().mutate(s);
 // //     return s;
 // // }
 Stmt optimize_hexagon_instructions(Stmt s) {
+    debug(4) << "Before balance_expressions:\n" << s << "\n";
     s = balance_expression_trees(s);
+    debug(4) << "After balance_expressions:\n" << s << "\n";
 
     // Peephole optimize for Hexagon instructions. These can generate
     // interleaves and deinterleaves alongside the HVX intrinsics.
@@ -2012,6 +2036,7 @@ Stmt optimize_hexagon_instructions(Stmt s) {
     // Try to eliminate any redundant interleave/deinterleave pairs.
     s = EliminateInterleaves().mutate(s);
 
+    // s = RewriteLargeInterleaves().mutate(s);
     // There may be interleaves left over that we can fuse with other
     // operations.
     s = FuseInterleaves().mutate(s);
