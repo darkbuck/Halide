@@ -1964,6 +1964,7 @@ namespace Internal {
 
 class GeneratorStub;
 class SimpleGeneratorFactory;
+class Testable_JIT;
 
 class GeneratorBase : public NamesInterface, public GeneratorContext {
 public:
@@ -2045,6 +2046,7 @@ private:
     friend class GeneratorStub;
     friend class SimpleGeneratorFactory;
     friend class StubOutputBufferBase;
+    friend class Testable_JIT;
 
     const size_t size;
     std::vector<Internal::Parameter *> filter_params;
