@@ -68,7 +68,7 @@ CCFLAGS-arm-32-android := $(CCFLAGS-arm-32-android) ${COMMON_CCFLAGS} -llog -fPI
 all: hosts remotes
 
 .PHONY: hosts
-hosts: bin/arm-64-android/libhalide_hexagon_host.so bin/arm-32-android/libhalide_hexagon_host.so bin/host/libhalide_hexagon_host.so
+hosts: bin/arm-64-android/libhalide_hexagon_host_v2.so bin/arm-32-android/libhalide_hexagon_host_v2.so bin/host/libhalide_hexagon_host_v2.so
 
 .PHONY: remotes
 remotes: bin/v60/libhalide_hexagon_remote_skel.so bin/v60/hexagon_sim_remote
@@ -116,9 +116,9 @@ bin/%/libhalide_hexagon_remote_skel.so: bin/%/halide_remote.o bin/%/halide_hexag
 	-Wl,-Bsymbolic -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free \
 	-Wl,--wrap=realloc -Wl,--wrap=memalign -Wl,--wrap=__stack_chk_fail
 
-bin/%/libhalide_hexagon_host.so: bin/src/halide_hexagon_remote_stub.c bin/%/halide_host.o bin/%/fake_libadsprpc.o
+bin/%/libhalide_hexagon_host_v2.so: bin/src/halide_hexagon_remote_stub.c bin/%/halide_host.o bin/%/fake_libadsprpc.o
 	mkdir -p $(@D)
-	$(CC-$*) $^ $(CCFLAGS-$*) -Wl,-soname,libhalide_hexagon_host.so -shared -o $@
+	$(CC-$*) $^ $(CCFLAGS-$*) -Wl,-soname,libhalide_hexagon_host_v2.so -shared -o $@
 
 # Build rules for the simulator implementation.
 bin/%/sim_remote.o: sim_remote.cpp sim_protocol.h elf.h
@@ -145,9 +145,9 @@ bin/%/hexagon_sim_remote: bin/%/sim_remote.o
 	--dynamic-linker= -E --force-dynamic
 	#$(CC-$*) -m$* -mG0lib -G0 -ldl -lc -lstandalone -lgcc  $^ $(LIBDL) -o $@
 
-bin/host/libhalide_hexagon_host.so: bin/host/sim_host.o
+bin/host/libhalide_hexagon_host_v2.so: bin/host/sim_host.o
 	mkdir -p $(@D)
-	$(CC-host) $^ $(CCFLAGS-host) -Wl,-soname,libhalide_hexagon_host.so -shared -o $@
+	$(CC-host) $^ $(CCFLAGS-host) -Wl,-soname,libhalide_hexagon_host_v2.so -shared -o $@
 
 .PHONY: clean
 clean:
