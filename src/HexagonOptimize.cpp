@@ -1535,42 +1535,153 @@ Expr span_of_bounds(Interval bounds) {
     }
 }
 
+struct ClampedRamp {
+    // The offset added to the start of the clamped ramp.
+    Expr offset;
+
+    // The base and stride of the ramp.
+    Expr base;
+    Expr stride;
+
+    // The values at which the ramp is clamped.
+    Expr min;
+    Expr max;
+};
+
+bool is_clamped_ramp(Expr index, Scope<Expr> &lets, ClampedRamp &clamped_ramp) {
+    // If we're inside the clamped ramp,
+    bool in_clamped_ramp = clamped_ramp.min.defined() || clamped_ramp.max.defined();
+    Expr &base = in_clamped_ramp ? clamped_ramp.base : clamped_ramp.offset;
+
+    const Add *add = index.as<Add>();
+    const Sub *sub = index.as<Sub>();
+
+    if (add || sub) {
+        Expr add_a = add ? add->a : sub->a;
+        Expr add_b = add ? add->b : sub->b;
+
+        if (const Broadcast *ba = add_a.as<Broadcast>()) {
+            base = base.defined() ? base + ba->value : ba->value;
+            if (is_clamped_ramp(add_b, lets, clamped_ramp)) {
+                // We negated the clamped ramp here.
+                clamped_ramp.base = -clamped_ramp.base;
+                clamped_ramp.stride = -clamped_ramp.stride;
+                clamped_ramp.min = -clamped_ramp.min;
+                clamped_ramp.max = -clamped_ramp.max;
+            } else {
+                debug(0) << __LINE__ << "\n";
+                return false;
+            }
+        } else if (const Broadcast *bb = add_b.as<Broadcast>()) {
+            if (sub) {
+                base = base.defined() ? base - bb->value : -bb->value;
+            } else {
+                base = base.defined() ? base + bb->value : bb->value;
+            }
+            return is_clamped_ramp(add_a, lets, clamped_ramp);
+        }
+    } else if (const Min *min = index.as<Min>()) {
+        if (!clamped_ramp.max.defined()) {
+            if (const Broadcast *ba = min->a.as<Broadcast>()) {
+                clamped_ramp.max = ba->value;
+                return is_clamped_ramp(min->b, lets, clamped_ramp);
+            } else if (const Broadcast *bb = min->b.as<Broadcast>()) {
+                clamped_ramp.max = bb->value;
+                return is_clamped_ramp(min->a, lets, clamped_ramp);
+            }
+        }
+    } else if (const Max *max = index.as<Max>()) {
+        if (!clamped_ramp.min.defined()) {
+            if (const Broadcast *ba = max->a.as<Broadcast>()) {
+                clamped_ramp.min = ba->value;
+                return is_clamped_ramp(max->b, lets, clamped_ramp);
+            } else if (const Broadcast *bb = max->b.as<Broadcast>()) {
+                clamped_ramp.min = bb->value;
+                return is_clamped_ramp(max->a, lets, clamped_ramp);
+            }
+        }
+    } else if (const Ramp *ramp = index.as<Ramp>()) {
+        base = base.defined() ? base + ramp->base : ramp->base;
+        clamped_ramp.stride = ramp->stride;
+        return true;
+    } else if (const Variable *v = index.as<Variable>()) {
+        return is_clamped_ramp(lets.get(v->name), lets, clamped_ramp);
+    } else if (const Let *let = index.as<Let>()) {
+        lets.push(let->name, let->value);
+        bool ret = is_clamped_ramp(let->body, lets, clamped_ramp);
+        lets.pop(let->name);
+        return ret;
+    }
+    debug(0) << index << "\n";
+    return false;
+}
+
 // Replace indirect loads with dynamic_shuffle intrinsics where
 // possible.
 class OptimizeShuffles : public IRMutator {
     int lut_alignment;
     Scope<Interval> bounds;
-    std::vector<std::pair<string, Expr>> lets;
+    Scope<Expr> lets;
     bool inside_address_of = false;
 
     using IRMutator::visit;
 
     void visit(const Call *op) {
-        bool old_inside_address_of = inside_address_of;
         if (op->is_intrinsic(Call::address_of)) {
+            bool old_inside_address_of = inside_address_of;
             inside_address_of = true;
+            IRMutator::visit(op);
+            inside_address_of = old_inside_address_of;
+            return;
+        } else if (op->is_intrinsic("dynamic_shuffle")) {
+            internal_assert(op->args.size() == 4);
+            Expr vec = mutate(op->args[0]);
+            Expr index = mutate(op->args[1]);
+
+            // Strip away any casts. This might be incorrect if the
+            // value were to overflow... but nothing generating
+            // dynamic_shuffle should do that.
+            if (const Cast *cast = index.as<Cast>()) {
+                index = cast->value;
+            }
+
+            debug(0) << index << "\n";
+
+            ClampedRamp clamped_ramp;
+            if (is_clamped_ramp(index, lets, clamped_ramp)) {
+                debug(0) << "Found dynamic_shuffle with possibly clamped ramp: " << index << "\n"
+                         << "offset: " << clamped_ramp.offset << "\n"
+                         << "base: " << clamped_ramp.base << "\n"
+                         << "stride: " << clamped_ramp.stride << "\n"
+                         << "min: " << clamped_ramp.min << "\n"
+                         << "max: " << clamped_ramp.max << "\n";
+
+                Expr result = vec;
+                if (clamped_ramp.min.defined()) {
+                    Expr boundary = Shuffle::make_extract_element(result,
+                }
+
+
+            }
         }
         IRMutator::visit(op);
-        inside_address_of = old_inside_address_of;
     }
 
     template <typename T>
     void visit_let(const T *op) {
-        // We only care about vector lets.
+        lets.push(op->name, op->value);
         if (op->value.type().is_vector()) {
+            // We only care about the bounds of vector lets.
             bounds.push(op->name, bounds_of_expr_in_scope(op->value, bounds));
         }
         IRMutator::visit(op);
         if (op->value.type().is_vector()) {
             bounds.pop(op->name);
         }
+        lets.pop(op->name);
     }
 
-    void visit(const Let *op) {
-        lets.push_back({op->name, op->value});
-        visit_let(op);
-        lets.pop_back();
-    }
+    void visit(const Let *op) { visit_let(op); }
     void visit(const LetStmt *op) { visit_let(op); }
 
     void visit(const Load *op) {
@@ -1626,7 +1737,7 @@ class OptimizeShuffles : public IRMutator {
                     // dynamic_shuffle requires.
                     index = simplify(cast(UInt(8).with_lanes(op->type.lanes()), index - base));
 
-                    expr = Call::make(op->type, "dynamic_shuffle", {lut, index, 0, const_extent - 1}, Call::PureIntrinsic);
+                    expr = mutate(Call::make(op->type, "dynamic_shuffle", {lut, index, 0, const_extent - 1}, Call::PureIntrinsic));
                     return;
                 }
             }
