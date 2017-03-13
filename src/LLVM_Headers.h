@@ -54,6 +54,8 @@
 #include <llvm/ADT/StringMap.h>
 #include <llvm/Object/ArchiveWriter.h>
 #include <llvm/Object/ObjectFile.h>
+#include <llvm/Support/ELF.h>
+#include <llvm/Object/ELFObjectFile.h>
 
 #if LLVM_VERSION >= 39
 #include <llvm/Transforms/Scalar/GVN.h>
