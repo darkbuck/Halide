@@ -1,6 +1,9 @@
 #include "Halide.h"
 
 using namespace Halide;
+using namespace Halide::Internal;
+
+IRPrinter irp(std::cerr);
 
 class Conv3x3 : public Generator<Conv3x3> {
 public:
@@ -28,6 +31,13 @@ public:
 
         input.dim(0).set_min(0);
         input.dim(1).set_min(0);
+        // Given that this is a 3x3 convolution, it is reasonable
+        // to assert the following.
+        mask.dim(0).set_min(0);
+        mask.dim(0).set_extent(3);
+        mask.dim(1).set_min(0);
+        mask.dim(1).set_extent(3);
+        mask.dim(1).set_stride(3);
 
         auto output_buffer = Func(output).output_buffer();
         output_buffer.dim(0).set_min(0);
@@ -40,7 +50,11 @@ public:
 
             Expr output_stride = output_buffer.dim(1).stride();
             output_buffer.dim(1).set_stride((output_stride/vector_size) * vector_size);
-            bounded_input.compute_root();
+            bounded_input
+              .compute_at(Func(output), y)
+              .store_at(Func(output), y)
+              .align_storage(x, 128)
+              .vectorize(x, vector_size, TailStrategy::RoundUp);
             Func(output)
                 .hexagon()
                 .tile(x, y, xi, yi, vector_size, 4, TailStrategy::RoundUp)
