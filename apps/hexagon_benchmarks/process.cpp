@@ -27,8 +27,8 @@ const char *to_string(bmark_run_mode_t mode) {
 
 int main(int argc, char **argv) {
     // Set some defaults first.
-    const int W = 1024;
-    const int H = 1024;
+    const int W = 1920;
+    const int H = 1080;
     std::vector<bmark_run_mode_t> modes;
     int iterations = 10;
 

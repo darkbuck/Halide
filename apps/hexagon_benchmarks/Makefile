@@ -25,13 +25,13 @@ BIN ?= bin
 
 FILTERS ?= conv3x3a16 dilate3x3 median3x3 gaussian5x5 sobel conv3x3a32
 
-OBJS = $(patsubst %,$(BIN)/\%/%_hvx64.o, $(FILTERS))
+#OBJS = $(patsubst %,$(BIN)/\%/%_hvx64.o, $(FILTERS))
 OBJS += $(patsubst %,$(BIN)/\%/%_hvx128.o, $(FILTERS))
-OBJS += $(patsubst %,$(BIN)/\%/%_cpu.o, $(FILTERS))
+#OBJS += $(patsubst %,$(BIN)/\%/%_cpu.o, $(FILTERS))
 
-LINK_OBJS = $(patsubst %,$(BIN)/$$*/%_hvx64.o, $(FILTERS))
+#LINK_OBJS = $(patsubst %,$(BIN)/$$*/%_hvx64.o, $(FILTERS))
 LINK_OBJS += $(patsubst %,$(BIN)/$$*/%_hvx128.o, $(FILTERS))
-LINK_OBJS += $(patsubst %,$(BIN)/$$*/%_cpu.o, $(FILTERS))
+#LINK_OBJS += $(patsubst %,$(BIN)/$$*/%_cpu.o, $(FILTERS))
 
 UPPERCASE_FILTERS = $(shell echo $(FILTERS) | tr '[:lower:]' '[:upper:]')
 DASH_D_DEFINES = $(patsubst %, -D%=1, $(UPPERCASE_FILTERS))
@@ -50,7 +50,7 @@ $(BIN)/%/conv3x3a16_hvx64.o: $(BIN)/conv3x3_generator
 
 $(BIN)/%/conv3x3a16_hvx128.o: $(BIN)/conv3x3_generator
 	@-mkdir -p $(BIN)/$*
-	$^ -o $(BIN)/$* -e o,h -f conv3x3a16_hvx128 target=$*-hvx_128 accumulator_type=int16
+	$^ -o $(BIN)/$* -e o,h,assembly,bitcode -f conv3x3a16_hvx128 target=$*-hvx_128 accumulator_type=int16
 
 $(BIN)/%/dilate3x3_cpu.o: $(BIN)/dilate3x3_generator
 	@-mkdir -p $(BIN)/$*

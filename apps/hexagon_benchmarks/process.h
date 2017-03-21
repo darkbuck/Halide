@@ -6,8 +6,8 @@
 
 #ifdef CONV3X3A16
 #include "conv3x3a16_hvx128.h"
-#include "conv3x3a16_hvx64.h"
-#include "conv3x3a16_cpu.h"
+//#include "conv3x3a16_hvx64.h"
+//#include "conv3x3a16_cpu.h"
 #endif
 
 #ifdef DILATE3X3
@@ -131,11 +131,11 @@ public:
     int run(bmark_run_mode_t mode) {
 #ifdef CONV3X3A16
         if (mode == bmark_run_mode_t::hvx64) {
-            return conv3x3a16_hvx64(u8_in, i8_mask, u8_out);
+            return conv3x3a16_hvx128(u8_in, i8_mask, u8_out);
         } else if (mode == bmark_run_mode_t::hvx128) {
             return conv3x3a16_hvx128(u8_in, i8_mask, u8_out);
         } else if (mode == bmark_run_mode_t::cpu) {
-            return conv3x3a16_cpu(u8_in, i8_mask, u8_out);
+            return conv3x3a16_hvx128(u8_in, i8_mask, u8_out);
         }
 #endif
         return 1;
