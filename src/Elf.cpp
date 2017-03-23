@@ -2,6 +2,7 @@
 #include "Debug.h"
 #include "Util.h"
 #include "Error.h"
+#include "LLVM_Headers.h"
 
 #include <map>
 #include <memory>
@@ -251,6 +252,11 @@ public:
     }
 };
 
+const char *assert_string_valid(const char *name, const char *data, size_t size) {
+    internal_assert(data <= name && name + strlen(name) + 1 <= data + size);
+    return name;
+}
+
 template <typename T>
 std::unique_ptr<Object> parse_object_internal(const char *data, size_t size) {
     Ehdr<T> header = *(const Ehdr<T> *)data;
@@ -289,7 +295,8 @@ std::unique_ptr<Object> parse_object_internal(const char *data, size_t size) {
         const Shdr<T> *sh = get_section_header(i);
         if (sh->sh_type != Section::SHT_SYMTAB && sh->sh_type != Section::SHT_STRTAB &&
             sh->sh_type != Section::SHT_REL && sh->sh_type != Section::SHT_RELA) {
-            auto section = obj->add_section(&strings[sh->sh_name], (Section::Type)sh->sh_type);
+            const char *name = assert_string_valid(&strings[sh->sh_name], data, size);
+            auto section = obj->add_section(name, (Section::Type)sh->sh_type);
             section->set_flags(sh->sh_flags)
                 .set_size(sh->sh_size)
                 .set_alignment(sh->sh_addralign);
@@ -312,7 +319,8 @@ std::unique_ptr<Object> parse_object_internal(const char *data, size_t size) {
                 const char *sym_ptr = data + sh->sh_offset + j*sizeof(Sym<T>);
                 internal_assert(data <= sym_ptr && sym_ptr + sizeof(Sym<T>) <= data + size);
                 const Sym<T> &sym = *(const Sym<T> *)sym_ptr;
-                auto symbol = obj->add_symbol(&strings[sym.st_name]);
+                const char *name = assert_string_valid(&strings[sym.st_name], data, size);
+                auto symbol = obj->add_symbol(name);
                 symbol->set_type((Symbol::Type)sym.get_type())
                     .set_binding((Symbol::Binding)sym.get_binding());
                 if (sym.st_shndx != 0) {
@@ -328,7 +336,7 @@ std::unique_ptr<Object> parse_object_internal(const char *data, size_t size) {
         const Shdr<T> *sh = get_section_header(i);
         internal_assert(sh->sh_type != Section::SHT_REL) << "Section::SHT_REL not supported\n";
         if (sh->sh_type == Section::SHT_RELA) {
-            const char *name = &strings[sh->sh_name];
+            const char *name = assert_string_valid(&strings[sh->sh_name], data, size);
             internal_assert(strncmp(name, ".rela.", 6) == 0);
             internal_assert(sh->sh_entsize == sizeof(Rela<T>)) << sh->sh_entsize << " " << sizeof(Rela<T>);
             auto to_relocate = obj->find_section(name + 5);
@@ -352,13 +360,13 @@ std::unique_ptr<Object> parse_object_internal(const char *data, size_t size) {
 }
 
 Object::symbol_iterator Object::add_symbol(const std::string &name) {
-    symbols.emplace_back(name);
-    return std::prev(symbols.end());
+    syms.emplace_back(name);
+    return std::prev(syms.end());
 }
 
 Object::section_iterator Object::add_section(const std::string &name, Section::Type type) {
-    sections.emplace_back(name, type);
-    return std::prev(sections.end());
+    secs.emplace_back(name, type);
+    return std::prev(secs.end());
 }
 
 Object::section_iterator Object::find_section(const std::string &name) {
@@ -391,7 +399,7 @@ void append_zeros(std::vector<char> &buf, size_t count) {
     buf.insert(buf.end(), count, (char)0);
 }
 
-void append_padding(std::vector<char> &buf, int alignment) {
+void append_padding(std::vector<char> &buf, size_t alignment) {
     buf.resize((buf.size() + alignment - 1) & ~(alignment - 1));
 }
 
@@ -414,7 +422,7 @@ Object::section_iterator Object::merge_sections(const std::vector<section_iterat
         merged->set_alignment(alignment);
 
         append_padding(contents, alignment);
-        // The offset of the section in the new .text section.
+        // The offset of the section in the new merged section.
         uint64_t offset = contents.size();
         append(contents, s->get_contents().begin(), s->get_contents().end());
 
@@ -454,238 +462,6 @@ Object::section_iterator Object::merge_text_sections() {
     return text;
 }
 
-
-/*
-std::vector<char> ld_shared_object(Object &obj) {
-    internal_assert(obj.get_header().e_type == Elf::ET_REL)
-        << "Hexagon object is not relocatable.";
-
-    const int program_alignment = 4096;
-    const int section_alignment = 128;
-
-    // Merge all the text sections, prior to generating .plt so it
-    // doesn't get merged also.
-    Elf::Object::section_iterator text_section = obj.merge_text_sections();
-
-    GlobalOffsetTable got;
-    auto dynamic_symbol = obj.get_symbol("_DYNAMIC");
-    got.push_back(std::make_pair(0, dynamic_symbol));
-    // TODO: Docs say GOT entries 2 and 3 are also special... do we
-    // need to reserve them?
-    auto plt_section = build_plt(obj, got);
-
-    // Start laying out the sections in their final offsets.
-    uint64_t offset = 4096; // Should be enough room for the header + phdrs + shdrs.
-
-    // Find the text sections.
-    HexagonBinary::Phdr text_header;
-    text_header.p_type = Elf::PT_LOAD;
-    text_header.p_offset = offset;
-    text_header.p_flags = Elf::PF_X | Elf::PF_R;
-
-    for (auto i = obj.sections_begin(); i != obj.sections_end(); i++) {
-        if (i->is_alloc() && !i->is_writable()) {
-            // This section belongs in the text section.
-            i->set_offset(offset);
-            offset += i->get_size();
-            if (i->get_alignment() > 0) {
-                offset = (offset + i->get_alignment() - 1) & ~(i->get_alignment() - 1);
-            }
-        }
-    }
-
-    offset = (offset + program_alignment - 1) & ~(program_alignment - 1);
-    text_header.p_filesz = offset - text_header.p_offset;
-    text_header.p_memsz = text_header.p_filesz;
-
-    // Find the data sections.
-    HexagonBinary::Phdr data_header;
-    memset(&data_header, 0, sizeof(data_header));
-    data_header.p_type = Elf::PT_LOAD;
-    data_header.p_offset = offset;
-    data_header.p_flags = Elf::PF_W | Elf::PF_R;
-
-    for (auto i = obj.sections_begin(); i != obj.sections_end(); i++) {
-        if (i->is_alloc() && i->is_writable()) {
-            // This section belongs in the data section.
-            i->set_offset(offset);
-            offset += i->get_size();
-            offset = (offset + section_alignment - 1) & ~(section_alignment - 1);
-        }
-    }
-
-    // Now all of the sections are in place. Now we can do the relocations.
-    for (auto i = obj.sections_begin(); i != obj.sections_end(); ++i) {
-        for (auto j = i->relocations_begin(); j != i->relocations_end(); ++j) {
-            char *fixup_addr = i->contents.data() + j->r_offset;
-            do_relocation(i->get_offset() + j->r_offset, fixup_addr, obj, *j, got);
-        }
-    }
-
-    // After doing relocations, we have what we need to make the .got.
-    uint64_t got_size = got.size() * sizeof(uint32_t);
-
-    auto got_section = obj.add_section(".got", Elf::Section::SHT_PROGBITS);
-    got_section->set_offset(offset);
-    offset += got_size;
-    std::vector<uint32_t> got_contents(got.size());
-    for (size_t i = 0; i < got.size(); i++) {
-        got_contents[i] = got[i].first;
-        Elf::Relocation reloc(R_HEX_JMP_SLOT, i*sizeof(uint32_t), 0, got[i].second);
-        got_section->add_relocation(reloc);
-    }
-    got_section->set_contents((const char *)got_contents.data(), (const char *)(got_contents.data() + got_contents.size()));
-
-    obj.add_relocation_section(&*got_section);
-
-    offset = (offset + section_alignment - 1) & ~(section_alignment - 1);
-    got_symbol->define(&*got_section, 0, got_size);
-
-    offset = (offset + program_alignment - 1) & ~(program_alignment - 1);
-    data_header.p_filesz = offset - data_header.p_offset;
-    data_header.p_memsz = data_header.p_filesz;
-
-    // Add string and symbol table.
-    auto strtab = obj.add_section(".strtab");
-    auto symtab = obj.add_section(".symtab");
-    auto dynamic = obj.add_section(".dynamic");
-
-    std::vector<HexagonBinary::Dyn> dyn;
-    auto make_dyn = [](int32_t tag, uint32_t val = 0) {
-        HexagonBinary::Dyn dyn;
-        dyn.d_tag = tag;
-        dyn.d_val = val;
-        return dyn;
-    };
-
-    // Look for symbols we reference in our shared object first.
-    dyn.push_back(make_dyn(Elf::DT_SYMBOLIC));
-
-    // TODO: Elf docs claim this is required...
-    dyn.push_back(make_dyn(Elf::DT_HASH, 0));
-
-    // Address of the string table.
-    strtab->set_offset(offset);
-    strtab->set_type(Elf::SHT_STRTAB);
-    offset = (offset + strtab->get_size() + section_alignment - 1) & ~(section_alignment - 1);
-    dyn.push_back(make_dyn(Elf::DT_STRTAB, strtab->get_offset()));
-    dyn.push_back(make_dyn(Elf::DT_STRSZ, strtab->get_size()));
-
-    // Address of the symbol table.
-    symtab->set_offset(offset);
-    symtab->set_type(Elf::SHT_SYMTAB);
-    symtab->shdr.sh_link = strtab->get_index();
-    symtab->shdr.sh_entsize = sizeof(HexagonBinary::Sym);
-    for (auto i = obj.symbols_begin(); i != obj.symbols_end(); i++) {
-        append(symtab->contents, i->sym);
-    }
-    symtab->shdr.sh_size = symtab->contents.size();
-    offset = (offset + symtab->get_size() + section_alignment - 1) & ~(section_alignment - 1);
-    dyn.push_back(make_dyn(Elf::DT_SYMTAB, symtab->get_offset()));
-    dyn.push_back(make_dyn(Elf::DT_SYMENT, symtab->shdr.sh_entsize));
-
-    // Offset to the GOT.
-    dyn.push_back(make_dyn(Elf::DT_PLTGOT, got_section->get_offset()));
-
-    // Null terminator.
-    dyn.push_back(make_dyn(Elf::DT_NULL));
-
-
-    offset = (offset + program_alignment - 1) & ~(program_alignment - 1);
-    dynamic->contents.assign((const char *)dyn.data(), (const char *)(dyn.data() + dyn.size()));
-    dynamic->set_size(dynamic->contents.size());
-    dynamic->set_offset(offset);
-    dynamic->set_type(Elf::SHT_DYNAMIC);
-    dynamic->shdr.sh_link = strtab->get_index();
-    dynamic->shdr.sh_flags = Elf::SHF_ALLOC;
-    offset += dynamic->get_size();
-    offset = (offset + program_alignment - 1) & ~(program_alignment - 1);
-
-    HexagonBinary::Phdr dynamic_header;
-    dynamic_header.p_type = Elf::PT_DYNAMIC;
-    dynamic_header.p_offset = offset;
-    dynamic_header.p_flags = Elf::PF_R;
-    dynamic_header.p_filesz = dyn.size()*sizeof(dyn[0]);
-    dynamic_header.p_memsz = dynamic_header.p_filesz;
-
-    obj.phdrs.push_back(text_header);
-    obj.phdrs.push_back(data_header);
-    obj.phdrs.push_back(dynamic_header);
-
-    // We're done modifying the data in the shared object. Now, we need to build the headers.
-    std::vector<char> output;
-
-    HexagonBinary::Ehdr header = obj.get_header();
-    header.e_type = Elf::ET_DYN;
-    internal_assert(header.e_machine == 164);  // Hexagon
-    header.e_entry = 0;
-    header.e_phoff = sizeof(header);
-    header.e_shoff = header.e_phoff + obj.phdrs.size()*sizeof(HexagonBinary::Phdr);
-    header.e_phentsize = sizeof(HexagonBinary::Phdr);
-    header.e_phnum = obj.phdrs.size();
-    header.e_shentsize = sizeof(HexagonBinary::Shdr);
-    header.e_shnum = obj.sections_size();
-    header.e_shstrndx = strtab->get_index();
-
-
-    output.reserve(offset);
-    append(output, header);
-    for (auto i = obj.phdrs.begin(); i != obj.phdrs.end(); i++) {
-        i->p_vaddr = i->p_offset;
-        i->p_paddr = 0;
-        i->p_align = program_alignment;
-        append(output, *i);
-    }
-    debug(0) << header.e_shnum << "\n";
-    for (auto i = obj.sections_begin(); i != obj.sections_end(); i++) {
-        debug(0) << i->get_name() << " " << i->get_size() << "\n";
-        i->shdr.sh_addr = i->shdr.sh_offset;
-        append(output, i->shdr);
-    }
-    append_padding(output, program_alignment);
-    uint32_t min_section_offset = output.size();
-
-    output.resize(offset);
-    for (auto i = obj.sections_begin(); i != obj.sections_end(); i++) {
-        if (i->get_type() != Elf::SHT_NULL) {
-            internal_assert(i->get_offset() >= min_section_offset && i->get_offset() + i->contents.size() <= output.size())
-                << i->get_name() << " has offset " << i->get_offset() << "\n";
-            memcpy(&output[i->get_offset()], i->contents.data(), i->contents.size());
-        } else {
-            debug(0) << "Not writing null section " << i->get_name() << "\n";
-        }
-    }
-
-    HexagonBinary validate(output.data(), output.size());
-    debug(0) << validate.sections_size() << " sections:\n";
-    int count = 0;
-    for (auto i = validate.sections_begin(); i != validate.sections_end(); i++) {
-        debug(0) << count++ << ": " << i->get_name() << " " << i->get_size() << "\n";
-    }
-    debug(0) << validate.symbols_size() << " symbols:\n";
-    count = 0;
-    for (auto i = validate.symbols_begin(); i != validate.symbols_end(); i++) {
-        debug(0) << count++ << ": " << i->get_name() << "\n";
-    }
-
-    return output;
-}
-*/
-
-uint64_t align_up(uint64_t offset, uint64_t alignment) {
-    return (offset + alignment - 1) & ~(alignment - 1);
-}
-
-
-void build_plt(Object &obj, Linker *linker) {
-    //auto plt_section = obj.add_section(".plt", Section::SHT_PROGBITS);
-    for (auto i = obj.symbols_begin(); i != obj.symbols_end(); i++) {
-        if (!i->is_defined()) {
-
-        }
-    }
-}
-
 template <typename T, typename U>
 T safe_cast(U x) {
     internal_assert(std::numeric_limits<T>::min() <= x && x <= std::numeric_limits<T>::max());
@@ -713,23 +489,25 @@ std::vector<char> write_shared_object_internal(Object &obj, Linker *linker) {
     auto &data_phdr = phdrs[1];
     //auto &dyn_phdr = phdrs[2];
 
+    StringTable strings;
+
     std::vector<Shdr<T>> shdrs;
     Shdr<T> sh_null;
     memset(&sh_null, 0, sizeof(sh_null));
     shdrs.push_back(sh_null);
 
     // We also need a mapping of section objects to section headers.
-    std::map<const Section *, uint16_t> section_map;
-    StringTable strings;
+    std::map<const Section *, uint16_t> section_idxs;
 
     // Define a helper function to write a section to the shared
     // object, making a section header for it.
     auto write_section = [&](const Section &s, uint32_t entsize = 0) {
-        append_padding(output, s.get_alignment());
+        uint64_t alignment = s.get_alignment();
+        append_padding(output, alignment);
         uint64_t offset = output.size();
         const std::vector<char> &contents = s.get_contents();
         append(output, contents.begin(), contents.end());
-        append_padding(output, s.get_alignment());
+        append_padding(output, alignment);
 
         Shdr<T> shdr;
         shdr.sh_name = strings.get(s.get_name());
@@ -738,29 +516,98 @@ std::vector<char> write_shared_object_internal(Object &obj, Linker *linker) {
         shdr.sh_offset = offset;
         shdr.sh_addr = offset;
         shdr.sh_size = s.get_size();
-        shdr.sh_addralign = s.get_alignment();
+        shdr.sh_addralign = alignment;
 
         shdr.sh_link = 0;
         shdr.sh_info = 0;
         shdr.sh_entsize = entsize;
 
         uint16_t shndx = safe_cast<uint16_t>(shdrs.size());
-        section_map[&s] = shndx;
+        section_idxs[&s] = shndx;
         shdrs.push_back(shdr);
         return shndx;
     };
 
     // And a helper to get the offset we've given a section.
-    /*
-    auto get_section_offset = [&](const Section *s) {
-        uint16_t idx = section_map[s];
+    auto get_section_offset = [&](const Section &s) -> uint64_t {
+        uint16_t idx = section_idxs[&s];
         return shdrs[idx].sh_offset;
     };
-    */
+
+    // We need to define the GOT symbol.
+    Section got(".got", Section::SHT_PROGBITS);
+    got.set_alignment(4);
+    Symbol got_sym("_GLOBAL_OFFSET_TABLE_");
+    got_sym.define(&got, 0, 0);
+
+    // Since we can't change the object, start a map of all of the symbols that we can mutate.
+    std::map<const Symbol *, const Symbol *> symbols;
+    symbols[&got_sym] = &got_sym;
+    for (const Symbol &i : obj.symbols()) {
+        if (i.get_name() == "_GLOBAL_OFFSET_TABLE_") {
+            symbols[&i] = &got_sym;
+        } else {
+            symbols[&i] = &i;
+        }
+    }
+
+    auto get_symbol = [&](const Relocation &r) {
+        const Symbol *sym = r.get_symbol();
+        auto i = symbols.find(sym);
+        internal_assert(i != symbols.end()) << sym->get_name() << "\n";
+        if (i != symbols.end()) return i->second;
+        return sym;
+    };
+
+    auto needs_plt_entry = [&](const Relocation &r) {
+        const Symbol *s = get_symbol(r);
+        if (s->is_defined()) {
+            return false;
+        }
+
+        if (s->get_type() != Symbol::STT_NOTYPE) {
+            return false;
+        }
+
+        return linker->needs_plt_entry(r);
+    };
+
     // We need to build the PLT, so it can be positioned along with
     // the rest of the text sections.
-    Section plt;
-    //build_plt(obj, linker);
+    Section plt(".plt", Section::SHT_PROGBITS);
+    plt.set_flags(Section::SHF_ALLOC | Section::SHF_EXECINSTR);
+    std::list<Symbol> plt_symbols;
+    std::map<const Symbol *, const Symbol *> plt_defs;
+    // Hack: We're defining the global offset table, so it shouldn't be treated as an external symbol.
+    plt_defs[&got_sym] = &got_sym;
+    linker->init_plt_section(plt, got);
+    for (const Section &s : obj.sections()) {
+        for (const Relocation &r : s.relocations()) {
+            if (!needs_plt_entry(r)) {
+                continue;
+            }
+
+            const Symbol *sym = get_symbol(r);
+            const Symbol *& plt_def = plt_defs[sym];
+            if (plt_def) {
+                // We already made a PLT entry for this symbol.
+                continue;
+            }
+
+            debug(0) << "Defining PLT entry for " << sym->get_name() << "\n";
+            plt_symbols.push_back(linker->add_plt_entry(*sym, plt, got, got_sym));
+
+            plt_def = &plt_symbols.back();
+            symbols[plt_def] = plt_def;
+        }
+    }
+
+    auto get_symbol_offset = [&](const Symbol &sym) -> uint64_t {
+        if (sym.is_defined()) {
+            return get_section_offset(*sym.get_section()) + sym.get_offset();
+        }
+        return 0;
+    };
 
     // Start placing the sections into the shared object.
 
@@ -774,9 +621,12 @@ std::vector<char> write_shared_object_internal(Object &obj, Linker *linker) {
     text_phdr.p_flags = PF_X | PF_R;
     text_phdr.p_offset = 0;
     text_phdr.p_align = 4096;
-    for (auto i = obj.sections_begin(); i != obj.sections_end(); i++) {
-        if (i->is_alloc() && !i->is_writable()) {
-            write_section(*i);
+
+    uint16_t plt_idx = write_section(plt);
+    plt_idx = plt_idx;
+    for (const Section &s : obj.sections()) {
+        if (s.is_alloc() && !s.is_writable()) {
+            write_section(s);
         }
     }
     append_padding(output, 4096);
@@ -786,9 +636,9 @@ std::vector<char> write_shared_object_internal(Object &obj, Linker *linker) {
     data_phdr.p_flags = PF_W | PF_R;
     data_phdr.p_offset = output.size();
     data_phdr.p_align = 4096;
-    for (auto i = obj.sections_begin(); i != obj.sections_end(); i++) {
-        if (i->is_alloc() && i->is_writable()) {
-            write_section(*i);
+    for (const Section &s : obj.sections()) {
+        if (s.is_alloc() && s.is_writable()) {
+            write_section(s);
         }
     }
 
@@ -800,30 +650,97 @@ std::vector<char> write_shared_object_internal(Object &obj, Linker *linker) {
     Sym<T> undef_sym;
     memset(&undef_sym, 0, sizeof(undef_sym));
     syms.push_back(undef_sym);
-    std::map<Symbol *, uint16_t> symbol_map;
-    for (auto i = obj.symbols_begin(); i != obj.symbols_end(); ++i) {
+    std::map<const Symbol *, uint16_t> symbol_idxs;
+    for (const auto &i : symbols) {
+        const Symbol *s = i.second;
+        uint64_t value = s->get_offset();
+        // In shared objects, the symbol value is a virtual address,
+        // not a section offset.
+        if (s->is_defined()) {
+            value += get_section_offset(*s->get_section());
+        }
         Sym<T> sym;
-        sym.st_name = strings.get(i->get_name());
-        sym.st_value = i->get_offset();
-        sym.st_size = i->get_size();
-        sym.set_type(i->get_type());
-        sym.set_binding(i->get_binding());
+        sym.st_name = strings.get(s->get_name());
+        sym.st_value = value;
+        sym.st_size = s->get_size();
+        sym.set_type(s->get_type());
+        sym.set_binding(s->get_binding());
         sym.st_other = 0;
-        sym.st_shndx = section_map[i->get_section()];
+        sym.st_shndx = section_idxs[s->get_section()];
 
-        symbol_map[&*i] = syms.size();
+        symbol_idxs[s] = syms.size();
         syms.push_back(sym);
     }
     symtab.set_contents(syms);
     uint16_t symtab_idx = write_section(symtab, sizeof(syms[0]));
     symtab_idx = symtab_idx;
 
+    auto do_relocations = [&](const Section &s) {
+        debug(0) << "Processing relocations for section " << s.get_name() << "\n";
+        for (const Relocation &r : s.relocations()) {
+            const Symbol *sym = get_symbol(r);
+            debug(0) << "Processing relocation of type " << r.get_type()
+                     << " for symbol " << sym->get_name() << "\n";
+            if (needs_plt_entry(r)) {
+                // This relocation is a function call, we need to use the PLT entry for this symbol.
+                auto plt_def = plt_defs.find(sym);
+                internal_assert(plt_def != plt_defs.end());
+                sym = plt_def->second;
+            }
+
+            uint64_t fixup_offset = get_section_offset(s) + r.get_offset();
+            char *fixup_addr = output.data() + fixup_offset;
+            uint64_t sym_offset = get_symbol_offset(*sym);
+            if (sym_offset == 0) {
+                // This is an external symbol. We need to add a GOT
+                // slot with a relocation for this symbol, and perform
+                // the relocation with the GOT slot as the symbol.
+                sym_offset = linker->add_got_entry(got, *sym);
+            }
+            linker->relocate(fixup_offset, fixup_addr, r.get_type(), sym_offset, r.get_addend(), got);
+        }
+    };
+
     // Now that we've generated the symbol table, we can do relocations.
+    do_relocations(plt);
+    for (const Section &s : obj.sections()) {
+        do_relocations(s);
+    }
 
+    auto write_relocation_section = [&](const Section &s) {
+        uint64_t alignment = 8;
+        append_padding(output, alignment);
+        uint64_t offset = output.size();
+        for (const Relocation &r : s.relocations()) {
+            uint64_t i_offset = offset + r.get_offset();
+            Rela<T> rela(i_offset, r.get_type(), symbol_idxs[get_symbol(r)], r.get_addend());
+            append_object(output, rela);
+        }
+        uint64_t size = output.size() - offset;
+        append_padding(output, alignment);
 
-//    for (auto i = obj.sections_begin(); i != obj.sections_end(); ++i) {
-//        linker->do_relocations(*i, *got);
-//    }
+        Shdr<T> shdr;
+        shdr.sh_name = strings.get(".rela" + s.get_name());
+        shdr.sh_type = Section::SHT_RELA;
+        shdr.sh_flags = 0;
+        shdr.sh_offset = offset;
+        shdr.sh_addr = offset;
+        shdr.sh_size = size;
+        shdr.sh_addralign = alignment;
+
+        shdr.sh_link = symtab_idx;
+        shdr.sh_info = section_idxs[&s];
+        shdr.sh_entsize = sizeof(Rela<T>);
+
+        uint16_t shndx = safe_cast<uint16_t>(shdrs.size());
+        section_idxs[&s] = shndx;
+        shdrs.push_back(shdr);
+        return shndx;
+    };
+
+    uint16_t got_idx = write_section(got);
+    write_relocation_section(got);
+    got_idx = got_idx;
 
     Section strtab(".strtab", Section::SHT_STRTAB);
     strings.get(strtab.get_name());
@@ -832,6 +749,9 @@ std::vector<char> write_shared_object_internal(Object &obj, Linker *linker) {
 
     append_padding(output, 4096);
     data_phdr.p_filesz = output.size() - data_phdr.p_offset;
+
+    // Setup the section headers.
+    shdrs[symtab_idx].sh_link = strtab_idx;
 
     // Write the section header table.
     ehdr.e_shoff = output.size();
@@ -864,38 +784,23 @@ std::vector<char> write_shared_object_internal(Object &obj, Linker *linker) {
     }
     memcpy(output.data() + ehdr.e_phoff, phdrs.data(), sizeof(phdrs));
 
-    std::ofstream debug("/tmp/debug.so");
-    debug.write(output.data(), output.size());
+    std::ofstream debug_output("/tmp/debug.so");
+    debug_output.write(output.data(), output.size());
+    debug_output.flush();
 
     auto test = Object::parse_object(output.data(), output.size());
     test->dump();
-    return output;
-
 /*
-    // Now we have the sections that define symbols, we can build the relocation sections.
-    std::list<Section> rel_sections;
-    for (auto i = obj.sections_begin(); i != obj.sections_end(); ++i) {
-        if (i->relocations_size() != 0) {
-            std::vector<Rela<T>> contents;
-            for (auto j = i->relocations_begin(); j != i->relocations_end(); ++j) {
-                uint16_t sym_idx = symbol_indices[j->get_symbol()];
-                Rela<T> rela(j->get_offset(), j->get_type(), section_indices[j->get_section()], j->get_addend());
-                contents.push_back(rela);
-            }
+    std::error_code ec;
+    llvm::MemoryBufferRef objbuf(llvm::StringRef(output.data(), output.size()), "");
+    llvm::object::ELF32LEObjectFile asdf(objbuf, ec);
 
-            rel_sections.push_back(Section());
-            Section &rel = rel_sections.back();
-            rel.set_name(".rela" + i->get_name());
-            rel.set_type(Section::SHT_RELA);
-            rel.set_contents(contents);
-            uint16_t rel_idx = add_section(&rel);
-
-            // The sh_info of a relocation section should be the index
-            // of the section the relocations apply to.
-            shdrs[rel_idx].sh_info = section_indices[&*i];
-        }
+    for (auto i : asdf.symbols()) {
+        debug(0) << i.getName()->str() << "\n";
     }
 */
+    return output;
+
 /*
     Section dynamic(".dynamic", Section::SHT_DYNAMIC);
     uint16_t dynamic_idx = add_section(&dynamic);

@@ -17,10 +17,10 @@
 namespace Halide {
 namespace Internal {
 
-namespace {
-
 using std::string;
 using std::vector;
+
+namespace Elf {
 
 enum {
     R_HEX_NONE = 0,
@@ -116,6 +116,43 @@ enum {
     R_HEX_LD_GOT_16_X = 92,
     R_HEX_LD_GOT_11_X = 93,
 };
+
+bool maybe_branch_inst(uint32_t reloc_type) {
+    switch (reloc_type) {
+    case R_HEX_PLT_B22_PCREL:
+    case R_HEX_B22_PCREL:
+    case R_HEX_B22_PCREL_X:
+    case R_HEX_B15_PCREL:
+    case R_HEX_B15_PCREL_X:
+    case R_HEX_B13_PCREL:
+    case R_HEX_B13_PCREL_X:
+    case R_HEX_B9_PCREL:
+    case R_HEX_B9_PCREL_X:
+    case R_HEX_B7_PCREL:
+    case R_HEX_B7_PCREL_X:
+    case R_HEX_B32_PCREL_X:
+    case R_HEX_32_PCREL:
+    case R_HEX_6_PCREL_X:
+
+    case R_HEX_LO16:
+    case R_HEX_HI16:
+    case R_HEX_16:
+    case R_HEX_8:
+    case R_HEX_32_6_X:
+    case R_HEX_16_X:
+    case R_HEX_12_X:
+    case R_HEX_11_X:
+    case R_HEX_10_X:
+    case R_HEX_9_X:
+    case R_HEX_8_X:
+    case R_HEX_7_X:
+    case R_HEX_6_X:
+    case R_HEX_32:
+        return true;
+    default:
+        return false;
+    }
+}
 
 // Defined below.
 //extern std::vector<Instruction> instruction_encodings;
@@ -241,30 +278,18 @@ void do_reloc(char *addr, uint32_t mask, uintptr_t val, bool is_signed, bool ver
 
     *((uint32_t *)addr) = inst;
 }
-/*
-// Do all the relocations for sec (e.g. .text), using the list of
-// relocations in sec_rela (e.g. .rela.text)
+
 void do_relocation(uint32_t fixup_offset, char *fixup_addr,
-                   const HexagonBinary &elf, const HexagonBinary::Rela &rela,
-                   std::vector<std::pair<uint32_t, uint32_t>> &got) {
-    debug(0) << "Relocation of type " << rela.r_type() << "\n";
-
-    // We're fixing up a reference to the following symbol
-    auto sym = elf.get_symbol(rela.r_sym());
-
-    const char *sym_name = sym->get_name();
-    debug(0) << "Applies to symbol " << sym_name << "\n";
-    internal_assert(sym->is_defined());
-    uint32_t sym_offset = sym->get_offset();
-
+                   uint32_t type, uint32_t sym_offset, int32_t addend,
+                   Elf::Section &got) {
     // Hexagon relocations are specified in section 11.5 in
     // the Hexagon Application Binary Interface spec.
 
     // Find the symbol's index in the got
-    uint32_t got_idx = got.size();
-    for (uint32_t i = 0; i < got_idx; i++) {
-        if (sym_offset == got[i].first) {
-            got_idx = i;
+    uint32_t got_offset = got.get_size();
+    for (uint32_t i = 0; i < got_offset; i += 4) {
+        if (sym_offset == *(const uint32_t *)(got.get_contents().data() + i)) {
+            got_offset = i;
             break;
         }
     }
@@ -272,8 +297,8 @@ void do_relocation(uint32_t fixup_offset, char *fixup_addr,
     // Now we can define the variables from Table 11-5.
     uint32_t S = sym_offset;
     uint32_t P = fixup_offset;
-    intptr_t A = rela.r_addend;
-    uint32_t G = got_idx * sizeof(uint32_t);
+    intptr_t A = addend;
+    uint32_t G = got_offset;
     uint32_t GP = 0;
 
     // Define some constants from table 11-3
@@ -293,9 +318,7 @@ void do_relocation(uint32_t fixup_offset, char *fixup_addr,
     const bool truncate = false, verify = true;
     const bool _unsigned = false, _signed = true;
 
-    bool needs_got_entry = false;
-
-    switch (rela.r_type()) {
+    switch (type) {
     case 1:
         // Address to fix up, mask, value, signed, verify
         do_reloc(fixup_addr, Word32_B22, intptr_t(S + A - P) >> 2, _signed, verify);
@@ -401,40 +424,41 @@ void do_relocation(uint32_t fixup_offset, char *fixup_addr,
         break;
     case 69:
         do_reloc(fixup_addr, Word32_X26, intptr_t(G) >> 6, _signed, truncate);
-        needs_got_entry = true;
+        got.append_contents((uint32_t)S);
         break;
     case 71:
         do_reloc(fixup_addr, Word32_U6, uintptr_t(G), _unsigned, truncate);
-        needs_got_entry = true;
+        got.append_contents((uint32_t)S);
         break;
 
     default:
-        internal_error << "Unhandled relocation type " << rela.r_type() << "\n";
-    }
-
-    if (needs_got_entry && got_idx == got.size()) {
-        got.push_back(std::make_pair(S, rela.r_sym()));
+        internal_error << "Unhandled relocation type " << type << "\n";
     }
 }
-*/
-
-}  // namespace
-
-namespace Elf {
 
 class HexagonLinker : public Linker {
 public:
-    void build_plt_section(Section &plt) {
-        plt.set_alignment(128);
+    uint64_t add_got_entry(Section &got, const Symbol &sym) override {
+        uint64_t got_offset = got.get_contents().size();
+        got.append_contents((uint32_t)0);
+        got.add_relocation(Elf::Relocation(R_HEX_JMP_SLOT, got_offset, 0, &sym));
+        return got_offset;
+    }
+
+    bool needs_plt_entry(const Relocation &r) override {
+        return maybe_branch_inst(r.get_type());
+    }
+
+    void init_plt_section(Section &plt, Section &got) override {
+        plt.set_alignment(16);
         std::vector<char> contents(48, (char)0);
         // TODO: Make a .plt0 entry that supports lazy binding.
         plt.set_contents(contents);
     }
 
-    void add_plt_entry(Symbol &sym, Section &plt, Section &got) {
-        /*
-        debug(0) << "Adding PLT entry for symbol " << sym.get_name() << "\n";
-
+    // Add a PLT entry for the external symbol sym. plt_symbol gets
+    // the new symbol in the PLT.
+    Symbol add_plt_entry(const Symbol &sym, Section &plt, Section &got, const Symbol &got_sym) override {
         static const uint8_t hexagon_plt1[] = {
             0x00, 0x40, 0x00, 0x00, // { immext (#0) (Relocation:R_HEX_B32_PCREL_X)
             0x0e, 0xc0, 0x49, 0x6a, //   r14 = add (pc, ##GOTn@PCREL) }  (Relocation:R_HEX_6_PCREL_X)
@@ -442,30 +466,33 @@ public:
             0x00, 0xc0, 0x9c, 0x52, //   jumpr r28
         };
 
-        uint64_t offset = plt.get_size();
+        debug(0) << "Adding PLT entry for symbol " << sym.get_name() << "\n";
+
+        // Add a GOT entry for this symbol.
+        uint32_t got_offset = add_got_entry(got, sym);
+
+        // Add the PLT code.
+        uint32_t plt_offset = plt.get_size();
         plt.append_contents(hexagon_plt1, hexagon_plt1 + sizeof(hexagon_plt1));
 
-        // Make a new symbol for the GOT entry.
-        auto extern_sym = obj.add_symbol(sym.get_name());
-        uint64_t got_offset = got.get_size();
-        got.append_contents((uint32_t)0);
-        got.add_relocation(Elf::Relocation(R_HEX_JMP_SLOT, got_offset, 0, &*extern_sym));
-
-        // Point the old symbol to the PLT.
-        sym.set_name("plt_" + sym.get_name());
-        sym.define(&plt, offset, sizeof(hexagon_plt1));
+        Symbol plt_sym("plt_" + sym.get_name());
+        // Change sym to point to the PLT.
+        plt_sym
+            .set_type(Symbol::STT_FUNC)
+            .set_binding(Symbol::STB_LOCAL)
+            .define(&plt, plt_offset, sizeof(hexagon_plt1));
 
         // TODO: Fix these symbols/addends.
-        plt.add_relocation(Relocation(R_HEX_B32_PCREL_X, offset + 0, 0, 0));
-        plt.add_relocation(Relocation(R_HEX_6_PCREL_X, offset + 4, 0, 0));
-        */
+        plt.add_relocation(Relocation(R_HEX_B32_PCREL_X, plt_offset + 0, got_offset, &got_sym));
+        plt.add_relocation(Relocation(R_HEX_6_PCREL_X, plt_offset + 4, got_offset, &got_sym));
+
+        return plt_sym;
     }
 
-    void do_relocations(const Section &section, Section &got) {
-        for (auto i = section.relocations_begin(); i != section.relocations_end(); ++i) {
-            //char *fixup_addr = section.get_contents().data() + i->get_offset();
-            //do_relocation(i->get_offset() + i->r_offset, fixup_addr, obi, *i, got);
-        }
+    void relocate(uint64_t fixup_offset, char *fixup_addr,
+                  uint64_t type, uint64_t sym_offset, int64_t addend,
+                  Elf::Section &got) {
+        do_relocation(fixup_offset, fixup_addr, type, sym_offset, addend, got);
     }
 };
 

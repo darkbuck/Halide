@@ -17,6 +17,16 @@ class Symbol;
 class Section;
 class Relocation;
 
+template <typename T>
+class iterator_range {
+    T b, e;
+public:
+    iterator_range(T b, T e) : b(b), e(e) {}
+
+    T begin() const { return b; }
+    T end() const { return e; }
+};
+
 class Symbol {
 public:
     enum Binding {
@@ -39,7 +49,7 @@ public:
 
 private:
     std::string name;
-    Section *definition = nullptr;
+    const Section *definition = nullptr;
     uint64_t offset = 0;
     uint32_t size = 0;
     Binding binding = STB_LOCAL;
@@ -50,7 +60,6 @@ public:
     Symbol(const std::string &name) : name(name) {}
 
     const std::string &get_name() const { return name; }
-    Section *get_section() { return definition; }
     const Section *get_section() const { return definition; }
     uint64_t get_offset() const { return offset; }
     uint32_t get_size() const { return size; }
@@ -60,7 +69,7 @@ public:
 
     // Return reference to self to enable chaining of setters.
     Symbol &set_name(const std::string &name) { this->name = name; return *this; }
-    Symbol &define(Section *section, uint64_t offset, uint32_t size) {
+    Symbol &define(const Section *section, uint64_t offset, uint32_t size) {
         this->definition = section;
         this->offset = offset;
         this->size = size;
@@ -80,23 +89,22 @@ class Relocation {
     uint32_t type = 0;
     uint64_t offset = 0;
     int64_t addend = 0;
-    Symbol *symbol = nullptr;
+    const Symbol *symbol = nullptr;
 
 public:
     Relocation() {}
-    Relocation(uint32_t type, uint64_t offset, int64_t addend, Symbol *symbol)
+    Relocation(uint32_t type, uint64_t offset, int64_t addend, const Symbol *symbol)
         : type(type), offset(offset), addend(addend), symbol(symbol) {}
 
     uint32_t get_type() const { return type; }
     uint64_t get_offset() const { return offset; }
     int64_t get_addend() const { return addend; }
-    Symbol *get_symbol() { return symbol; }
     const Symbol *get_symbol() const { return symbol; }
 
     Relocation &set_type(uint32_t type) { this->type = type; return *this; }
     Relocation &set_offset(uint64_t offset) { this->offset = offset; return *this; }
     Relocation &set_addend(int64_t addend) { this->addend = addend; return *this; }
-    Relocation &set_symbol(Symbol *symbol) { this->symbol = symbol; return *this; }
+    Relocation &set_symbol(const Symbol *symbol) { this->symbol = symbol; return *this; }
 };
 
 class Section {
@@ -139,7 +147,7 @@ private:
     // Sections may have a size larger than the contents.
     uint32_t size = 0;
     uint32_t alignment = 1;
-    RelocationList relocations;
+    RelocationList relocs;
 
 public:
     Section() {}
@@ -152,9 +160,9 @@ public:
     Section &set_flags(uint32_t flags) { this->flags = flags; return *this; }
     Section &set_size(uint32_t size) { this->size = size; return *this; }
     Section &set_alignment(uint32_t alignment) { this->alignment = alignment; return *this; }
-    Section &set_relocations(std::vector<Relocation> relocations) { this->relocations = std::move(relocations); return *this; }
+    Section &set_relocations(std::vector<Relocation> relocs) { this->relocs = std::move(relocs); return *this; }
     template <typename It>
-    Section &set_relocations(It begin, It end) { this->relocations.assign(begin, end); return *this; }
+    Section &set_relocations(It begin, It end) { this->relocs.assign(begin, end); return *this; }
 
     Section &set_contents(std::vector<char> contents) { this->contents = std::move(contents); return *this; }
     template <typename T>
@@ -184,18 +192,39 @@ public:
     uint32_t get_alignment() const { return alignment; }
 
 
-    relocation_iterator relocations_begin() { return relocations.begin(); }
-    relocation_iterator relocations_end() { return relocations.end(); }
-    const_relocation_iterator relocations_begin() const { return relocations.begin(); }
-    const_relocation_iterator relocations_end() const { return relocations.end(); }
-    size_t relocations_size() const { return relocations.size(); }
-    void add_relocation(const Relocation &reloc) { relocations.push_back(reloc); }
+    relocation_iterator relocations_begin() { return relocs.begin(); }
+    relocation_iterator relocations_end() { return relocs.end(); }
+    iterator_range<relocation_iterator> relocations() { return {relocs.begin(), relocs.end()}; }
+    const_relocation_iterator relocations_begin() const { return relocs.begin(); }
+    const_relocation_iterator relocations_end() const { return relocs.end(); }
+    iterator_range<const_relocation_iterator> relocations() const { return {relocs.begin(), relocs.end()}; }
+    size_t relocations_size() const { return relocs.size(); }
+    void add_relocation(const Relocation &reloc) { relocs.push_back(reloc); }
 };
 
 class Linker {
 public:
-    virtual void add_plt_entry(Symbol &sym, Section &plt, Section &got) = 0;
-    virtual void do_relocations(const Section &section, Section &got) = 0;
+    // Add an entry to the global offset table (GOT) with a relocation
+    // pointing to sym.
+    virtual uint64_t add_got_entry(Section &got, const Symbol &sym) = 0;
+
+    // Check to see if this relocation should go through the PLT.
+    virtual bool needs_plt_entry(const Relocation &reloc) = 0;
+
+    // Start a procedure linkage table (PLT) section.
+    virtual void init_plt_section(Section &plt, Section &got) {}
+
+    // Add a PLT entry for a symbol defined externally. This function
+    // should define sym to point to the PLT, and declare a new
+    // extern_sym that the PLT entry calls.
+    virtual Symbol add_plt_entry(const Symbol &sym, Section &plt, Section &got,
+                                 const Symbol &got_sym) = 0;
+
+    // Perform a relocation.
+    virtual void relocate(uint64_t fixup_offset, char *fixup_addr,
+                          uint64_t type, uint64_t sym_offset, int64_t addend,
+                          Section &got) = 0;
+
 };
 
 class Object {
@@ -219,8 +248,8 @@ public:
     typedef typename SymbolList::const_iterator const_symbol_iterator;
 
 private:
-    SectionList sections;
-    SymbolList symbols;
+    SectionList secs;
+    SymbolList syms;
 
     Type type = ET_NONE;
     uint16_t machine = 0;
@@ -253,26 +282,30 @@ public:
     void dump();
 
     // Sections.
-    section_iterator sections_begin() { return sections.begin(); }
-    section_iterator sections_end() { return sections.end(); }
-    const_section_iterator sections_begin() const { return sections.begin(); }
-    const_section_iterator sections_end() const { return sections.end(); }
-    size_t sections_size() const { return sections.size(); }
+    section_iterator sections_begin() { return secs.begin(); }
+    section_iterator sections_end() { return secs.end(); }
+    iterator_range<section_iterator> sections() { return {secs.begin(), secs.end()}; }
+    const_section_iterator sections_begin() const { return secs.begin(); }
+    const_section_iterator sections_end() const { return secs.end(); }
+    iterator_range<const_section_iterator> sections() const { return {secs.begin(), secs.end()}; }
+    size_t sections_size() const { return secs.size(); }
     section_iterator find_section(const std::string &name);
 
     section_iterator add_section(const std::string &name, Section::Type type);
     section_iterator add_relocation_section(const Section &for_section);
-    section_iterator erase_section(section_iterator i) { return sections.erase(i); }
+    section_iterator erase_section(section_iterator i) { return secs.erase(i); }
 
     section_iterator merge_sections(const std::vector<section_iterator> &sections);
     section_iterator merge_text_sections();
 
     // Symbols.
-    symbol_iterator symbols_begin() { return symbols.begin(); }
-    symbol_iterator symbols_end() { return symbols.end(); }
-    const_symbol_iterator symbols_begin() const { return symbols.begin(); }
-    const_symbol_iterator symbols_end() const { return symbols.end(); }
-    size_t symbols_size() const { return symbols.size(); }
+    symbol_iterator symbols_begin() { return syms.begin(); }
+    symbol_iterator symbols_end() { return syms.end(); }
+    iterator_range<symbol_iterator> symbols() { return {syms.begin(), syms.end()}; }
+    const_symbol_iterator symbols_begin() const { return syms.begin(); }
+    const_symbol_iterator symbols_end() const { return syms.end(); }
+    iterator_range<const_symbol_iterator> symbols() const { return {syms.begin(), syms.end()}; }
+    size_t symbols_size() const { return syms.size(); }
     symbol_iterator find_symbol(const std::string &name);
 
     symbol_iterator add_symbol(const std::string &name);
