@@ -206,6 +206,13 @@ void IRVisitor::visit(const Realize *op) {
     op->body.accept(this);
 }
 
+void IRVisitor::visit(const Prefetch *op) {
+    for (size_t i = 0; i < op->bounds.size(); i++) {
+        op->bounds[i].min.accept(this);
+        op->bounds[i].extent.accept(this);
+    }
+}
+
 void IRVisitor::visit(const Block *op) {
     op->first.accept(this);
     if (op->rest.defined()) {
@@ -223,6 +230,12 @@ void IRVisitor::visit(const IfThenElse *op) {
 
 void IRVisitor::visit(const Evaluate *op) {
     op->value.accept(this);
+}
+
+void IRVisitor::visit(const Shuffle *op) {
+    for (Expr i : op->vectors) {
+        i.accept(this);
+    }
 }
 
 void IRGraphVisitor::include(const Expr &e) {
@@ -432,6 +445,13 @@ void IRGraphVisitor::visit(const Realize *op) {
     include(op->body);
 }
 
+void IRGraphVisitor::visit(const Prefetch *op) {
+    for (size_t i = 0; i < op->bounds.size(); i++) {
+        include(op->bounds[i].min);
+        include(op->bounds[i].extent);
+    }
+}
+
 void IRGraphVisitor::visit(const Block *op) {
     include(op->first);
     if (op->rest.defined()) include(op->rest);
@@ -447,6 +467,12 @@ void IRGraphVisitor::visit(const IfThenElse *op) {
 
 void IRGraphVisitor::visit(const Evaluate *op) {
     include(op->value);
+}
+
+void IRGraphVisitor::visit(const Shuffle *op) {
+    for (Expr i : op->vectors) {
+        include(i);
+    }
 }
 
 }

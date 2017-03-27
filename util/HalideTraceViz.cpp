@@ -30,9 +30,6 @@ using std::string;
 using std::queue;
 using std::array;
 
-// The first 48 bytes of a tracing packet are metadata
-const int packet_header_size = 48;
-
 // A struct representing a single Halide tracing packet.
 struct Packet : public halide_trace_packet_t {
     // Not all of this will be used, but this
@@ -587,7 +584,7 @@ int run(int argc, char **argv) {
                 }
             }
 
-            if (p.event == 1) {
+            if (p.event == halide_trace_store) {
                 // Stores take time proportional to the number of
                 // items stored times the cost of the func.
                 halide_clock += fi.config.cost * p.type.lanes;
@@ -613,7 +610,7 @@ int run(int argc, char **argv) {
                     }
 
                     // Stores are orange, loads are blue.
-                    uint32_t color = p.event == 0 ? 0xffffdd44 : 0xff44ddff;
+                    uint32_t color = p.event == halide_trace_load ? 0xffffdd44 : 0xff44ddff;
 
                     uint32_t image_color;
                     bool update_image = false;
@@ -621,7 +618,8 @@ int run(int argc, char **argv) {
                     // Update one or more of the color channels of the
                     // image layer in case it's a store or a load from
                     // the input.
-                    if (true /** TODO: only do this if it's a store or load from the input */) {
+                    if (p.event == halide_trace_store ||
+                        fi.stats.num_realizations == 0 /* load from an input */) {
                         update_image = true;
                         // Get the old color, in case we're only
                         // updating one of the color channels.

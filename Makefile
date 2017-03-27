@@ -9,6 +9,8 @@
 #     For correctness and performance tests this include halide build time and run time. For
 #     the tests in test/generator/ this times only the halide build time.
 
+UNAME = $(shell uname)
+
 ifeq ($(OS), Windows_NT)
     # assume we are building for the MinGW environment
     LIBDL =
@@ -17,8 +19,12 @@ ifeq ($(OS), Windows_NT)
 else
     # let's assume "normal" UNIX such as linux
     LIBDL=-ldl
-    SHARED_EXT=so
     FPIC=-fPIC
+ifeq ($(UNAME), Darwin)
+    SHARED_EXT=dylib
+else
+    SHARED_EXT=so
+endif
 endif
 
 SHELL = bash
@@ -35,7 +41,7 @@ LLVM_BINDIR = $(shell $(LLVM_CONFIG) --bindir | sed -e 's/\\/\//g' -e 's/\([a-zA
 LLVM_LIBDIR = $(shell $(LLVM_CONFIG) --libdir | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g')
 LLVM_AS = $(LLVM_BINDIR)/llvm-as
 LLVM_NM = $(LLVM_BINDIR)/llvm-nm
-LLVM_CXX_FLAGS = -std=c++11  $(filter-out -O% -g -fomit-frame-pointer -pedantic -W% -W, $(shell $(LLVM_CONFIG) --cxxflags | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g'))
+LLVM_CXX_FLAGS = -std=c++11  $(filter-out -O% -g -fomit-frame-pointer -pedantic -W% -W, $(shell $(LLVM_CONFIG) --cxxflags | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g;s/-D/ -D/g;s/-O/ -O/g'))
 OPTIMIZE ?= -O3
 # This can be set to -m32 to get a 32-bit build of Halide on a 64-bit system.
 # (Normally this can be done via pointing to a compiler that defaults to 32-bits,
@@ -139,8 +145,6 @@ LLVM_STATIC_LIBS = -L $(LLVM_LIBDIR) $(shell $(LLVM_CONFIG) --libs bitwriter bit
 
 LLVM_LD_FLAGS = $(shell $(LLVM_CONFIG) --ldflags --system-libs | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g')
 
-UNAME = $(shell uname)
-
 TUTORIAL_CXX_FLAGS ?= -std=c++11 $(BUILD_BIT_SIZE) -g -fno-omit-frame-pointer -fno-rtti -I $(ROOT_DIR)/tools
 # The tutorials contain example code with warnings that we don't want
 # to be flagged as errors, so the test flags are the tutorial flags
@@ -148,16 +152,24 @@ TUTORIAL_CXX_FLAGS ?= -std=c++11 $(BUILD_BIT_SIZE) -g -fno-omit-frame-pointer -f
 TEST_CXX_FLAGS ?= $(TUTORIAL_CXX_FLAGS) $(CXX_WARNING_FLAGS)
 TEST_LD_FLAGS = -L$(BIN_DIR) -lHalide -lpthread $(LIBDL) -lz
 
+# gcc 4.8 fires a bogus warning on old versions of png.h
+CXX_VERSION = $(shell $(CXX) --version | head -n1)
+ifneq (,$(findstring g++,$(CXX_VERSION)))
+ifneq (,$(findstring 4.8,$(CXX_VERSION)))
+TEST_CXX_FLAGS += -Wno-literal-suffix
+endif
+endif
+
 ifeq ($(UNAME), Linux)
 TEST_LD_FLAGS += -rdynamic -Wl,--rpath=$(CURDIR)/$(BIN_DIR)
 endif
 
 ifneq ($(WITH_PTX), )
 ifneq (,$(findstring ptx,$(HL_TARGET)))
-TEST_PTX = 1
+TEST_CUDA = 1
 endif
 ifneq (,$(findstring cuda,$(HL_TARGET)))
-TEST_PTX = 1
+TEST_CUDA = 1
 endif
 endif
 
@@ -174,7 +186,7 @@ endif
 endif
 
 ifeq ($(UNAME), Linux)
-ifneq ($(TEST_PTX), )
+ifneq ($(TEST_CUDA), )
 CUDA_LD_FLAGS ?= -L/usr/lib/nvidia-current -lcuda
 endif
 ifneq ($(TEST_OPENCL), )
@@ -186,7 +198,7 @@ endif
 
 ifeq ($(UNAME), Darwin)
 # Someone with an osx box with cuda installed please fix the line below
-ifneq ($(TEST_PTX), )
+ifneq ($(TEST_CUDA), )
 CUDA_LD_FLAGS ?= -L/usr/local/cuda/lib -lcuda
 endif
 ifneq ($(TEST_OPENCL), )
@@ -207,8 +219,8 @@ ifneq ($(TEST_METAL), )
 TEST_CXX_FLAGS += -DTEST_METAL
 endif
 
-ifneq ($(TEST_PTX), )
-TEST_CXX_FLAGS += -DTEST_PTX
+ifneq ($(TEST_CUDA), )
+TEST_CXX_FLAGS += -DTEST_CUDA
 endif
 
 # Compiling the tutorials requires libpng
@@ -222,11 +234,23 @@ endif
 endif
 LIBPNG_LIBS ?= $(LIBPNG_LIBS_DEFAULT)
 
+LIBJPEG_LIBS ?= -ljpeg
+
+# There's no libjpeg-config, unfortunately. We should look for
+# jpeglib.h one directory level up from png.h
+LIBPNG_INCLUDE_DIRS = $(filter -I%,$(LIBPNG_CXX_FLAGS))
+LIBJPEG_CXX_FLAGS ?= $(LIBPNG_INCLUDE_DIRS:=/..)
+
+IMAGE_IO_LIBS = $(LIBPNG_LIBS) $(LIBJPEG_LIBS)
+IMAGE_IO_CXX_FLAGS = $(LIBPNG_CXX_FLAGS) $(LIBJPEG_CXX_FLAGS)
+
 # We're building into the current directory $(CURDIR). Find the Halide
 # repo root directory (the location of the makefile)
 THIS_MAKEFILE = $(realpath $(filter %Makefile, $(MAKEFILE_LIST)))
 ROOT_DIR = $(strip $(shell dirname $(THIS_MAKEFILE)))
 SRC_DIR  = $(ROOT_DIR)/src
+
+TARGET=$(if $(HL_TARGET),$(HL_TARGET),host)
 
 # The following directories are all relative to the output directory (i.e. $(CURDIR), not $(SRC_DIR))
 LIB_DIR     = lib
@@ -235,8 +259,7 @@ DISTRIB_DIR = distrib
 INCLUDE_DIR = include
 DOC_DIR     = doc
 BUILD_DIR   = $(BIN_DIR)/build
-FILTERS_DIR = $(BUILD_DIR)/filters
-RUNTIMES_DIR = $(BUILD_DIR)/runtimes
+FILTERS_DIR = $(BIN_DIR)/$(TARGET)/build
 TMP_DIR     = $(BUILD_DIR)/tmp
 
 SOURCE_FILES = \
@@ -359,7 +382,8 @@ SOURCE_FILES = \
   Var.cpp \
   VaryingAttributes.cpp \
   VectorizeLoops.cpp \
-  WrapCalls.cpp
+  WrapCalls.cpp \
+  WrapExternStages.cpp
 
 # The externally-visible header files that go into making Halide.h. Don't include anything here that includes llvm headers.
 HEADER_FILES = \
@@ -481,6 +505,7 @@ HEADER_FILES = \
   StorageFolding.h \
   Substitute.h \
   Target.h \
+  ThreadPool.h \
   Tracing.h \
   TrimNoOps.h \
   Tuple.h \
@@ -492,7 +517,8 @@ HEADER_FILES = \
   Var.h \
   VaryingAttributes.h \
   VectorizeLoops.h \
-  WrapCalls.h
+  WrapCalls.h \
+  WrapExternStages.h
 
 OBJECTS = $(SOURCE_FILES:%.cpp=$(BUILD_DIR)/%.o)
 HEADERS = $(HEADER_FILES:%.h=$(SRC_DIR)/%.h)
@@ -533,6 +559,7 @@ RUNTIME_CPP_COMPONENTS = \
   msan \
   msan_stubs \
   noos \
+  old_buffer_t \
   opencl \
   opengl \
   openglcompute \
@@ -549,6 +576,7 @@ RUNTIME_CPP_COMPONENTS = \
   posix_tempfile \
   posix_threads \
   powerpc_cpu_features \
+  prefetch \
   profiler \
   profiler_inlined \
   qurt_allocator \
@@ -597,6 +625,8 @@ INITIAL_MODULES = $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_32.o) \
                   $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_64.o) \
                   $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_32_debug.o) \
                   $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_64_debug.o) \
+                  $(RUNTIME_EXPORTED_INCLUDES:$(INCLUDE_DIR)/%.h=$(BUILD_DIR)/initmod.%_h.o) \
+                  $(BUILD_DIR)/initmod.inlined_c.o \
                   $(RUNTIME_LL_COMPONENTS:%=$(BUILD_DIR)/initmod.%_ll.o) \
                   $(PTX_DEVICE_INITIAL_MODULES:libdevice.%.bc=$(BUILD_DIR)/initmod_ptx.%_ll.o)
 
@@ -712,6 +742,13 @@ $(BUILD_DIR)/initmod.%.bc: $(BUILD_DIR)/initmod.%.ll $(BUILD_DIR)/llvm_ok
 $(BUILD_DIR)/initmod.%.cpp: $(BIN_DIR)/binary2cpp $(BUILD_DIR)/initmod.%.bc
 	./$(BIN_DIR)/binary2cpp initmod_$* < $(BUILD_DIR)/initmod.$*.bc > $@
 
+$(BUILD_DIR)/initmod.%_h.cpp: $(BIN_DIR)/binary2cpp $(SRC_DIR)/runtime/%.h
+	./$(BIN_DIR)/binary2cpp runtime_header_$*_h < $(SRC_DIR)/runtime/$*.h > $@
+
+# Any c in the runtime that must be inlined needs to be copy-pasted into the output for the C backend.
+$(BUILD_DIR)/initmod.inlined_c.cpp: $(BIN_DIR)/binary2cpp $(SRC_DIR)/runtime/buffer_t.cpp
+	./$(BIN_DIR)/binary2cpp initmod_inlined_c < $(SRC_DIR)/runtime/buffer_t.cpp > $@
+
 $(BUILD_DIR)/initmod_ptx.%_ll.cpp: $(BIN_DIR)/binary2cpp $(SRC_DIR)/runtime/nvidia_libdevice_bitcode/libdevice.%.bc
 	./$(BIN_DIR)/binary2cpp initmod_ptx_$(basename $*)_ll < $(SRC_DIR)/runtime/nvidia_libdevice_bitcode/libdevice.$*.bc > $@
 
@@ -736,7 +773,6 @@ clean:
 	rm -rf $(BUILD_DIR)/*
 	rm -rf $(TMP_DIR)/*
 	rm -rf $(FILTERS_DIR)/*
-	rm -rf $(RUNTIMES_DIR)/*
 	rm -rf $(INCLUDE_DIR)/*
 	rm -rf $(DOC_DIR)/*
 
@@ -749,6 +785,8 @@ WARNING_TESTS = $(shell ls $(ROOT_DIR)/test/warning/*.cpp)
 OPENGL_TESTS := $(shell ls $(ROOT_DIR)/test/opengl/*.cpp)
 GENERATOR_EXTERNAL_TESTS := $(shell ls $(ROOT_DIR)/test/generator/*test.cpp)
 TUTORIALS = $(filter-out %_generate.cpp, $(shell ls $(ROOT_DIR)/tutorial/*.cpp))
+
+-include $(OPENGL_TESTS:$(ROOT_DIR)/test/opengl/%.cpp=$(BUILD_DIR)/test_opengl_%.d)
 
 test_correctness: $(CORRECTNESS_TESTS:$(ROOT_DIR)/test/correctness/%.cpp=correctness_%) $(CORRECTNESS_TESTS:$(ROOT_DIR)/test/correctness/%.c=correctness_%)
 test_performance: $(PERFORMANCE_TESTS:$(ROOT_DIR)/test/performance/%.cpp=performance_%)
@@ -788,25 +826,25 @@ build_tests: $(CORRECTNESS_TESTS:$(ROOT_DIR)/test/correctness/%.cpp=$(BIN_DIR)/c
 	$(ERROR_TESTS:$(ROOT_DIR)/test/error/%.cpp=$(BIN_DIR)/error_%) \
 	$(WARNING_TESTS:$(ROOT_DIR)/test/warning/%.cpp=$(BIN_DIR)/warning_%) \
 	$(OPENGL_TESTS:$(ROOT_DIR)/test/opengl/%.cpp=$(BIN_DIR)/opengl_%) \
-	$(GENERATOR_EXTERNAL_TESTS:$(ROOT_DIR)/test/generator/%_aottest.cpp=$(BIN_DIR)/generator_aot_%) \
+	$(GENERATOR_EXTERNAL_TESTS:$(ROOT_DIR)/test/generator/%_aottest.cpp=$(BIN_DIR)/$(TARGET)/generator_aot_%) \
 	$(GENERATOR_EXTERNAL_TESTS:$(ROOT_DIR)/test/generator/%_jittest.cpp=$(BIN_DIR)/generator_jit_%)
 
 time_compilation_tests: time_compilation_correctness time_compilation_performance time_compilation_generators
 
 LIBHALIDE_DEPS ?= $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
 
-$(BIN_DIR)/GenGen.o: $(ROOT_DIR)/tools/GenGen.cpp $(INCLUDE_DIR)/Halide.h
-	@mkdir -p $(BIN_DIR)
+$(BUILD_DIR)/GenGen.o: $(ROOT_DIR)/tools/GenGen.cpp $(INCLUDE_DIR)/Halide.h
+	@mkdir -p $(BUILD_DIR)
 	$(CXX) -c $< $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -o $@
 
 # Make an empty generator for generating runtimes.
-$(BIN_DIR)/runtime.generator: $(BIN_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT)
+$(BIN_DIR)/runtime.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT)
 	$(CXX) $< $(TEST_LD_FLAGS) -o $@
 
 # Generate a standalone runtime for a given target string
-$(RUNTIMES_DIR)/runtime_%.a: $(BIN_DIR)/runtime.generator
-	@mkdir -p $(RUNTIMES_DIR)
-	$(CURDIR)/$< -r $(basename $(notdir $@)) -o $(CURDIR)/$(RUNTIMES_DIR) target=$*
+$(BIN_DIR)/%/runtime.a: $(BIN_DIR)/runtime.generator
+	@mkdir -p $(BIN_DIR)/$*
+	$(CURDIR)/$< -r runtime -o $(CURDIR)/$(BIN_DIR)/$* target=$*
 
 $(BIN_DIR)/test_internal: $(ROOT_DIR)/test/internal.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT)
 	$(CXX) $(TEST_CXX_FLAGS) $< -I$(SRC_DIR) $(TEST_LD_FLAGS) -o $@
@@ -835,6 +873,11 @@ endif
 $(BIN_DIR)/correctness_halide_buffer: $(ROOT_DIR)/test/correctness/halide_buffer.cpp $(INCLUDE_DIR)/HalideBuffer.h $(RUNTIME_EXPORTED_INCLUDES)
 	$(CXX) $(TEST_CXX_FLAGS) $(OPTIMIZE) $< -I$(INCLUDE_DIR) $(WEAK_BUFFER_LINKAGE_FLAGS) -o $@
 
+# The image_io test additionally needs to link to libpng and
+# libjpeg.
+$(BIN_DIR)/correctness_image_io: $(ROOT_DIR)/test/correctness/image_io.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(RUNTIME_EXPORTED_INCLUDES)
+	$(CXX) $(TEST_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) -I$(ROOT_DIR) $(OPTIMIZE) $< -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
+
 $(BIN_DIR)/performance_%: $(ROOT_DIR)/test/performance/%.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(ROOT_DIR)/apps/support/benchmark.h
 	$(CXX) $(TEST_CXX_FLAGS) $(OPTIMIZE) $< -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) -o $@
 
@@ -846,7 +889,7 @@ $(BIN_DIR)/warning_%: $(ROOT_DIR)/test/warning/%.cpp $(BIN_DIR)/libHalide.$(SHAR
 	$(CXX) $(TEST_CXX_FLAGS) $(OPTIMIZE) $< -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) -o $@
 
 $(BIN_DIR)/opengl_%: $(ROOT_DIR)/test/opengl/%.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
-	$(CXX) $(TEST_CXX_FLAGS) $(OPTIMIZE) $< -I$(INCLUDE_DIR) -I$(SRC_DIR) $(TEST_LD_FLAGS) $(OPENGL_LD_FLAGS) -o $@
+	$(CXX) $(TEST_CXX_FLAGS) $(OPTIMIZE) $< -I$(INCLUDE_DIR) -I$(SRC_DIR) $(TEST_LD_FLAGS) $(OPENGL_LD_FLAGS) -o $@ -MMD -MF $(BUILD_DIR)/test_opengl_$*.d
 
 
 # TODO(srj): this doesn't auto-delete, why not?
@@ -855,22 +898,21 @@ $(BIN_DIR)/opengl_%: $(ROOT_DIR)/test/opengl/%.cpp $(BIN_DIR)/libHalide.$(SHARED
 # By default, %.generator is produced by building %_generator.cpp
 # Note that the rule includes all _generator.cpp files, so that generators with define_extern
 # usage can just add deps later.
-$(BIN_DIR)/%_generator.o: $(ROOT_DIR)/test/generator/%_generator.cpp $(INCLUDE_DIR)/Halide.h
+$(BUILD_DIR)/%_generator.o: $(ROOT_DIR)/test/generator/%_generator.cpp $(INCLUDE_DIR)/Halide.h
 	@mkdir -p $(BIN_DIR)
 	$(CXX) $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -I$(CURDIR)/$(FILTERS_DIR) -c $< -o $@
 
-$(BIN_DIR)/%.generator: $(BIN_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BIN_DIR)/%_generator.o
+$(BIN_DIR)/%.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/%_generator.o
 	@mkdir -p $(BIN_DIR)
 	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
 
-NON_EMPTY_TARGET=$(if $(HL_TARGET),$(HL_TARGET),host)
 NAME_MANGLING_TARGET=$(NON_EMPTY_TARGET)-c_plus_plus_name_mangling
 
 # By default, %.a/.h are produced by executing %.generator. Runtimes are not included in these.
 $(FILTERS_DIR)/%.a: $(BIN_DIR)/%.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -g $* -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime
+	cd $(TMP_DIR); $(CURDIR)/$< -g $* -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime
 
 $(FILTERS_DIR)/%.h: $(FILTERS_DIR)/%.a
 	@echo $@ produced implicitly by $^
@@ -885,7 +927,7 @@ $(FILTERS_DIR)/%.stub.h: $(BIN_DIR)/%.generator
 $(FILTERS_DIR)/cxx_mangling.a: $(BIN_DIR)/cxx_mangling.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime-c_plus_plus_name_mangling -f "HalideTest::cxx_mangling"
+	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime-c_plus_plus_name_mangling -f "HalideTest::cxx_mangling"
 
 # Also build with a gpu target to ensure that the GPU-Host generation
 # code handles name mangling properly. (Note that we don't need to
@@ -893,22 +935,23 @@ $(FILTERS_DIR)/cxx_mangling.a: $(BIN_DIR)/cxx_mangling.generator
 $(FILTERS_DIR)/cxx_mangling_gpu.a: $(BIN_DIR)/cxx_mangling.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime-c_plus_plus_name_mangling-cuda -f "HalideTest::cxx_mangling_gpu"
+	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime-c_plus_plus_name_mangling-cuda -f "HalideTest::cxx_mangling_gpu"
 
 $(FILTERS_DIR)/cxx_mangling_define_extern.a: $(BIN_DIR)/cxx_mangling_define_extern.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime-c_plus_plus_name_mangling-user_context -f "HalideTest::cxx_mangling_define_extern"
+	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime-c_plus_plus_name_mangling-user_context -f "HalideTest::cxx_mangling_define_extern"
 
 # pyramid needs a custom arg
 $(FILTERS_DIR)/pyramid.a: $(BIN_DIR)/pyramid.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -f pyramid -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET) levels=10
+	cd $(TMP_DIR); $(CURDIR)/$< -f pyramid -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET) levels=10
 
 METADATA_TESTER_GENERATOR_ARGS=\
 	input.type=uint8 input.dim=3 \
-	semityped_input_buffer.dim=3 \
+	type_only_input_buffer.dim=3 \
+	dim_only_input_buffer.type=uint8 \
 	untyped_input_buffer.type=uint8 untyped_input_buffer.dim=3 \
 	output.type=float32,float32 output.dim=3 \
 	input_not_nod.type=uint8 input_not_nod.dim=3 \
@@ -925,46 +968,47 @@ METADATA_TESTER_GENERATOR_ARGS=\
 $(FILTERS_DIR)/metadata_tester.a: $(BIN_DIR)/metadata_tester.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -f metadata_tester -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime $(METADATA_TESTER_GENERATOR_ARGS)
+	cd $(TMP_DIR); $(CURDIR)/$< -f metadata_tester -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime $(METADATA_TESTER_GENERATOR_ARGS)
 
 $(FILTERS_DIR)/metadata_tester_ucon.a: $(BIN_DIR)/metadata_tester.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -f metadata_tester_ucon -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-user_context-no_runtime $(METADATA_TESTER_GENERATOR_ARGS)
+	cd $(TMP_DIR); $(CURDIR)/$< -f metadata_tester_ucon -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-user_context-no_runtime $(METADATA_TESTER_GENERATOR_ARGS)
 
-$(BIN_DIR)/generator_aot_metadata_tester: $(FILTERS_DIR)/metadata_tester_ucon.a
+$(BIN_DIR)/$(TARGET)/generator_aot_metadata_tester: $(FILTERS_DIR)/metadata_tester_ucon.a
 
 $(FILTERS_DIR)/multitarget.a: $(BIN_DIR)/multitarget.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(LD_PATH_SETUP) $(CURDIR)/$< -f "HalideTest::multitarget" -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-debug-no_runtime-c_plus_plus_name_mangling,$(HL_TARGET)-no_runtime-c_plus_plus_name_mangling  -e assembly,bitcode,cpp,h,html,static_library,stmt
+	cd $(TMP_DIR); $(LD_PATH_SETUP) $(CURDIR)/$< -f "HalideTest::multitarget" -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-debug-no_runtime-c_plus_plus_name_mangling,$(TARGET)-no_runtime-c_plus_plus_name_mangling  -e assembly,bitcode,cpp,h,html,static_library,stmt
 
 $(FILTERS_DIR)/msan.a: $(BIN_DIR)/msan.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(LD_PATH_SETUP) $(CURDIR)/$< -f msan -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-msan
+	cd $(TMP_DIR); $(LD_PATH_SETUP) $(CURDIR)/$< -f msan -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-msan
 
 # MSAN test doesn't use the standard runtime
-$(BIN_DIR)/generator_aot_msan: $(ROOT_DIR)/test/generator/msan_aottest.cpp $(FILTERS_DIR)/msan.a $(FILTERS_DIR)/msan.h $(RUNTIME_EXPORTED_INCLUDES)
+$(BIN_DIR)/$(TARGET)/generator_aot_msan: $(ROOT_DIR)/test/generator/msan_aottest.cpp $(FILTERS_DIR)/msan.a $(FILTERS_DIR)/msan.h $(RUNTIME_EXPORTED_INCLUDES)
+	@mkdir -p $(BIN_DIR)/$(TARGET)
 	$(CXX) $(TEST_CXX_FLAGS) $(filter-out %.h,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools -lpthread $(LIBDL) -o $@
 
 # user_context needs to be generated with user_context as the first argument to its calls
 $(FILTERS_DIR)/user_context.a: $(BIN_DIR)/user_context.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime-user_context
+	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime-user_context
 
 # ditto for user_context_insanity
 $(FILTERS_DIR)/user_context_insanity.a: $(BIN_DIR)/user_context_insanity.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime-user_context
+	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime-user_context
 
 # matlab needs to be generated with matlab in TARGET
 $(FILTERS_DIR)/matlab.a: $(BIN_DIR)/matlab.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime-matlab
+	cd $(TMP_DIR); $(CURDIR)/$< -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime-matlab
 
 # Some .generators have additional dependencies (usually due to define_extern usage).
 # These typically require two extra dependencies:
@@ -973,12 +1017,12 @@ $(FILTERS_DIR)/matlab.a: $(BIN_DIR)/matlab.generator
 
 # TODO(srj): we really want to say "anything that depends on tiled_blur.a also depends on tiled_blur_blur.a";
 # is there a way to specify that in Make?
-$(BIN_DIR)/generator_aot_tiled_blur: $(FILTERS_DIR)/tiled_blur_blur.a
-$(BIN_DIR)/generator_aot_cxx_mangling: $(FILTERS_DIR)/cxx_mangling_gpu.a
-$(BIN_DIR)/generator_aot_cxx_mangling_define_extern: $(FILTERS_DIR)/cxx_mangling.a
+$(BIN_DIR)/$(TARGET)/generator_aot_tiled_blur: $(FILTERS_DIR)/tiled_blur_blur.a
+$(BIN_DIR)/$(TARGET)/generator_aot_cxx_mangling: $(FILTERS_DIR)/cxx_mangling_gpu.a
+$(BIN_DIR)/$(TARGET)/generator_aot_cxx_mangling_define_extern: $(FILTERS_DIR)/cxx_mangling.a
 
-$(BIN_DIR)/stubuser_generator.o: $(FILTERS_DIR)/stubtest.stub.h
-$(BIN_DIR)/stubuser.generator: $(BIN_DIR)/stubtest_generator.o
+$(BUILD_DIR)/stubuser_generator.o: $(FILTERS_DIR)/stubtest.stub.h
+$(BIN_DIR)/stubuser.generator: $(BUILD_DIR)/stubtest_generator.o
 
 # stubtest has input and output funcs with undefined types and array sizes; this is fine for stub
 # usage (the types can be inferred), but for AOT compilation, we must make the types
@@ -993,7 +1037,7 @@ STUBTEST_GENERATOR_ARGS=\
 $(FILTERS_DIR)/stubtest.a: $(BIN_DIR)/stubtest.generator
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -f stubtest -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime $(STUBTEST_GENERATOR_ARGS)
+	cd $(TMP_DIR); $(CURDIR)/$< -f stubtest -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime $(STUBTEST_GENERATOR_ARGS)
 
 # Usually, it's considered best practice to have one Generator per
 # .cpp file, with the generator-name and filename matching;
@@ -1003,32 +1047,37 @@ $(FILTERS_DIR)/stubtest.a: $(BIN_DIR)/stubtest.generator
 # all have the form nested_externs_*).
 $(FILTERS_DIR)/nested_externs_%.a: $(BIN_DIR)/nested_externs.generator
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR); $(CURDIR)/$< -g nested_externs_$* -o $(CURDIR)/$(FILTERS_DIR) target=$(HL_TARGET)-no_runtime
+	cd $(TMP_DIR); $(CURDIR)/$< -g nested_externs_$* -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime
 
-$(BIN_DIR)/generator_aot_nested_externs: $(ROOT_DIR)/test/generator/nested_externs_aottest.cpp $(FILTERS_DIR)/nested_externs_root.a $(FILTERS_DIR)/nested_externs_inner.a $(FILTERS_DIR)/nested_externs_combine.a $(FILTERS_DIR)/nested_externs_leaf.a $(RUNTIME_EXPORTED_INCLUDES) $(RUNTIMES_DIR)/runtime_$(HL_TARGET).a
+$(BIN_DIR)/$(TARGET)/generator_aot_nested_externs: $(ROOT_DIR)/test/generator/nested_externs_aottest.cpp $(FILTERS_DIR)/nested_externs_root.a $(FILTERS_DIR)/nested_externs_inner.a $(FILTERS_DIR)/nested_externs_combine.a $(FILTERS_DIR)/nested_externs_leaf.a $(RUNTIME_EXPORTED_INCLUDES) $(BIN_DIR)/$(TARGET)/runtime.a
+	@mkdir -p $(BIN_DIR)/$(TARGET)
 	$(CXX) $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools -lpthread $(LIBDL) -o $@
 
 # By default, %_aottest.cpp depends on $(FILTERS_DIR)/%.a/.h (but not libHalide).
-$(BIN_DIR)/generator_aot_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(FILTERS_DIR)/%.a $(FILTERS_DIR)/%.h $(RUNTIME_EXPORTED_INCLUDES) $(RUNTIMES_DIR)/runtime_$(HL_TARGET).a
+$(BIN_DIR)/$(TARGET)/generator_aot_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(FILTERS_DIR)/%.a $(FILTERS_DIR)/%.h $(RUNTIME_EXPORTED_INCLUDES) $(BIN_DIR)/$(TARGET)/runtime.a
+	@mkdir -p $(BIN_DIR)/$(TARGET)
 	$(CXX) $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I$(ROOT_DIR) -I $(ROOT_DIR)/apps/support -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools -lpthread $(LIBDL) -o $@
 
-$(BIN_DIR)/generator_aot_multitarget: $(ROOT_DIR)/test/generator/multitarget_aottest.cpp $(FILTERS_DIR)/multitarget.a $(FILTERS_DIR)/multitarget.h $(RUNTIME_EXPORTED_INCLUDES) $(RUNTIMES_DIR)/runtime_$(HL_TARGET).a
+$(BIN_DIR)/$(TARGET)/generator_aot_multitarget: $(ROOT_DIR)/test/generator/multitarget_aottest.cpp $(FILTERS_DIR)/multitarget.a $(FILTERS_DIR)/multitarget.h $(RUNTIME_EXPORTED_INCLUDES) $(BIN_DIR)/$(TARGET)/runtime.a
+	@mkdir -p $(BIN_DIR)/$(TARGET)
 	$(CXX) $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools -lpthread $(LIBDL) -o $@
 
 # The matlab tests needs "-matlab" in the runtime
-$(BIN_DIR)/generator_aot_matlab: $(ROOT_DIR)/test/generator/matlab_aottest.cpp $(FILTERS_DIR)/matlab.a $(FILTERS_DIR)/matlab.h $(RUNTIME_EXPORTED_INCLUDES) $(RUNTIMES_DIR)/runtime_$(HL_TARGET)-matlab.a
+$(BIN_DIR)/$(TARGET)/generator_aot_matlab: $(ROOT_DIR)/test/generator/matlab_aottest.cpp $(FILTERS_DIR)/matlab.a $(FILTERS_DIR)/matlab.h $(RUNTIME_EXPORTED_INCLUDES) $(BIN_DIR)/$(TARGET)-matlab/runtime.a
+	@mkdir -p $(BIN_DIR)/$(TARGET)
 	$(CXX) $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools -lpthread $(LIBDL) $(TEST_LD_FLAGS) -o $@
 
 # acquire_release is the only test that explicitly uses CUDA/OpenCL APIs, so link only those here.
-$(BIN_DIR)/generator_aot_acquire_release: $(ROOT_DIR)/test/generator/acquire_release_aottest.cpp $(FILTERS_DIR)/acquire_release.a $(FILTERS_DIR)/acquire_release.h $(RUNTIME_EXPORTED_INCLUDES) $(RUNTIMES_DIR)/runtime_$(HL_TARGET).a
+$(BIN_DIR)/$(TARGET)/generator_aot_acquire_release: $(ROOT_DIR)/test/generator/acquire_release_aottest.cpp $(FILTERS_DIR)/acquire_release.a $(FILTERS_DIR)/acquire_release.h $(RUNTIME_EXPORTED_INCLUDES) $(BIN_DIR)/$(TARGET)/runtime.a
+	@mkdir -p $(BIN_DIR)/$(TARGET)
 	$(CXX) $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools -lpthread $(LIBDL) $(OPENCL_LD_FLAGS) $(CUDA_LD_FLAGS) -o $@
 
 # By default, %_jittest.cpp depends on libHalide, plus the stubs for the Generator. These are external tests that use the JIT.
-$(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(FILTERS_DIR)/%.stub.h $(BIN_DIR)/%_generator.o
+$(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(FILTERS_DIR)/%.stub.h $(BUILD_DIR)/%_generator.o
 	$(CXX) -g $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support $(TEST_LD_FLAGS) -o $@
 
 # generator_aot_multitarget is run multiple times, with different env vars.
-generator_aot_multitarget: $(BIN_DIR)/generator_aot_multitarget
+generator_aot_multitarget: $(BIN_DIR)/$(TARGET)/generator_aot_multitarget
 	@mkdir -p $(FILTERS_DIR)
 	@-mkdir -p $(TMP_DIR)
 	cd $(TMP_DIR) ; HL_MULTITARGET_TEST_USE_DEBUG_FEATURE=0 $(LD_PATH_SETUP) $(CURDIR)/$<
@@ -1045,16 +1094,16 @@ $(BIN_DIR)/tutorial_%: $(ROOT_DIR)/tutorial/%.cpp $(BIN_DIR)/libHalide.$(SHARED_
 		export TUTORIAL=$* ;\
 		export LESSON=`echo $${TUTORIAL} | cut -b1-9`; \
 		make -f $(THIS_MAKEFILE) tutorial_$${TUTORIAL/run/generate}; \
-		$(CXX) $(TUTORIAL_CXX_FLAGS) $(LIBPNG_CXX_FLAGS) $(OPTIMIZE) $< \
-		-I$(TMP_DIR) -I$(INCLUDE_DIR) $(TMP_DIR)/$${LESSON}_*.a -lpthread $(LIBDL) $(LIBPNG_LIBS) -lz -o $@; \
+		$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $< \
+		-I$(TMP_DIR) -I$(INCLUDE_DIR) $(TMP_DIR)/$${LESSON}_*.a -lpthread $(LIBDL) $(IMAGE_IO_LIBS) -lz -o $@; \
 	else \
-		$(CXX) $(TUTORIAL_CXX_FLAGS) $(LIBPNG_CXX_FLAGS) $(OPTIMIZE) $< \
-		-I$(INCLUDE_DIR) -I$(ROOT_DIR)/tools $(TEST_LD_FLAGS) $(LIBPNG_LIBS) -o $@;\
+		$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $< \
+		-I$(INCLUDE_DIR) -I$(ROOT_DIR)/tools $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@;\
 	fi
 
-$(BIN_DIR)/tutorial_lesson_15_generators: $(ROOT_DIR)/tutorial/lesson_15_generators.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(BIN_DIR)/GenGen.o
-	$(CXX) $(TUTORIAL_CXX_FLAGS) $(LIBPNG_CXX_FLAGS) $(OPTIMIZE) $< $(BIN_DIR)/GenGen.o \
-	-I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(LIBPNG_LIBS) -o $@
+$(BIN_DIR)/tutorial_lesson_15_generators: $(ROOT_DIR)/tutorial/lesson_15_generators.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(BUILD_DIR)/GenGen.o
+	$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $< $(BUILD_DIR)/GenGen.o \
+	-I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
 
 tutorial_lesson_15_generators: $(ROOT_DIR)/tutorial/lesson_15_generators_usage.sh $(BIN_DIR)/tutorial_lesson_15_generators
 	@-mkdir -p $(TMP_DIR)
@@ -1063,9 +1112,9 @@ tutorial_lesson_15_generators: $(ROOT_DIR)/tutorial/lesson_15_generators_usage.s
 	PATH="$${PATH}:$(CURDIR)/$(BIN_DIR)" source $(ROOT_DIR)/tutorial/lesson_15_generators_usage.sh
 	@-echo
 
-$(BIN_DIR)/tutorial_lesson_16_rgb_generate: $(ROOT_DIR)/tutorial/lesson_16_rgb_generate.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(BIN_DIR)/GenGen.o
-	$(CXX) $(TUTORIAL_CXX_FLAGS) $(LIBPNG_CXX_FLAGS) $(OPTIMIZE) $< $(BIN_DIR)/GenGen.o \
-	-I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(LIBPNG_LIBS) -o $@
+$(BIN_DIR)/tutorial_lesson_16_rgb_generate: $(ROOT_DIR)/tutorial/lesson_16_rgb_generate.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(BUILD_DIR)/GenGen.o
+	$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $< $(BUILD_DIR)/GenGen.o \
+	-I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
 
 $(BIN_DIR)/tutorial_lesson_16_rgb_run: $(ROOT_DIR)/tutorial/lesson_16_rgb_run.cpp $(BIN_DIR)/tutorial_lesson_16_rgb_generate
 	@-mkdir -p $(TMP_DIR)
@@ -1075,9 +1124,9 @@ $(BIN_DIR)/tutorial_lesson_16_rgb_run: $(ROOT_DIR)/tutorial/lesson_16_rgb_run.cp
 	$(BIN_DIR)/tutorial_lesson_16_rgb_generate -o $(TMP_DIR) -f brighten_either      target=host-no_runtime layout=either
 	$(BIN_DIR)/tutorial_lesson_16_rgb_generate -o $(TMP_DIR) -f brighten_specialized target=host-no_runtime layout=specialized
 	# Compile the runner
-	$(CXX) $(TUTORIAL_CXX_FLAGS) $(LIBPNG_CXX_FLAGS) $(OPTIMIZE) $< \
+	$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $< \
 	-I$(INCLUDE_DIR) -L$(BIN_DIR) -I $(TMP_DIR) $(TMP_DIR)/brighten_*.a \
-        -lHalide $(TEST_LD_FLAGS) -lpthread $(LIBDL) $(LIBPNG_LIBS) -lz -o $@
+        -lHalide $(TEST_LD_FLAGS) -lpthread $(LIBDL) $(IMAGE_IO_LIBS) -lz -o $@
 	@-echo
 
 test_internal: $(BIN_DIR)/test_internal
@@ -1128,7 +1177,12 @@ opengl_%: $(BIN_DIR)/opengl_%
 	cd $(TMP_DIR) ; $(CURDIR)/$< 2>&1
 	@-echo
 
-generator_%: $(BIN_DIR)/generator_%
+generator_jit_%: $(BIN_DIR)/generator_jit_%
+	@-mkdir -p $(TMP_DIR)
+	cd $(TMP_DIR) ; $(CURDIR)/$<
+	@-echo
+
+generator_aot_%: $(BIN_DIR)/$(TARGET)/generator_aot_%
 	@-mkdir -p $(TMP_DIR)
 	cd $(TMP_DIR) ; $(CURDIR)/$<
 	@-echo
@@ -1193,7 +1247,7 @@ test_apps: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_D
 	cd apps/HelloMatlab; HALIDE_PATH=$(CURDIR) HALIDE_CXX=$(CXX) ./run_blur.sh
 
 .PHONY: test_python
-test_python: $(LIB_DIR)/libHalide.a
+test_python: $(LIB_DIR)/libHalide.a $(INCLUDE_DIR)/Halide.h
 	mkdir -p python_bindings
 	make -C python_bindings -f $(ROOT_DIR)/python_bindings/Makefile test
 
@@ -1285,6 +1339,9 @@ install: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR
 	cp $(ROOT_DIR)/tools/halide_image.h $(PREFIX)/share/halide/tools
 	cp $(ROOT_DIR)/tools/halide_image_io.h $(PREFIX)/share/halide/tools
 	cp $(ROOT_DIR)/tools/halide_image_info.h $(PREFIX)/share/halide/tools
+ifeq ($(UNAME), Darwin)
+	install_name_tool -id $(PREFIX)/lib/libHalide.$(SHARED_EXT) $(PREFIX)/lib/libHalide.$(SHARED_EXT)
+endif
 
 $(DISTRIB_DIR)/halide.tgz: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(RUNTIME_EXPORTED_INCLUDES)
 	mkdir -p $(DISTRIB_DIR)/include $(DISTRIB_DIR)/bin $(DISTRIB_DIR)/lib $(DISTRIB_DIR)/tutorial $(DISTRIB_DIR)/tutorial/images $(DISTRIB_DIR)/tools $(DISTRIB_DIR)/tutorial/figures

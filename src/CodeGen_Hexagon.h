@@ -24,6 +24,9 @@ protected:
 
     void init_module();
 
+    void push_buffer(const std::string &name, int dimensions, llvm::Value *buffer);
+    void pop_buffer(const std::string &name, int dimensions);
+
     Expr mulhi_shr(Expr a, Expr b, int shr);
     Expr sorted_avg(Expr a, Expr b);
 
@@ -109,14 +112,6 @@ protected:
      * to manipulate the IR. This function avoids generating redundant
      * bitcasts. */
     llvm::Value *create_bitcast(llvm::Value *v, llvm::Type *ty);
-
-private:
-
-    /** Hexagon implementation of predicated store/load. Since LLVM does not
-     * currently support masked load/store on Hexagon, we need to scalarize
-     * the op. */
-    void codegen_predicated_vector_load(const Load *op);
-    void codegen_predicated_vector_store(const Store *op);
 };
 
 }}

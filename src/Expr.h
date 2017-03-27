@@ -61,7 +61,9 @@ enum class IRNodeType {
     Realize,
     Block,
     IfThenElse,
-    Evaluate
+    Evaluate,
+    Shuffle,
+    Prefetch,
 };
 
 /** The abstract base classes for a node in the Halide IR. */
@@ -294,7 +296,7 @@ struct Expr : public Internal::IRHandle {
 /** This lets you use an Expr as a key in a map of the form
  * map<Expr, Foo, ExprCompare> */
 struct ExprCompare {
-    bool operator()(Expr a, Expr b) const {
+    bool operator()(const Expr &a, const Expr &b) const {
         return a.get() < b.get();
     }
 };

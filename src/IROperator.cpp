@@ -16,7 +16,7 @@ namespace Halide {
 // into account. The high order terms come first. n is the number of
 // terms, which is the degree plus one.
 namespace {
-Expr evaluate_polynomial(Expr x, float *coeff, int n) {
+Expr evaluate_polynomial(const Expr &x, float *coeff, int n) {
     internal_assert(n >= 2);
 
     Expr x2 = x * x;
@@ -50,7 +50,7 @@ Expr evaluate_polynomial(Expr x, float *coeff, int n) {
 
 namespace Internal {
 
-bool is_const(Expr e) {
+bool is_const(const Expr &e) {
     if (e.as<IntImm>() ||
         e.as<UIntImm>() ||
         e.as<FloatImm>() ||
@@ -67,7 +67,7 @@ bool is_const(Expr e) {
     }
 }
 
-bool is_const(Expr e, int64_t value) {
+bool is_const(const Expr &e, int64_t value) {
     if (const IntImm *i = e.as<IntImm>()) {
         return i->value == value;
     } else if (const UIntImm *i = e.as<UIntImm>()) {
@@ -83,13 +83,13 @@ bool is_const(Expr e, int64_t value) {
     }
 }
 
-bool is_no_op(Stmt s) {
+bool is_no_op(const Stmt &s) {
     if (!s.defined()) return true;
     const Evaluate *e = s.as<Evaluate>();
     return e && is_const(e->value);
 }
 
-const int64_t *as_const_int(Expr e) {
+const int64_t *as_const_int(const Expr &e) {
     if (!e.defined()) {
         return nullptr;
     } else if (const Broadcast *b = e.as<Broadcast>()) {
@@ -101,7 +101,7 @@ const int64_t *as_const_int(Expr e) {
     }
 }
 
-const uint64_t *as_const_uint(Expr e) {
+const uint64_t *as_const_uint(const Expr &e) {
     if (!e.defined()) {
         return nullptr;
     } else if (const Broadcast *b = e.as<Broadcast>()) {
@@ -113,7 +113,7 @@ const uint64_t *as_const_uint(Expr e) {
     }
 }
 
-const double *as_const_float(Expr e) {
+const double *as_const_float(const Expr &e) {
     if (!e.defined()) {
         return nullptr;
     } else if (const Broadcast *b = e.as<Broadcast>()) {
@@ -125,7 +125,7 @@ const double *as_const_float(Expr e) {
     }
 }
 
-bool is_const_power_of_two_integer(Expr e, int *bits) {
+bool is_const_power_of_two_integer(const Expr &e, int *bits) {
     if (!(e.type().is_int() || e.type().is_uint())) return false;
 
     const Broadcast *b = e.as<Broadcast>();
@@ -154,7 +154,7 @@ bool is_const_power_of_two_integer(Expr e, int *bits) {
     return false;
 }
 
-bool is_positive_const(Expr e) {
+bool is_positive_const(const Expr &e) {
     if (const IntImm *i = e.as<IntImm>()) return i->value > 0;
     if (const UIntImm *u = e.as<UIntImm>()) return u->value > 0;
     if (const FloatImm *f = e.as<FloatImm>()) return f->value > 0.0f;
@@ -171,7 +171,7 @@ bool is_positive_const(Expr e) {
     return false;
 }
 
-bool is_negative_const(Expr e) {
+bool is_negative_const(const Expr &e) {
     if (const IntImm *i = e.as<IntImm>()) return i->value < 0;
     if (const FloatImm *f = e.as<FloatImm>()) return f->value < 0.0f;
     if (const Cast *c = e.as<Cast>()) {
@@ -187,7 +187,7 @@ bool is_negative_const(Expr e) {
     return false;
 }
 
-bool is_negative_negatable_const(Expr e, Type T) {
+bool is_negative_negatable_const(const Expr &e, Type T) {
     if (const IntImm *i = e.as<IntImm>()) {
         return (i->value < 0 && !T.is_min(i->value));
     }
@@ -205,16 +205,16 @@ bool is_negative_negatable_const(Expr e, Type T) {
     return false;
 }
 
-bool is_negative_negatable_const(Expr e) {
+bool is_negative_negatable_const(const Expr &e) {
     return is_negative_negatable_const(e, e.type());
 }
 
-bool is_undef(Expr e) {
+bool is_undef(const Expr &e) {
     if (const Call *c = e.as<Call>()) return c->is_intrinsic(Call::undef);
     return false;
 }
 
-bool is_zero(Expr e) {
+bool is_zero(const Expr &e) {
     if (const IntImm *int_imm = e.as<IntImm>()) return int_imm->value == 0;
     if (const UIntImm *uint_imm = e.as<UIntImm>()) return uint_imm->value == 0;
     if (const FloatImm *float_imm = e.as<FloatImm>()) return float_imm->value == 0.0;
@@ -227,7 +227,7 @@ bool is_zero(Expr e) {
     return false;
 }
 
-bool is_one(Expr e) {
+bool is_one(const Expr &e) {
     if (const IntImm *int_imm = e.as<IntImm>()) return int_imm->value == 1;
     if (const UIntImm *uint_imm = e.as<UIntImm>()) return uint_imm->value == 1;
     if (const FloatImm *float_imm = e.as<FloatImm>()) return float_imm->value == 1.0;
@@ -240,7 +240,7 @@ bool is_one(Expr e) {
     return false;
 }
 
-bool is_two(Expr e) {
+bool is_two(const Expr &e) {
     if (e.type().bits() < 2) return false;
     if (const IntImm *int_imm = e.as<IntImm>()) return int_imm->value == 2;
     if (const UIntImm *uint_imm = e.as<UIntImm>()) return uint_imm->value == 2;
@@ -309,7 +309,7 @@ Expr const_false(int w) {
     return make_zero(UInt(1, w));
 }
 
-Expr lossless_cast(Type t, Expr e) {
+Expr lossless_cast(Type t, const Expr &e) {
     if (t == e.type()) {
         return e;
     } else if (t.can_represent(e.type())) {
@@ -425,7 +425,7 @@ void match_types(Expr &a, Expr &b) {
 // Fast math ops based on those from Syrah (http://github.com/boulos/syrah). Thanks, Solomon!
 
 // Factor a float into 2^exponent * reduced, where reduced is between 0.75 and 1.5
-void range_reduce_log(Expr input, Expr *reduced, Expr *exponent) {
+void range_reduce_log(const Expr &input, Expr *reduced, Expr *exponent) {
     Type type = input.type();
     Type int_type = Int(32, type.lanes());
     Expr int_version = reinterpret(int_type, input);
@@ -454,7 +454,7 @@ void range_reduce_log(Expr input, Expr *reduced, Expr *exponent) {
     *reduced = reinterpret(type, blended);
 }
 
-Expr halide_log(Expr x_full) {
+Expr halide_log(const Expr &x_full) {
     Type type = x_full.type();
     internal_assert(type.element_of() == Float(32));
 
@@ -498,7 +498,7 @@ Expr halide_log(Expr x_full) {
     return result;
 }
 
-Expr halide_exp(Expr x_full) {
+Expr halide_exp(const Expr &x_full) {
     Type type = x_full.type();
     internal_assert(type.element_of() == Float(32));
 
@@ -545,7 +545,7 @@ Expr halide_exp(Expr x_full) {
     return result;
 }
 
-Expr halide_erf(Expr x_full) {
+Expr halide_erf(const Expr &x_full) {
     user_assert(x_full.type() == Float(32)) << "halide_erf only works for Float(32)";
 
     // Extract the sign and magnitude.
@@ -585,7 +585,7 @@ Expr halide_erf(Expr x_full) {
     return result;
 }
 
-Expr raise_to_integer_power(Expr e, int64_t p) {
+Expr raise_to_integer_power(const Expr &e, int64_t p) {
     Expr result;
     if (p == 0) {
         result = make_one(e.type());
@@ -602,7 +602,7 @@ Expr raise_to_integer_power(Expr e, int64_t p) {
     return result;
 }
 
-void split_into_ands(Expr cond, std::vector<Expr> &result) {
+void split_into_ands(const Expr &cond, std::vector<Expr> &result) {
     if (!cond.defined()) {
         return;
     }
@@ -616,63 +616,103 @@ void split_into_ands(Expr cond, std::vector<Expr> &result) {
 }
 
 Expr BufferBuilder::build() const {
-    user_assert(dimensions <= 4) << "Halide buffers are currently limited to four dimensions\n";
-
-    std::vector<Expr> args(11);
+    std::vector<Expr> args(10);
     if (buffer_memory.defined()) {
         args[0] = buffer_memory;
     } else {
-        args[0] = Call::make(type_of<struct buffer_t *>(), Call::alloca, {(int)sizeof(buffer_t)}, Call::Intrinsic);
+        args[0] = Call::make(type_of<struct halide_buffer_t *>(), Call::alloca, {(int)sizeof(halide_buffer_t)}, Call::Intrinsic);
+    }
+
+    std::string shape_var_name = unique_name('t');
+    Expr shape_var = Variable::make(type_of<halide_dimension_t *>(), shape_var_name);
+    if (shape_memory.defined()) {
+        args[1] = shape_memory;
+    } else if (dimensions == 0) {
+        args[1] = make_zero(type_of<halide_dimension_t *>());
+    } else {
+        args[1] = shape_var;
     }
 
     if (host.defined()) {
-        args[1] = host;
+        args[2] = host;
     } else {
-        args[1] = make_zero(Handle());
+        args[2] = make_zero(type_of<void *>());
     }
 
-    if (dev.defined()) {
-        args[2] = dev;
+    if (device.defined()) {
+        args[3] = device;
     } else {
-        args[2] = make_zero(UInt(64));
+        args[3] = make_zero(UInt(64));
     }
 
-    args[3] = (int)type.code();
-    args[4] = type.bits();
-    args[5] = dimensions;
+    if (device_interface.defined()) {
+        args[4] = device_interface;
+    } else {
+        args[4] = make_zero(type_of<struct halide_device_interface_t *>());
+    }
 
-    std::vector<Expr> mins_(mins), extents_(extents), strides_(strides);
-    while ((int)mins_.size() < dimensions) {
-        mins_.push_back(0);
-    }
-    while ((int)extents_.size() < dimensions) {
-        extents_.push_back(0);
-    }
-    while ((int)strides_.size() < dimensions) {
-        strides_.push_back(0);
-    }
-    args[6] = Call::make(Handle(), Call::make_struct, mins_, Call::Intrinsic);
-    args[7] = Call::make(Handle(), Call::make_struct, extents_, Call::Intrinsic);
-    args[8] = Call::make(Handle(), Call::make_struct, strides_, Call::Intrinsic);
+    args[5] = (int)type.code();
+    args[6] = type.bits();
+    args[7] = dimensions;
 
+    std::vector<Expr> shape;
+    for (size_t i = 0; i < (size_t)dimensions; i++) {
+        if (i < mins.size()) {
+            shape.push_back(mins[i]);
+        } else {
+            shape.push_back(0);
+        }
+        if (i < extents.size()) {
+            shape.push_back(extents[i]);
+        } else {
+            shape.push_back(0);
+        }
+        if (i < strides.size()) {
+            shape.push_back(strides[i]);
+        } else {
+            shape.push_back(0);
+        }
+        // per-dimension flags, currently unused.
+        shape.push_back(0);
+    }
+    for (const Expr &e : shape) {
+        internal_assert(e.type() == Int(32))
+            << "Buffer shape fields must be int32_t:" << e << "\n";
+    }
+    Expr shape_arg = Call::make(type_of<halide_dimension_t *>(), Call::make_struct, shape, Call::Intrinsic);
+    if (shape_memory.defined()) {
+        args[8] = shape_arg;
+    } else if (dimensions == 0) {
+        args[8] = make_zero(type_of<halide_dimension_t *>());
+    } else {
+        args[8] = shape_var;
+    }
+
+    Expr flags = make_zero(UInt(64));
     if (host_dirty.defined()) {
-        args[9] = host_dirty;
-    } else {
-        args[9] = const_false();
+        flags = select(host_dirty,
+                       make_const(UInt(64), halide_buffer_flag_host_dirty),
+                       make_zero(UInt(64)));
+    }
+    if (device_dirty.defined()) {
+        flags = flags | select(device_dirty,
+                               make_const(UInt(64), halide_buffer_flag_device_dirty),
+                               make_zero(UInt(64)));
+    }
+    args[9] = flags;
+
+    Expr e = Call::make(type_of<struct halide_buffer_t *>(), Call::buffer_init, args, Call::Extern);
+
+    if (!shape_memory.defined() && dimensions != 0) {
+        e = Let::make(shape_var_name, shape_arg, e);
     }
 
-    if (dev_dirty.defined()) {
-        args[10] = dev_dirty;
-    } else {
-        args[10] = const_false();
-    }
-
-    return Call::make(type_of<struct buffer_t *>(), Call::buffer_init, args, Call::Extern);
+    return e;
 }
 
 } // namespace Internal
 
-Expr fast_log(Expr x) {
+Expr fast_log(const Expr &x) {
     user_assert(x.type() == Float(32)) << "fast_log only works for Float(32)";
 
     Expr reduced, exponent;
@@ -696,7 +736,7 @@ Expr fast_log(Expr x) {
     return result;
 }
 
-Expr fast_exp(Expr x_full) {
+Expr fast_exp(const Expr &x_full) {
     user_assert(x_full.type() == Float(32)) << "fast_exp only works for Float(32)";
 
     Expr scaled = x_full / logf(2.0);
@@ -759,7 +799,7 @@ Expr print(const std::vector<Expr> &args) {
     return result;
 }
 
-Expr print_when(Expr condition, const std::vector<Expr> &args) {
+Expr print_when(const Expr &condition, const std::vector<Expr> &args) {
     Expr p = print(args);
     return Internal::Call::make(p.type(),
                                 Internal::Call::if_then_else,
@@ -767,7 +807,7 @@ Expr print_when(Expr condition, const std::vector<Expr> &args) {
                                 Internal::Call::PureIntrinsic);
 }
 
-Expr require(Expr condition, const std::vector<Expr> &args) {
+Expr require(const Expr &condition, const std::vector<Expr> &args) {
     user_assert(condition.defined()) << "Require of undefined condition\n";
     user_assert(condition.type().is_bool()) << "Require condition must be a boolean type\n";
     user_assert(args.at(0).defined()) << "Require of undefined value\n";
@@ -789,7 +829,7 @@ Expr require(Expr condition, const std::vector<Expr> &args) {
 
 namespace Internal {
 
-Expr memoize_tag_helper(Expr result, const std::vector<Expr> &cache_key_values) {
+Expr memoize_tag_helper(const Expr &result, const std::vector<Expr> &cache_key_values) {
     std::vector<Expr> args;
     args.push_back(result);
     args.insert(args.end(), cache_key_values.begin(), cache_key_values.end());

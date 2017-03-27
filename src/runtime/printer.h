@@ -104,13 +104,27 @@ public:
         case halide_type_handle:
             code_name = "handle";
             break;
+        default:
+            code_name = "bad_type_code";
+            break;
         }
         dst = halide_string_to_string(dst, end, code_name);
-        halide_uint64_to_string(dst, end, t.bits, 1);
+        dst = halide_uint64_to_string(dst, end, t.bits, 1);
         if (t.lanes != 1) {
             dst = halide_string_to_string(dst, end, "x");
             dst = halide_uint64_to_string(dst, end, t.lanes, 1);
         }
+        return *this;
+    }
+
+    Printer &operator<<(const halide_buffer_t &buf) {
+        (*this) << "buffer(" << buf.type << ", ";
+        for (int i = 0; i < buf.dimensions; i++) {
+            (*this) << "{" << buf.dim[i].min << ", "
+                    << buf.dim[i].extent << ", "
+                    << buf.dim[i].stride << "}, ";
+        }
+        (*this) << buf.flags << ")";
         return *this;
     }
 

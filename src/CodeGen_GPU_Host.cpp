@@ -197,10 +197,6 @@ void CodeGen_GPU_Host<CodeGen_CPU>::compile_func(const LoweredFunc &f,
         }
 
         Value *user_context = get_user_context();
-        debug(2) << "CodeGen_CPU_Host compile_func user_context:";
-        if (debug::debug_level >= 2) {
-            user_context->dump();
-        }
         Value *kernel_size = ConstantInt::get(i32_t, kernel_src.size());
         std::string init_kernels_name = "halide_" + api_unique_name + "_initialize_kernels";
         Value *init = module->getFunction(init_kernels_name);
@@ -362,7 +358,7 @@ void CodeGen_GPU_Host<CodeGen_CPU>::visit(const For *loop) {
 
             if (closure_args[i].is_buffer) {
                 // If it's a buffer, dereference the dev handle
-                val = buffer_dev(sym_get(name + ".buffer"));
+                val = buffer_device(sym_get(name + ".buffer"));
             } else if (ends_with(name, ".varying")) {
                 // Expressions for varying attributes are passed in the
                 // expression mesh. Pass a non-nullptr value in the argument array

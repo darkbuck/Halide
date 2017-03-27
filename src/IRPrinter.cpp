@@ -24,10 +24,16 @@ ostream &operator<<(ostream &out, const Type &type) {
         out << "float";
         break;
     case Type::Handle:
-        out << "handle";
+        if (type.handle_type) {
+            out << "(" << type.handle_type->inner_name.name << " *)";
+        } else {
+            out << "(void *)";
+        }
         break;
     }
-    out << type.bits();
+    if (!type.is_handle()) {
+        out << type.bits();
+    }
     if (type.lanes() > 1) out << 'x' << type.lanes();
     return out;
 }
@@ -162,6 +168,21 @@ ostream &operator<<(ostream &out, const ForType &type) {
     return out;
 }
 
+ostream &operator<<(ostream &out, const NameMangling &m) {
+    switch(m) {
+    case NameMangling::Default:
+        out << "default";
+        break;
+    case NameMangling::C:
+        out << "c";
+        break;
+    case NameMangling::CPlusPlus:
+        out << "c++";
+        break;
+    }
+    return out;
+}
+
 ostream &operator<<(ostream &stream, const Stmt &ir) {
     if (!ir.defined()) {
         stream << "(undefined)\n";
@@ -190,6 +211,9 @@ ostream &operator <<(ostream &stream, const LoweredFunc &function) {
 
 std::ostream &operator<<(std::ostream &out, const LoweredFunc::LinkageType &type) {
     switch (type) {
+    case LoweredFunc::ExternalPlusMetadata:
+        out << "external_plus_metadata";
+        break;
     case LoweredFunc::External:
         out << "external";
         break;
@@ -212,6 +236,14 @@ void IRPrinter::print(Stmt ir) {
     ir.accept(this);
 }
 
+void IRPrinter::print_list(const std::vector<Expr> &exprs) {
+    for (size_t i = 0; i < exprs.size(); i++) {
+        print(exprs[i]);
+        if (i < exprs.size() - 1) {
+            stream << ", ";
+        }
+    }
+}
 
 void IRPrinter::do_indent() {
     for (int i = 0; i < indent; i++) stream << ' ';
@@ -452,12 +484,13 @@ void IRPrinter::visit(const Broadcast *op) {
 void IRPrinter::visit(const Call *op) {
     // TODO: Print indication of C vs C++?
     stream << op->name << "(";
-    for (size_t i = 0; i < op->args.size(); i++) {
-        print(op->args[i]);
-        if (i < op->args.size() - 1) {
-            stream << ", ";
-        }
+    if (op->is_intrinsic(Call::reinterpret) ||
+        op->is_intrinsic(Call::make_struct)) {
+        // For calls that define a type that isn't just a function of
+        // the types of the args, we also print the type.
+        stream << op->type << ", ";
     }
+    print_list(op->args);
     stream << ")";
 }
 
@@ -535,20 +568,12 @@ void IRPrinter::visit(const Store *op) {
 void IRPrinter::visit(const Provide *op) {
     do_indent();
     stream << op->name << "(";
-    for (size_t i = 0; i < op->args.size(); i++) {
-        print(op->args[i]);
-        if (i < op->args.size() - 1) stream << ", ";
-    }
+    print_list(op->args);
     stream << ") = ";
     if (op->values.size() > 1) {
         stream << "{";
     }
-    for (size_t i = 0; i < op->values.size(); i++) {
-        if (i > 0) {
-            stream << ", ";
-        }
-        print(op->values[i]);
-    }
+    print_list(op->values);
     if (op->values.size() > 1) {
         stream << "}";
     }
@@ -610,6 +635,20 @@ void IRPrinter::visit(const Realize *op) {
     stream << "}\n";
 }
 
+void IRPrinter::visit(const Prefetch *op) {
+    do_indent();
+    stream << "prefetch " << op->name << "(";
+    for (size_t i = 0; i < op->bounds.size(); i++) {
+        stream << "[";
+        print(op->bounds[i].min);
+        stream << ", ";
+        print(op->bounds[i].extent);
+        stream << "]";
+        if (i < op->bounds.size() - 1) stream << ", ";
+    }
+    stream << ")\n";
+}
+
 void IRPrinter::visit(const Block *op) {
     print(op->first);
     if (op->rest.defined()) print(op->rest);
@@ -650,6 +689,39 @@ void IRPrinter::visit(const Evaluate *op) {
     do_indent();
     print(op->value);
     stream << "\n";
+}
+
+void IRPrinter::visit(const Shuffle *op) {
+    if (op->is_concat()) {
+        stream << "concat_vectors(";
+        print_list(op->vectors);
+        stream << ")";
+    } else if (op->is_interleave()) {
+        stream << "interleave_vectors(";
+        print_list(op->vectors);
+        stream << ")";
+    } else if (op->is_extract_element()) {
+        stream << "extract_element(";
+        print_list(op->vectors);
+        stream << ", " << op->indices[0];
+        stream << ")";
+    } else if (op->is_slice()) {
+        stream << "slice_vectors(";
+        print_list(op->vectors);
+        stream << ", " << op->slice_begin() << ", " << op->slice_stride() << ", " << op->indices.size();
+        stream << ")";
+    } else {
+        stream << "shuffle(";
+        print_list(op->vectors);
+        stream << ", ";
+        for (size_t i = 0; i < op->indices.size(); i++) {
+            print(op->indices[i]);
+            if (i < op->indices.size() - 1) {
+                stream << ", ";
+            }
+        }
+        stream << ")";
+    }
 }
 
 }}

@@ -182,6 +182,34 @@ public:
         protect_loads_in_scope = old_protect_loads_in_scope;
     }
 
+    void visit(const Load *op) {
+        Expr predicate = op->predicate;
+        // If the predicate is trivially true, there is no point to lift it out
+        if (!is_one(predicate)) {
+            predicate = mutate(op->predicate);
+        }
+        Expr index = mutate(op->index);
+        if (predicate.same_as(op->predicate) && index.same_as(op->index)) {
+            expr = op;
+        } else {
+            expr = Load::make(op->type, op->name, index, op->image, op->param, predicate);
+        }
+    }
+
+    void visit(const Store *op) {
+        Expr predicate = op->predicate;
+        // If the predicate is trivially true, there is no point to lift it out
+        if (!is_one(predicate)) {
+            predicate = mutate(op->predicate);
+        }
+        Expr value = mutate(op->value);
+        Expr index = mutate(op->index);
+        if (predicate.same_as(op->predicate) && value.same_as(op->value) && index.same_as(op->index)) {
+            stmt = op;
+        } else {
+            stmt = Store::make(op->name, value, index, op->param, predicate);
+        }
+    }
 };
 
 /** Fill in the use counts in a global value numbering. */
@@ -297,7 +325,7 @@ Expr common_subexpression_elimination(Expr e) {
         Expr old = e.expr;
         if (e.use_count > 1) {
             string name = unique_name('t');
-            lets.push_back(make_pair(name, e.expr));
+            lets.push_back({ name, e.expr });
             // Point references to this expr to the variable instead.
             replacements[e.expr] = Variable::make(e.expr.type(), name);
         }

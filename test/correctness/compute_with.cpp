@@ -723,10 +723,11 @@ int multiple_outputs_on_gpu_test() {
         g(x, y) = x + input(x, y);
 
         input.compute_root();
-        f.compute_root().gpu_tile(x, y, 8, 8);
-        g.compute_root().gpu_tile(x, y, 8, 8);
+        Var xi("xi"), yi("yi");
+        f.compute_root().gpu_tile(x, y, xi, yi, 8, 8);
+        g.compute_root().gpu_tile(x, y, xi, yi, 8, 8);
 
-        g.compute_with(f, Var::gpu_blocks());
+        g.compute_with(f, x);
 
         Realization r(f_im, g_im);
         Pipeline({f, g}).realize(r);

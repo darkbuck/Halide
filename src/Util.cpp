@@ -24,6 +24,7 @@
 #endif
 #ifdef _WIN32
 #include <windows.h>
+#include <Objbase.h>  // needed for CoCreateGuid
 #endif
 #ifdef __APPLE__
 #define CAN_GET_RUNNING_PROGRAM_NAME
@@ -38,26 +39,22 @@ using std::vector;
 using std::ostringstream;
 using std::map;
 
-std::string get_env_variable(char const *env_var_name, size_t &read) {
+std::string get_env_variable(char const *env_var_name) {
     if (!env_var_name) {
         return "";
     }
-    read = 0;
 
     #ifdef _MSC_VER
-    char lvl[32];
-    getenv_s(&read, lvl, env_var_name);
+    char lvl[128];
+    size_t read = 0;
+    if (getenv_s(&read, lvl, env_var_name) != 0) read = 0;
+    if (read) return std::string(lvl);
     #else
     char *lvl = getenv(env_var_name);
-    read = (lvl)?1:0;
+    if (lvl) return std::string(lvl);
     #endif
 
-    if (read) {
-        return std::string(lvl);
-    }
-    else {
-        return "";
-    }
+    return "";
 }
 
 string running_program_name() {

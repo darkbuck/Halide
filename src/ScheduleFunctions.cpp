@@ -23,7 +23,6 @@ using std::string;
 using std::map;
 using std::vector;
 using std::pair;
-using std::make_pair;
 using std::set;
 
 namespace {
@@ -396,7 +395,7 @@ Stmt build_produce(Function f, const Target &target) {
                         buf_name += "." + std::to_string(k);
                     }
                     buf_name += ".buffer";
-                    Expr buffer = Variable::make(type_of<struct buffer_t *>(), buf_name);
+                    Expr buffer = Variable::make(type_of<struct halide_buffer_t *>(), buf_name);
                     extern_call_args.push_back(buffer);
                     buffers_to_annotate.push_back(buffer);
                     buffers_contents_to_annotate.push_back(buffer);
@@ -405,15 +404,13 @@ Stmt build_produce(Function f, const Target &target) {
                 Buffer<> b = arg.buffer;
                 Parameter p(b.type(), true, b.dimensions(), b.name());
                 p.set_buffer(b);
-                string buf_name = b.name() + ".buffer";
-                Expr buf = Variable::make(type_of<struct buffer_t *>(), buf_name, p);
+                Expr buf = Variable::make(type_of<struct halide_buffer_t *>(), b.name() + ".buffer", p);
                 extern_call_args.push_back(buf);
                 buffers_to_annotate.push_back(buf);
                 buffers_contents_to_annotate.push_back(buf);
             } else if (arg.is_image_param()) {
                 Parameter p = arg.image_param;
-                string buf_name = p.name() + ".buffer";
-                Expr buf = Variable::make(type_of<struct buffer_t *>(), buf_name, p);
+                Expr buf = Variable::make(type_of<struct halide_buffer_t *>(), p.name() + ".buffer", p);
                 extern_call_args.push_back(buf);
                 // Do not annotate ImageParams: both the buffer_t itself,
                 // and the contents it points to, should be filled by the caller;
@@ -425,11 +422,11 @@ Stmt build_produce(Function f, const Target &target) {
             }
         }
 
-        // Grab the buffer_ts representing the output. If the store
-        // level matches the compute level, then we can use the ones
-        // already injected by allocation bounds inference. If it's
-        // the output to the pipeline then it will similarly be in the
-        // symbol table.
+        // Grab the halide_buffer_t's representing the output. If the
+        // store level matches the compute level, then we can use the
+        // ones already injected by allocation bounds inference. If
+        // it's the output to the pipeline then it will similarly be
+        // in the symbol table.
         if (f.schedule().store_level() == f.schedule().compute_level()) {
             for (int j = 0; j < f.outputs(); j++) {
                 string buf_name = f.name();
@@ -437,7 +434,7 @@ Stmt build_produce(Function f, const Target &target) {
                     buf_name += "." + std::to_string(j);
                 }
                 buf_name += ".buffer";
-                Expr buffer = Variable::make(type_of<struct buffer_t *>(), buf_name);
+                Expr buffer = Variable::make(type_of<struct halide_buffer_t *>(), buf_name);
                 extern_call_args.push_back(buffer);
                 // Since this is a temporary, internal-only buffer, make sure it's marked.
                 // (but not the contents! callee is expected to fill that in.)
@@ -453,37 +450,42 @@ Stmt build_produce(Function f, const Target &target) {
             string stage_name = f.name() + ".s0.";
             const vector<string> f_args = f.args();
             for (int j = 0; j < f.outputs(); j++) {
-
-                vector<Expr> top_left;
-                for (int k = 0; k < f.dimensions(); k++) {
-                    string var = stage_name + f_args[k];
-                    top_left.push_back(Variable::make(Int(32), var + ".min"));
+                string src_buf_name = f.name();
+                if (f.outputs() > 1) {
+                    src_buf_name += "." + std::to_string(j);
                 }
-                Expr host_ptr = Call::make(f, top_left, j);
-                host_ptr = Call::make(Handle(), Call::address_of, {host_ptr}, Call::Intrinsic);
+                src_buf_name += ".buffer";
+                Expr src_buffer = Variable::make(type_of<struct halide_buffer_t *>(), src_buf_name);
 
-                BufferBuilder builder;
-                builder.host = host_ptr;
-                builder.type = f.output_types()[j];
-                builder.dimensions = f.dimensions();
-                int k = 0;
+                Expr output_buffer_t = Call::make(type_of<struct halide_buffer_t *>(), Call::alloca,
+                                                  {(int)sizeof(halide_buffer_t)}, Call::Intrinsic);
+
+                vector<Expr> args(5);
+                args[0] = output_buffer_t;
+                args[1] = Call::make(type_of<struct halide_dimension_t *>(), Call::alloca,
+                                     {(int)sizeof(halide_dimension_t) * f.dimensions()}, Call::Intrinsic);
+                args[2] = src_buffer;
+
+                vector<Expr> mins, extents;
+                internal_assert(f.dimensions() == (int)f.args().size());
                 for (const string arg : f.args()) {
                     string var = stage_name + arg;
                     Expr min = Variable::make(Int(32), var + ".min");
                     Expr max = Variable::make(Int(32), var + ".max");
-                    Expr stride = Variable::make(Int(32), stride_name + ".stride." + std::to_string(k++));
-                    builder.mins.push_back(min);
-                    builder.extents.push_back(max - min + 1);
-                    builder.strides.push_back(stride);
+                    mins.push_back(min);
+                    extents.push_back(max - min + 1);
                 }
-                Expr output_buffer_t = builder.build();
+                args[3] = Call::make(Handle(), Call::make_struct, mins, Call::Intrinsic);
+                args[4] = Call::make(Handle(), Call::make_struct, extents, Call::Intrinsic);
+
+                output_buffer_t = Call::make(type_of<struct halide_buffer_t *>(), Call::buffer_crop, args, Call::Extern);
 
                 string buf_name = f.name() + "." + std::to_string(j) + ".tmp_buffer";
-                extern_call_args.push_back(Variable::make(type_of<struct buffer_t *>(), buf_name));
+                extern_call_args.push_back(Variable::make(type_of<struct halide_buffer_t *>(), buf_name));
                 // Since this is a temporary, internal-only buffer, make sure it's marked.
                 // (but not the contents! callee is expected to fill that in.)
                 buffers_to_annotate.push_back(extern_call_args.back());
-                lets.push_back(make_pair(buf_name, output_buffer_t));
+                lets.push_back({ buf_name, output_buffer_t });
             }
         }
 
@@ -493,7 +495,7 @@ Stmt build_produce(Function f, const Target &target) {
             for (const auto &buffer: buffers_to_annotate) {
                 // Return type is really 'void', but no way to represent that in our IR.
                 // Precedent (from halide_print, etc) is to use Int(32) and ignore the result.
-                Expr sizeof_buffer_t((uint64_t) sizeof(buffer_t));
+                Expr sizeof_buffer_t((uint64_t) sizeof(halide_buffer_t));
                 Stmt mark_buffer = Evaluate::make(Call::make(Int(32), "halide_msan_annotate_memory_is_initialized", {buffer, sizeof_buffer_t}, Call::Extern));
                 if (annotate.defined()) {
                     annotate = Block::make(annotate, mark_buffer);
@@ -514,12 +516,11 @@ Stmt build_produce(Function f, const Target &target) {
         }
 
         // Make the extern call
-        Expr e = Call::make(Int(32), extern_name, extern_call_args,
-                            f.extern_definition_is_c_plus_plus() ? Call::ExternCPlusPlus
-                                                                 : Call::Extern);
+        Expr e = f.make_call_to_extern_definition(extern_call_args, target);
+
+        // Check if it succeeded
         string result_name = unique_name('t');
         Expr result = Variable::make(Int(32), result_name);
-        // Check if it succeeded
         Expr error = Call::make(Int(32), "halide_error_extern_stage_failed",
                                 {extern_name, result}, Call::Extern);
         Stmt check = AssertStmt::make(EQ::make(result, 0), error);
@@ -565,7 +566,7 @@ pair<Stmt, Stmt> build_production(Function func, const Target &target) {
 
     // Combine the update steps
     Stmt merged_updates = Block::make(updates);
-    return make_pair(produce, merged_updates);
+    return { produce, merged_updates };
 }
 
 // A schedule may include explicit bounds on some dimension. This
@@ -789,7 +790,7 @@ private:
         // Dig through any let statements
         vector<pair<string, Expr>> lets;
         while (const LetStmt *l = body.as<LetStmt>()) {
-            lets.push_back(make_pair(l->name, l->value));
+            lets.push_back({ l->name, l->value });
             body = l->body;
         }
 
@@ -1521,15 +1522,16 @@ public:
         LoopLevel loop_level;
     };
     vector<Site> sites_allowed;
+    bool found;
 
-    ComputeLegalSchedules(Function f, const map<string, Function> &env) : func(f), found(false), env(env) {}
+    ComputeLegalSchedules(Function f, const map<string, Function> &env) : found(false), func(f), env(env) {}
 
 private:
     using IRVisitor::visit;
 
     vector<Site> sites;
     Function func;
-    bool found;
+
     const map<string, Function> &env;
 
     void visit(const For *f) {
@@ -1709,7 +1711,11 @@ public:
     PrintUsesOfFunc(string f, std::ostream &s) : func(f), stream(s) {}
 };
 
-void validate_schedule(Function f, Stmt s, const Target &target, bool is_output, const map<string, Function> &env) {
+// Check a schedule is legal, throwing an error if it is not. Returns
+// whether or not a realization of the Func should be injected. Unused
+// intermediate Funcs that somehow made it into the Func DAG can be
+// discarded.
+bool validate_schedule(Function f, Stmt s, const Target &target, bool is_output, const map<string, Function> &env) {
 
     // If f is extern, check that none of its inputs are scheduled inline.
     if (f.has_extern_definition()) {
@@ -1778,25 +1784,33 @@ void validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
     // store_in_user_code, but store_root is close enough.
     if (is_output) {
         if (store_at.is_root() && compute_at.is_root()) {
-            return;
+            return true;
         } else {
-            user_error << "Func " << f.name() << " is the output, so must"
+            user_error << "Func " << f.name() << " is an output, so must"
                        << " be scheduled compute_root (which is the default).\n";
         }
-    }
-
-    // Inlining is allowed only if there is no specialization.
-    if (store_at.is_inline() && compute_at.is_inline()) {
-        user_assert(f.definition().specializations().empty())
-            << "Func " << f.name() << " is scheduled inline, so it"
-            << " must not have any specializations. Specialize on the"
-            << " scheduled Func instead.\n";
-        return;
     }
 
     // Otherwise inspect the uses to see what's ok.
     ComputeLegalSchedules legal(f, env);
     s.accept(&legal);
+
+    if (!is_output && !legal.found) {
+        // It's not an output, and it's not called anywhere. Skip it.
+        return false;
+    }
+
+    // Check if the schedule of the inlined function is legal. Since only
+    // pure function can be inlined, we only need to call the validator on
+    // pure function. An inlined Halide Func with multiple stages technically
+    // will get lowered into compute_at innermost and thus can be treated
+    // similarly as a non-inlined Func.
+    if (store_at.is_inline() && compute_at.is_inline()) {
+        if (f.is_pure()) {
+            validate_schedule_inlined_function(f);
+        }
+        return true;
+    }
 
     bool store_at_ok = false, compute_at_ok = false;
     const vector<ComputeLegalSchedules::Site> &sites = legal.sites_allowed;
@@ -1840,6 +1854,8 @@ void validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
 
         user_error << err.str();
     }
+
+    return true;
 }
 
 void validate_fused_group_schedule_helper(const string &fn, size_t stage,
@@ -2111,10 +2127,18 @@ Stmt schedule_functions(const vector<Function> &outputs,
             for (Function o : outputs) {
                 is_output_list[j-1] = is_output_list[j-1] | o.same_as(funcs[j-1]);
             }
-            validate_schedule(funcs[j-1], s, target, is_output_list[j-1], env);
+            bool necessary = validate_schedule(funcs[j-1], s, target, is_output_list[j-1], env);
+            if (!necessary) {
+                // The way in which the function was referred to in the
+                // function DAG must not actually result in a use in the
+                // code. This can happen if you inline a Tuple function,
+                // ignoring one of the Tuple elements, and that Tuple
+                // element is the sole call to a function with an update
+                // definition.
+                continue;
+            }
             any_memoized = any_memoized || funcs[j-1].schedule().memoized();
         }
-
         internal_assert(!group.empty());
 
         int relevant_fused_pair = 0;

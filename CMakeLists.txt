@@ -10,6 +10,8 @@ message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
+set(CMAKE_MACOSX_RPATH ON)
+
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -144,6 +146,18 @@ if (OPENMP_FOUND)
   message(STATUS "Found OpenMP")
 endif()
 
+# Look for libpng and libjpeg. Some apps and tutorials depend on it
+find_package(PNG)
+find_package(JPEG)
+function(use_image_io TARGET)
+  target_compile_definitions(${TARGET} PRIVATE ${PNG_DEFINITIONS})
+  target_include_directories(${TARGET} PRIVATE ${PNG_INCLUDE_DIRS})
+  target_link_libraries(${TARGET} PRIVATE ${PNG_LIBRARIES})
+  target_compile_definitions(${TARGET} PRIVATE ${JPEG_DEFINITIONS})
+  target_include_directories(${TARGET} PRIVATE ${JPEG_INCLUDE_DIRS})
+  target_link_libraries(${TARGET} PRIVATE ${JPEG_LIBRARIES})
+endfunction()
+
 # -----------------------------------------------------------------------------
 # Option to enable/disable assertions
 # -----------------------------------------------------------------------------
@@ -175,8 +189,6 @@ else()
   message(STATUS "Building tests disabled")
 endif()
 
-# Look for libpng. Some apps and tutorials depend on it
-find_package(PNG)
 option(WITH_APPS "Build apps" ON)
 if (WITH_APPS)
   if (NOT WIN32)
