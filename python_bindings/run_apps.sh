@@ -1,15 +1,17 @@
 #!/bin/bash
 
 #set -x # print commands
-#PYTHON=echo
 PYTHON=python3
+
+THIS_SCRIPT=$0
+if [ -z "$ROOT_DIR" ]; then ROOT_DIR=$(cd `dirname $THIS_SCRIPT`; pwd); fi
+echo "ROOT_DIR == " $ROOT_DIR
+BUILDPATH=$(dirname `find $ROOT_DIR -name halide.so`)
+export PYTHONPATH="$BUILDPATH:$PYTHONPATH"
+echo "PYTHONPATH ==" $PYTHONPATH
 
 # Operate in the build directory, so that output files don't pollute the top-level directory.
 cd build
-
-BUILDPATH="." # adjust as needed
-export PYTHONPATH="$BUILDPATH:$PYTHONPATH"
-echo "PYTHONPATH ==" $PYTHONPATH
 
 FAILED=0
 
@@ -18,7 +20,6 @@ S=" --------- "
 Sa=" >>>>>>>> "
 Sb=" <<<<<<<< "
 
-if [ -z "$ROOT_DIR" ]; then ROOT_DIR=$(dirname $0); fi
 
 for i in ${ROOT_DIR}/apps/*.py
 do
