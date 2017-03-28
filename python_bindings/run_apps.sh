@@ -6,7 +6,8 @@ PYTHON=python3
 THIS_SCRIPT=$0
 if [ -z "$ROOT_DIR" ]; then ROOT_DIR=$(cd `dirname $THIS_SCRIPT`; pwd); fi
 echo "ROOT_DIR == " $ROOT_DIR
-BUILDPATH=$(dirname `find $ROOT_DIR -name halide.so`)
+BUILDPATH=$(dirname `find $ROOT_DIR -name halide.*so | tail -n1`)
+echo "BUILDPATH ==" $BUILDPATH
 export PYTHONPATH="$BUILDPATH:$PYTHONPATH"
 echo "PYTHONPATH ==" $PYTHONPATH
 

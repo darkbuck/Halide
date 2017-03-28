@@ -1248,7 +1248,7 @@ test_apps: $(LIB_DIR)/libHalide.a $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_D
 
 .PHONY: test_python
 test_python: $(LIB_DIR)/libHalide.a $(INCLUDE_DIR)/Halide.h
-	cd python_bindings && python setup.py build && ./run_apps.sh && ./run_tutorial.sh
+	cd python_bindings && python3 setup.py bdist_wheel && ./run_apps.sh && ./run_tutorial.sh
 
 # It's just for compiling the runtime, so earlier clangs *might* work,
 # but best to peg it to the minimum llvm version.

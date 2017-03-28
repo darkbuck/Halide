@@ -63,7 +63,7 @@ import numpy
 include_dirs = [numpy.get_include()]
 library_dirs = []
 
-# NOTE: /opt/local is included to mirror the Makefile behavior, but should 
+# NOTE: /opt/local is included to mirror the Makefile behavior, but should
 #       probably be removed eventually. No reason to treat it specially.
 here = os.path.abspath(os.path.dirname(__file__))
 prefixes = [join(here, '..'), sys.prefix, '/opt/local']
@@ -76,6 +76,7 @@ for prefix in prefixes:
     if not os.path.isdir(prefix): continue
     include_dirs.append(join(prefix, 'include'))
     library_dirs.append(join(prefix, 'lib'))
+    library_dirs.append(join(prefix, 'lib/x86_64-linux-gnu'))
 
 cc = ccompiler.new_compiler()
 
@@ -85,10 +86,10 @@ def find_static_lib(names, env_key):
 
     Returns abspath if found, raises IOError if not.
     """
-    
+
     if not isinstance(names, list):
         names = [names]
-    
+
     env_prefix = os.getenv(env_key)
     if env_prefix:
         search = [env_prefix]
@@ -108,29 +109,31 @@ def find_static_lib(names, env_key):
 
 def find_boost_python():
     """Figure out the name of boost_python.
-    
+
     Could be: boost_python, boost_python3-mt, etc.
     """
     name_specified = os.getenv('BOOST_PYTHON_LIB')
+    (major, minor) = sys.version_info[:2]
     if name_specified:
         names = [name_specified]
     else:
         base_name = 'boost_python'
-        if sys.version_info[0] == 3:
+        if major == 3:
             base_name += '3'
-        names = [base_name + '-mt', base_name, 'boost_python-py%i%i' % sys.version_info[:2]]
-    
+        names = [base_name + '-mt', base_name, 'boost_python-py%i%i' % (major, minor)]
+
     print("\nSearching for Boost Python")
-    for name in names:
-        if cc.has_function('rand',
-                            includes=['stdlib.h'],
-                            library_dirs=library_dirs,
-                            libraries=[name]):
-            print("Found Boost Python: %s" % name)
-            return name
+    for libpython_suffix in ['', 'm']:
+        for name in names:
+            if cc.has_function('rand',
+                               includes=['stdlib.h'],
+                               library_dirs=library_dirs,
+                               libraries=['python%i.%i%s' % (major, minor, libpython_suffix), name]):
+                print("Found Boost Python: %s" % name)
+                return name
     else:
         raise IOError("Failed to find boost_python in %s."
-        " Maybe set BOOST_DIR and/or BOOST_PYTHON_LIB" % os.pathsep.join(library_dirs))
+                      " Maybe set BOOST_DIR and/or BOOST_PYTHON_LIB" % os.pathsep.join(library_dirs))
     return find_static_lib(names, 'BOOST_DIR')
 
 
@@ -183,4 +186,3 @@ setup_args = dict(
 
 if __name__ == '__main__':
     setup(**setup_args)
-
