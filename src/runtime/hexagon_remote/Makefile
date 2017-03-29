@@ -23,8 +23,8 @@
 # from the SDK that cannot be redistributed with Halide).
 #
 
-HEXAGON_SDK_ROOT ?= ${HOME}/Qualcomm/Hexagon_SDK/3.0
-HEXAGON_TOOLS_ROOT ?= ${HOME}/Qualcomm/HEXAGON_Tools/8.0.05/Tools
+HEXAGON_SDK_ROOT ?= ${HOME}/Qualcomm/Hexagon_SDK/3.1
+HEXAGON_TOOLS_ROOT ?= ${HOME}/Qualcomm/HEXAGON_Tools/8.0.10/Tools
 
 ANDROID_NDK_ROOT ?= ${HEXAGON_SDK_ROOT}/tools/android-ndk-r10d
 
@@ -59,7 +59,7 @@ CCFLAGS-arm-32-android = --sysroot ${ANDROID_NDK_ROOT}/platforms/android-21/arch
 CCFLAGS-host := ${CCFLAGS} -I../ -I ${HEXAGON_TOOLS_ROOT}/include/iss/ -fPIC \
 	-L${HEXAGON_TOOLS_ROOT}/lib/iss/ -lwrapper
 
-CCFLAGS-v60 := $(CCFLAGS-v60) ${COMMON_CCFLAGS} -I ${HEXAGON_SDK_INCLUDES} -I ${HEXAGON_SDK_LIBS}/common/qurt/ADSPv60MP/include
+CCFLAGS-v60 := $(CCFLAGS-v60) -I ${HEXAGON_SDK_LIBS}/common/rtld/ship/hexagon_Release_toolv80_v62 ${COMMON_CCFLAGS} -I ${HEXAGON_SDK_INCLUDES} -I ${HEXAGON_SDK_LIBS}/common/qurt/ADSPv60MP/include
 
 CCFLAGS-arm-64-android := $(CCFLAGS-arm-64-android) ${COMMON_CCFLAGS} -llog -fPIE -pie \
 	-L${HEXAGON_SDK_LIBS}/common/remote/ship/android_Release_aarch64/ -ladsprpc
@@ -91,9 +91,13 @@ bin/%/halide_remote.o: halide_remote.cpp elf.h
 	mkdir -p $(@D)
 	$(CXX-$*) $(CCFLAGS-$*) -fPIC -c halide_remote.cpp -o $@
 
-bin/%/halide_host.o: halide_host.cpp
+bin/%/host_malloc.o: host_malloc.cpp
 	mkdir -p $(@D)
-	$(CXX-$*) $(CCFLAGS-$*) -fPIC -c halide_host.cpp -o $@
+	$(CXX-$*) $(CCFLAGS-$*) -fPIC -c host_malloc.cpp -o $@
+
+bin/%/rpc_compat_shim.o: rpc_compat_shim.cpp
+	mkdir -p $(@D)
+	$(CXX-$*) $(CCFLAGS-$*) -fPIC -c rpc_compat_shim.cpp -o $@
 
 bin/%/nearbyint.o: nearbyint.cpp
 	mkdir -p $(@D)
@@ -114,7 +118,7 @@ bin/%/libhalide_hexagon_remote_skel.so: bin/%/halide_remote.o bin/%/halide_hexag
 	-Wl,-Bsymbolic -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free \
 	-Wl,--wrap=realloc -Wl,--wrap=memalign -Wl,--wrap=__stack_chk_fail
 
-bin/%/libhalide_hexagon_host.so: bin/src/halide_hexagon_remote_stub.c bin/%/halide_host.o
+bin/%/libhalide_hexagon_host.so: bin/src/halide_hexagon_remote_stub.c bin/%/host_malloc.o bin/%/rpc_compat_shim.o
 	mkdir -p $(@D)
 	$(CC-$*) $^ $(CCFLAGS-$*) -Wl,-soname,libhalide_hexagon_host.so -shared -o $@
 
@@ -127,9 +131,21 @@ bin/%/sim_host.o: sim_host.cpp sim_protocol.h
 	mkdir -p $(@D)
 	$(CXX-$*) -std=c++11 $(CCFLAGS-$*) -c sim_host.cpp -o $@
 
+CRT0_STANDALONE=$(shell $(CXX-v60) -G0 -print-file-name=crt0_standalone.o)
+CRT0           =$(shell $(CXX-v60) -G0 -print-file-name=crt0.o)
+INIT           =$(shell $(CXX-v60) -G0 -print-file-name=init.o)
+LIB_STANDALONE =$(shell $(CXX-v60) -G0 -print-file-name=libstandalone.a)
+LIB_C          =$(shell $(CXX-v60) -G0 -print-file-name=libc.a)
+LIB_GCC        =$(shell $(CXX-v60) -G0 -print-file-name=libgcc.a)
+FINI           =$(shell $(CXX-v60) -G0 -print-file-name=fini.o)
+LIBDL          =$(HEXAGON_TOOLS_ROOT)/target/hexagon/lib/v60/G0/libdl.a
+
 bin/%/hexagon_sim_remote: bin/%/sim_remote.o
 	mkdir -p $(@D)
-	$(CC-$*) -m$* -mG0lib -G0 -lc -lstandalone -lgcc -ldl $^ -o $@
+	$(LD-$*) -o $@ $(CRT0_STANDALONE) $(CRT0) $(INIT) bin/$*/sim_remote.o $(LIBDL) \
+	--start-group  $(LIB_STANDALONE) --whole-archive $(LIB_C) --no-whole-archive $(LIB_GCC) --end-group $(FINI) \
+	--dynamic-linker= -E --force-dynamic
+	#$(CC-$*) -m$* -mG0lib -G0 -ldl -lc -lstandalone -lgcc  $^ $(LIBDL) -o $@
 
 bin/host/libhalide_hexagon_host.so: bin/host/sim_host.o
 	mkdir -p $(@D)

@@ -24,10 +24,16 @@ ostream &operator<<(ostream &out, const Type &type) {
         out << "float";
         break;
     case Type::Handle:
-        out << "handle";
+        if (type.handle_type) {
+            out << "(" << type.handle_type->inner_name.name << " *)";
+        } else {
+            out << "(void *)";
+        }
         break;
     }
-    out << type.bits();
+    if (!type.is_handle()) {
+        out << type.bits();
+    }
     if (type.lanes() > 1) out << 'x' << type.lanes();
     return out;
 }
@@ -42,7 +48,7 @@ ostream &operator<<(ostream &stream, const Expr &ir) {
     return stream;
 }
 
-ostream &operator <<(ostream &stream, const Internal::BufferPtr &buffer) {
+ostream &operator<<(ostream &stream, const Buffer<> &buffer) {
     return stream << "buffer " << buffer.name() << " = {...}\n";
 }
 
@@ -98,15 +104,15 @@ void IRPrinter::test() {
     expr_source << (x + 3) * (y / 2 + 17);
     internal_assert(expr_source.str() == "((x + 3)*((y/2) + 17))");
 
-    Stmt store = Store::make("buf", (x * 17) / (x - 3), y - 1,  Parameter());
+    Stmt store = Store::make("buf", (x * 17) / (x - 3), y - 1,  Parameter(), const_true());
     Stmt for_loop = For::make("x", -2, y + 2, ForType::Parallel, DeviceAPI::Host, store);
     vector<Expr> args(1); args[0] = x % 3;
     Expr call = Call::make(i32, "buf", args, Call::Extern);
-    Stmt store2 = Store::make("out", call + 1, x, Parameter());
+    Stmt store2 = Store::make("out", call + 1, x, Parameter(), const_true());
     Stmt for_loop2 = For::make("x", 0, y, ForType::Vectorized , DeviceAPI::Host, store2);
 
-    Stmt producer = ProducerConsumer::make("buf", true, for_loop);
-    Stmt consumer = ProducerConsumer::make("buf", false, for_loop2);
+    Stmt producer = ProducerConsumer::make_produce("buf", for_loop);
+    Stmt consumer = ProducerConsumer::make_consume("buf", for_loop2);
     Stmt pipeline = Block::make(producer, consumer);
 
     Stmt assertion = AssertStmt::make(y >= 3, Call::make(Int(32), "halide_error_param_too_small_i64",
@@ -152,6 +158,27 @@ ostream &operator<<(ostream &out, const ForType &type) {
     case ForType::Vectorized:
         out << "vectorized";
         break;
+    case ForType::GPUBlock:
+        out << "gpu_block";
+        break;
+    case ForType::GPUThread:
+        out << "gpu_thread";
+        break;
+    }
+    return out;
+}
+
+ostream &operator<<(ostream &out, const NameMangling &m) {
+    switch(m) {
+    case NameMangling::Default:
+        out << "default";
+        break;
+    case NameMangling::C:
+        out << "c";
+        break;
+    case NameMangling::CPlusPlus:
+        out << "c++";
+        break;
     }
     return out;
 }
@@ -184,6 +211,9 @@ ostream &operator <<(ostream &stream, const LoweredFunc &function) {
 
 std::ostream &operator<<(std::ostream &out, const LoweredFunc::LinkageType &type) {
     switch (type) {
+    case LoweredFunc::ExternalPlusMetadata:
+        out << "external_plus_metadata";
+        break;
     case LoweredFunc::External:
         out << "external";
         break;
@@ -206,6 +236,14 @@ void IRPrinter::print(Stmt ir) {
     ir.accept(this);
 }
 
+void IRPrinter::print_list(const std::vector<Expr> &exprs) {
+    for (size_t i = 0; i < exprs.size(); i++) {
+        print(exprs[i]);
+        if (i < exprs.size() - 1) {
+            stream << ", ";
+        }
+    }
+}
 
 void IRPrinter::do_indent() {
     for (int i = 0; i < indent; i++) stream << ' ';
@@ -285,47 +323,47 @@ void IRPrinter::visit(const Variable *op) {
 }
 
 void IRPrinter::visit(const Add *op) {
-    stream << "Add::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " + ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Sub *op) {
-    stream << "Sub::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " - ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Mul *op) {
-    stream << "Mul::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << "*";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Div *op) {
-    stream << "Div::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << "/";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Mod *op) {
-    stream << "Mod::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " % ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Min *op) {
-    stream << "Min::make(";
+    stream << "min(";
     print(op->a);
     stream << ", ";
     print(op->b);
@@ -333,7 +371,7 @@ void IRPrinter::visit(const Min *op) {
 }
 
 void IRPrinter::visit(const Max *op) {
-    stream << "Max::make(";
+    stream << "max(";
     print(op->a);
     stream << ", ";
     print(op->b);
@@ -341,77 +379,76 @@ void IRPrinter::visit(const Max *op) {
 }
 
 void IRPrinter::visit(const EQ *op) {
-    stream << "EQ::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " == ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const NE *op) {
-    stream << "NE::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " != ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const LT *op) {
-    stream << "LT::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " < ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const LE *op) {
-    stream << "LE::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " <= ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const GT *op) {
-    stream << "GT::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " > ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const GE *op) {
-    stream << "GE::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " >= ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const And *op) {
-    stream << "And::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " && ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Or *op) {
-    stream << "Or::make(";
+    stream << '(';
     print(op->a);
-    stream << ", ";
+    stream << " || ";
     print(op->b);
     stream << ')';
 }
 
 void IRPrinter::visit(const Not *op) {
-    stream << "Not::make(";
+    stream << '!';
     print(op->a);
-    stream << ")";
 }
 
 void IRPrinter::visit(const Select *op) {
-    stream << "Select::make(";
+    stream << "select(";
     print(op->condition);
     stream << ", ";
     print(op->true_value);
@@ -424,6 +461,10 @@ void IRPrinter::visit(const Load *op) {
     stream << op->name << "[";
     print(op->index);
     stream << "]";
+    if (!is_one(op->predicate)) {
+        stream << " if ";
+        print(op->predicate);
+    }
 }
 
 void IRPrinter::visit(const Ramp *op) {
@@ -441,31 +482,16 @@ void IRPrinter::visit(const Broadcast *op) {
 }
 
 void IRPrinter::visit(const Call *op) {
-    // Special-case some intrinsics for readability
-    if (op->is_intrinsic(Call::extract_buffer_host)) {
-        print(op->args[0]);
-        stream << ".host";
-        return;
-    } else if (op->is_intrinsic(Call::extract_buffer_min)) {
-        print(op->args[0]);
-        stream << ".min[" << op->args[1] << "]";
-        return;
-    } else if (op->is_intrinsic(Call::extract_buffer_max)) {
-        print(op->args[0]);
-        stream << ".max[" << op->args[1] << "]";
-        return;
-    }
-
     // TODO: Print indication of C vs C++?
     stream << op->name << "(";
-    for (size_t i = 0; i < op->args.size(); i++) {
-        print(op->args[i]);
-        if (i < op->args.size() - 1) {
-            stream << ", ";
-        }
+    if (op->is_intrinsic(Call::reinterpret) ||
+        op->is_intrinsic(Call::make_struct)) {
+        // For calls that define a type that isn't just a function of
+        // the types of the args, we also print the type.
+        stream << op->type << ", ";
     }
+    print_list(op->args);
     stream << ")";
-    stream << "[" << op->value_index << "]";
 }
 
 void IRPrinter::visit(const Let *op) {
@@ -532,26 +558,22 @@ void IRPrinter::visit(const Store *op) {
     print(op->index);
     stream << "] = ";
     print(op->value);
+    if (!is_one(op->predicate)) {
+        stream << " if ";
+        print(op->predicate);
+    }
     stream << '\n';
 }
 
 void IRPrinter::visit(const Provide *op) {
     do_indent();
     stream << op->name << "(";
-    for (size_t i = 0; i < op->args.size(); i++) {
-        print(op->args[i]);
-        if (i < op->args.size() - 1) stream << ", ";
-    }
+    print_list(op->args);
     stream << ") = ";
     if (op->values.size() > 1) {
         stream << "{";
     }
-    for (size_t i = 0; i < op->values.size(); i++) {
-        if (i > 0) {
-            stream << ", ";
-        }
-        print(op->values[i]);
-    }
+    print_list(op->values);
     if (op->values.size() > 1) {
         stream << "}";
     }
@@ -613,6 +635,20 @@ void IRPrinter::visit(const Realize *op) {
     stream << "}\n";
 }
 
+void IRPrinter::visit(const Prefetch *op) {
+    do_indent();
+    stream << "prefetch " << op->name << "(";
+    for (size_t i = 0; i < op->bounds.size(); i++) {
+        stream << "[";
+        print(op->bounds[i].min);
+        stream << ", ";
+        print(op->bounds[i].extent);
+        stream << "]";
+        if (i < op->bounds.size() - 1) stream << ", ";
+    }
+    stream << ")\n";
+}
+
 void IRPrinter::visit(const Block *op) {
     print(op->first);
     if (op->rest.defined()) print(op->rest);
@@ -653,6 +689,39 @@ void IRPrinter::visit(const Evaluate *op) {
     do_indent();
     print(op->value);
     stream << "\n";
+}
+
+void IRPrinter::visit(const Shuffle *op) {
+    if (op->is_concat()) {
+        stream << "concat_vectors(";
+        print_list(op->vectors);
+        stream << ")";
+    } else if (op->is_interleave()) {
+        stream << "interleave_vectors(";
+        print_list(op->vectors);
+        stream << ")";
+    } else if (op->is_extract_element()) {
+        stream << "extract_element(";
+        print_list(op->vectors);
+        stream << ", " << op->indices[0];
+        stream << ")";
+    } else if (op->is_slice()) {
+        stream << "slice_vectors(";
+        print_list(op->vectors);
+        stream << ", " << op->slice_begin() << ", " << op->slice_stride() << ", " << op->indices.size();
+        stream << ")";
+    } else {
+        stream << "shuffle(";
+        print_list(op->vectors);
+        stream << ", ";
+        for (size_t i = 0; i < op->indices.size(); i++) {
+            print(op->indices[i]);
+            if (i < op->indices.size() - 1) {
+                stream << ", ";
+            }
+        }
+        stream << ")";
+    }
 }
 
 }}

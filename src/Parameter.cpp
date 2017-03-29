@@ -13,23 +13,29 @@ struct ParameterContents {
     const int dimensions;
     const std::string name;
     const std::string handle_type;
-    BufferPtr buffer;
+    Buffer<> buffer;
     uint64_t data;
     int host_alignment;
-    Expr min_constraint[4];
-    Expr extent_constraint[4];
-    Expr stride_constraint[4];
+    std::vector<Expr> min_constraint;
+    std::vector<Expr> extent_constraint;
+    std::vector<Expr> stride_constraint;
     Expr min_value, max_value;
     const bool is_buffer;
     const bool is_explicit_name;
     const bool is_registered;
     ParameterContents(Type t, bool b, int d, const std::string &n, bool e, bool r)
-        : type(t), dimensions(d), name(n), buffer(BufferPtr()), data(0), 
+        : type(t), dimensions(d), name(n), buffer(Buffer<>()), data(0),
           host_alignment(t.bytes()), is_buffer(b), is_explicit_name(e), is_registered(r) {
+
+        min_constraint.resize(dimensions);
+        extent_constraint.resize(dimensions);
+        stride_constraint.resize(dimensions);
         // stride_constraint[0] defaults to 1. This is important for
         // dense vectorization. You can unset it by setting it to a
         // null expression. (param.set_stride(0, Expr());)
-        stride_constraint[0] = 1;
+        if (dimensions > 0) {
+            stride_constraint[0] = 1;
+        }
     }
 };
 
@@ -167,19 +173,19 @@ Expr Parameter::get_scalar_expr() const {
     return Expr();
 }
 
-BufferPtr Parameter::get_buffer() const {
+Buffer<> Parameter::get_buffer() const {
     check_is_buffer();
     return contents->buffer;
 }
 
-void Parameter::set_buffer(BufferPtr b) {
+void Parameter::set_buffer(Buffer<> b) {
     check_is_buffer();
     if (b.defined()) {
         user_assert(contents->type == b.type())
             << "Can't bind Parameter " << name()
             << " of type " << contents->type
             << " to Buffer " << b.name()
-            << " of type " << b.type() << "\n";
+            << " of type " << Type(b.type()) << "\n";
     }
     contents->buffer = b;
 }
@@ -244,11 +250,13 @@ int Parameter::host_alignment() const {
 }
 void Parameter::set_min_value(Expr e) {
     check_is_scalar();
-    user_assert(e.type() == contents->type)
-        << "Can't set parameter " << name()
-        << " of type " << contents->type
-        << " to have min value " << e
-        << " of type " << e.type() << "\n";
+    if (e.defined()) {
+        user_assert(e.type() == contents->type)
+            << "Can't set parameter " << name()
+            << " of type " << contents->type
+            << " to have min value " << e
+            << " of type " << e.type() << "\n";
+    }
     contents->min_value = e;
 }
 
@@ -259,17 +267,79 @@ Expr Parameter::get_min_value() const {
 
 void Parameter::set_max_value(Expr e) {
     check_is_scalar();
-    user_assert(e.type() == contents->type)
-        << "Can't set parameter " << name()
-        << " of type " << contents->type
-        << " to have max value " << e
-        << " of type " << e.type() << "\n";
+    if (e.defined()) {
+        user_assert(e.type() == contents->type)
+            << "Can't set parameter " << name()
+            << " of type " << contents->type
+            << " to have max value " << e
+            << " of type " << e.type() << "\n";
+    }
     contents->max_value = e;
 }
 
 Expr Parameter::get_max_value() const {
     check_is_scalar();
     return contents->max_value;
+}
+
+Dimension::Dimension(const Internal::Parameter &p, int d) : param(p), d(d) {
+    user_assert(param.defined())
+        << "Can't access the dimensions of an undefined Parameter\n";
+    user_assert(param.is_buffer())
+        << "Can't access the dimensions of a scalar Parameter\n";
+    user_assert(d >= 0 && d < param.dimensions())
+        << "Can't access dimension " << d
+        << " of a " << param.dimensions() << "-dimensional Parameter\n";
+}
+
+Expr Dimension::min() const {
+    std::ostringstream s;
+    s << param.name() << ".min." << d;
+    return Variable::make(Int(32), s.str(), param);
+}
+
+Expr Dimension::extent() const {
+    std::ostringstream s;
+    s << param.name() << ".extent." << d;
+    return Variable::make(Int(32), s.str(), param);
+}
+
+Expr Dimension::max() const {
+    return min() + extent() - 1;
+}
+
+Expr Dimension::stride() const {
+    std::ostringstream s;
+    s << param.name() << ".stride." << d;
+    return Variable::make(Int(32), s.str(), param);
+}
+
+Dimension Dimension::set_extent(Expr extent) {
+    param.set_extent_constraint(d, extent);
+    return *this;
+}
+
+Dimension Dimension::set_min(Expr min) {
+    param.set_min_constraint(d, min);
+    return *this;
+}
+
+Dimension Dimension::set_stride(Expr stride) {
+    param.set_stride_constraint(d, stride);
+    return *this;
+}
+
+
+Dimension Dimension::set_bounds(Expr min, Expr extent) {
+    return set_min(min).set_extent(extent);
+}
+
+Dimension Dimension::dim(int i) {
+    return Dimension(param, i);
+}
+
+const Dimension Dimension::dim(int i) const {
+    return Dimension(param, i);
 }
 
 void check_call_arg_types(const std::string &name, std::vector<Expr> *args, int dims) {
@@ -287,7 +357,7 @@ void check_call_arg_types(const std::string &name, std::vector<Expr> *args, int 
         }
         // We're allowed to implicitly cast from other varieties of int
         if (t != Int(32)) {
-            (*args)[i] = Internal::Cast::make(Int(32), (*args)[i]);
+            (*args)[i] = Cast::make(Int(32), (*args)[i]);
         }
     }
 }

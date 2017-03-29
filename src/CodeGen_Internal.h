@@ -49,7 +49,7 @@ bool function_takes_user_context(const std::string &name);
 /** Given a size (in bytes), return True if the allocation size can fit
  * on the stack; otherwise, return False. This routine asserts if size is
  * non-positive. */
-bool can_allocation_fit_on_stack(int32_t size);
+bool can_allocation_fit_on_stack(int64_t size);
 
 /** Given a Halide Euclidean division/mod operation, define it in terms of
  * div_round_to_zero or mod_round_to_zero. */
@@ -57,6 +57,10 @@ bool can_allocation_fit_on_stack(int32_t size);
 Expr lower_euclidean_div(Expr a, Expr b);
 Expr lower_euclidean_mod(Expr a, Expr b);
 ///@}
+
+/** Replace predicated loads/stores with unpredicated equivalents
+ * inside branches. */
+Stmt unpredicate_loads_stores(Stmt s);
 
 /** Given an llvm::Module, set llvm:TargetOptions, cpu and attr information */
 void get_target_options(const llvm::Module &module, llvm::TargetOptions &options, std::string &mcpu, std::string &mattrs);

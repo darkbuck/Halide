@@ -46,6 +46,9 @@ EXPORT std::ostream &operator<<(std::ostream &stream, const Stmt &);
  * readable form */
 EXPORT std::ostream &operator<<(std::ostream &stream, const ForType &);
 
+/** Emit a halide name mangling value in a human readable format */
+EXPORT std::ostream &operator<<(std::ostream &stream, const NameMangling &);
+
 /** An IRVisitor that emits IR to the given output stream in a human
  * readable form. Can be subclassed if you want to modify the way in
  * which it prints.
@@ -61,6 +64,10 @@ public:
 
     /** emit a statement on the output stream */
     EXPORT void print(Stmt);
+
+    /** emit a comma delimited list of exprs, without any leading or
+     * trailing punctuation. */
+    EXPORT void print_list(const std::vector<Expr> &exprs);
 
     EXPORT static void test();
 
@@ -115,6 +122,8 @@ protected:
     void visit(const Block *);
     void visit(const IfThenElse *);
     void visit(const Evaluate *);
+    void visit(const Shuffle *);
+    void visit(const Prefetch *);
 };
 }
 }

@@ -61,7 +61,9 @@ enum class IRNodeType {
     Realize,
     Block,
     IfThenElse,
-    Evaluate
+    Evaluate,
+    Shuffle,
+    Prefetch,
 };
 
 /** The abstract base classes for a node in the Halide IR. */
@@ -294,7 +296,7 @@ struct Expr : public Internal::IRHandle {
 /** This lets you use an Expr as a key in a map of the form
  * map<Expr, Foo, ExprCompare> */
 struct ExprCompare {
-    bool operator()(Expr a, Expr b) const {
+    bool operator()(const Expr &a, const Expr &b) const {
         return a.get() < b.get();
     }
 };
@@ -327,13 +329,15 @@ const DeviceAPI all_device_apis[] = {DeviceAPI::None,
 
 namespace Internal {
 
-/** An enum describing a type of loop traversal. Used in schedules,
- * and in the For loop IR node. */
+/** An enum describing a type of loop traversal. Used in schedules, and in
+ * the For loop IR node. GPUBlock and GPUThread are implicitly parallel */
 enum class ForType {
     Serial,
     Parallel,
     Vectorized,
-    Unrolled
+    Unrolled,
+    GPUBlock,
+    GPUThread
 };
 
 
