@@ -57,7 +57,8 @@ set(RUNTIME_CPP
   mips_cpu_features
   module_aot_ref_count
   module_jit_ref_count
-  nacl_host_cpu_count
+  msan
+  msan_stubs
   noos
   old_buffer_t
   opencl
@@ -81,7 +82,6 @@ set(RUNTIME_CPP
   profiler_inlined
   qurt_allocator
   qurt_hvx
-  renderscript
   runtime_api
   ssp
   thread_pool
@@ -105,11 +105,9 @@ set (RUNTIME_LL
   hvx_64
   hvx_128
   mips
-  pnacl_math
   posix_math
   powerpc
   ptx_dev
-  renderscript_dev
   win32_math
   x86
   x86_avx
@@ -257,6 +255,7 @@ set(HEADER_FILES
   AddImageChecks.h
   AddParameterChecks.h
   AllocationBoundsInference.h
+  ApplySplit.h
   Argument.h
   AssociativeOpsTable.h
   Associativity.h
@@ -278,11 +277,9 @@ set(HEADER_FILES
   CodeGen_Metal_Dev.h
   CodeGen_OpenGL_Dev.h
   CodeGen_OpenGLCompute_Dev.h
-  CodeGen_PNaCl.h
   CodeGen_PowerPC.h
   CodeGen_PTX_Dev.h
   CodeGen_Posix.h
-  CodeGen_Renderscript_Dev.h
   CodeGen_X86.h
   ConciseCasts.h
   CPlusPlusMangle.h
@@ -347,6 +344,7 @@ set(HEADER_FILES
   Parameter.h
   PartitionLoops.h
   Pipeline.h
+  Prefetch.h
   Profiling.h
   Qualify.h
   RDom.h
@@ -400,17 +398,12 @@ foreach (i ${RUNTIME_HEADER_FILES})
   configure_file(runtime/${i} "${CMAKE_BINARY_DIR}/include" COPYONLY)
 endforeach()
 
-set(BITWRITER_FILES
-  BitWriter_3_2/BitcodeWriter.cpp
-  BitWriter_3_2/BitcodeWriterPass.cpp
-  BitWriter_3_2/ValueEnumerator.cpp
-)
-
 add_library(Halide ${HALIDE_LIBRARY_TYPE}
   AddImageChecks.cpp
   AddParameterChecks.cpp
   AlignLoads.cpp
   AllocationBoundsInference.cpp
+  ApplySplit.cpp
   AssociativeOpsTable.cpp
   Associativity.cpp
   BoundaryConditions.cpp
@@ -430,11 +423,9 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   CodeGen_Metal_Dev.cpp
   CodeGen_OpenGL_Dev.cpp
   CodeGen_OpenGLCompute_Dev.cpp
-  CodeGen_PNaCl.cpp
   CodeGen_PowerPC.cpp
   CodeGen_PTX_Dev.cpp
   CodeGen_Posix.cpp
-  CodeGen_Renderscript_Dev.cpp
   CodeGen_X86.cpp
   CPlusPlusMangle.cpp
   CSE.cpp
@@ -494,6 +485,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   PartitionLoops.cpp
   Pipeline.cpp
   PrintLoopNest.cpp
+  Prefetch.cpp
   Profiling.cpp
   Qualify.cpp
   RDom.cpp
@@ -551,10 +543,6 @@ list(APPEND LLVM_COMPONENTS passes)
 # that link against the Halide library inherit those options and definitions
 target_include_directories(Halide PRIVATE ${LLVM_INCLUDE_DIRS})
 target_include_directories(Halide INTERFACE "${CMAKE_BINARY_DIR}/include")
-
-if (TARGET_NATIVE_CLIENT)
-  target_compile_definitions(Halide PRIVATE "-DWITH_NATIVE_CLIENT=1")
-endif()
 
 # TODO: For targets we can link against even fewer libraries by specifying
 # only the components we **REALLY** need (e.g. x86asmprinter;x86codegen rather than x86)
@@ -614,7 +602,16 @@ endif()
 
 if (MSVC)
   # Suppress some warnings
+  # 4244: conversion, possible loss of data
+  # 4267: conversion, possible loss of data
+  # 4800: BOOL -> true or false
+  # 4996: compiler encountered deprecated declaration
   target_compile_options(Halide PUBLIC /wd4244 /wd4267 /wd4800 /wd4996)
+  # Injected from recent LLVM:
+  target_compile_options(Halide PUBLIC /wd4141)  # 'inline' used more than once
+  target_compile_options(Halide PUBLIC /wd4146)  # unary minus applied to unsigned type
+  target_compile_options(Halide PUBLIC /wd4291)  # No matching operator delete found
+
   target_compile_definitions(Halide PUBLIC "-D_CRT_SECURE_NO_WARNINGS" "-D_SCL_SECURE_NO_WARNINGS")
   # To compile LLVM headers following was taken from LLVM CMake files:
   # Disable sized deallocation if the flag is supported. MSVC fails to compile
