@@ -25,32 +25,6 @@ using std::vector;
 namespace {
 
 template <typename T>
-std::ostream &operator<<(std::ostream &out, const set<T> &v) {
-    out << "[";
-    for (auto iter = v.begin(); iter != v.end(); ++iter) {
-        out << (*iter);
-        if (iter != (--v.end())) {
-            out << ", ";
-        }
-    }
-    out << "]";
-    return out;
-}
-
-template <typename T>
-std::ostream &operator<<(std::ostream &out, const vector<T> &v) {
-    out << "[";
-    for (size_t i = 0; i < v.size(); ++i) {
-        out << v[i];
-        if (i < v.size() - 1) {
-            out << ", ";
-        }
-    }
-    out << "]";
-    return out;
-}
-
-template <typename T>
 vector<T> get_subvector(const vector<T> &v, const set<int> &indices) {
     vector<T> sub;
     for (const auto &index : indices) {
@@ -534,7 +508,7 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             }
             if (subgraphs[i].size() > 2) {
                 // TODO(psuriana): currently only support max of 2 tuple elements
-                debug(5) << "Subgraph size is bigger than 2: " << subgraphs[i] << "\n";
+                debug(5) << "Subgraph size is bigger than 2\n";
                 return AssociativityProverResult();
             }
 
@@ -557,7 +531,7 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
                 return AssociativityProverResult();
             }
 
-            debug(5) << "...Proving associativity of subgraph " << i << ": " << subgraphs[i] << "\n";
+            debug(5) << "...Proving associativity of subgraph " << i << "\n";
             const set<int> &indices = subgraphs[i];
             for (auto iter = indices.begin(); iter != indices.end(); ++iter) {
                 int index = *iter;
