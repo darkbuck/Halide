@@ -974,13 +974,7 @@ int rfactor_tile_reorder_test() {
 }
 
 int main(int argc, char **argv) {
-    /*printf("Running subtraction rfactor test\n");
-    printf("    checking output img correctness...\n");
-    if (subtraction_rfactor_test() != 0) {
-        return -1;
-    }*/
-
-    /*printf("Running simple rfactor test\n");
+    printf("Running simple rfactor test\n");
     printf("    checking call graphs...\n");
     if (simple_rfactor_test(true) != 0) {
         return -1;
@@ -1090,16 +1084,6 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    printf("Running complex multiply rfactor test\n");
-    if (complex_multiply_rfactor_test() != 0) {
-        return -1;
-    }*/
-
-    printf("Running argmin rfactor test\n");
-    if (argmin_rfactor_test() != 0) {
-        return -1;
-    }
-
     printf("Running parallel dot product rfactor test\n");
     printf("    checking call graphs...\n");
     if (parallel_dot_product_rfactor_test(true) != 0) {
@@ -1124,6 +1108,16 @@ int main(int argc, char **argv) {
     printf("Running rfactor tile reorder test\n");
     printf("    checking output img correctness...\n");
     if (rfactor_tile_reorder_test() != 0) {
+        return -1;
+    }
+
+    printf("Running complex multiply rfactor test\n");
+    if (complex_multiply_rfactor_test() != 0) {
+        return -1;
+    }
+
+    printf("Running argmin rfactor test\n");
+    if (argmin_rfactor_test() != 0) {
         return -1;
     }
 

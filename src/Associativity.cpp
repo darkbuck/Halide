@@ -26,7 +26,7 @@ namespace {
 
 template <typename T>
 std::ostream &operator<<(std::ostream &out, const set<T> &v) {
-    out << '[';
+    out << "[";
     for (auto iter = v.begin(); iter != v.end(); ++iter) {
         out << (*iter);
         if (iter != (--v.end())) {
@@ -39,7 +39,7 @@ std::ostream &operator<<(std::ostream &out, const set<T> &v) {
 
 template <typename T>
 std::ostream &operator<<(std::ostream &out, const vector<T> &v) {
-    out << '[';
+    out << "[";
     for (size_t i = 0; i < v.size(); ++i) {
         out << v[i];
         if (i < v.size() - 1) {
@@ -50,44 +50,52 @@ std::ostream &operator<<(std::ostream &out, const vector<T> &v) {
     return out;
 }
 
-class GetExprOpcode : public IRVisitor {
-public:
-    vector<int> opcode;
-
-    using IRVisitor::visit;
-
-    template<typename T>
-    void visit_binary_operator(const T *op, int code) {
-        opcode.push_back(code);
-        op->a.accept(this);
-        op->b.accept(this);
+template <typename T>
+vector<T> get_subvector(const vector<T> &v, const set<int> &indices) {
+    vector<T> sub;
+    for (const auto &index : indices) {
+        internal_assert(index < (int)v.size());
+        sub.push_back(v[index]);
     }
-
-    void visit(const Add *op) {visit_binary_operator(op, 0);}
-    void visit(const Mul *op) {visit_binary_operator(op, 1);}
-    void visit(const Max *op) {visit_binary_operator(op, 2);}
-    void visit(const Min *op) {visit_binary_operator(op, 3);}
-    void visit(const Sub *op) {visit_binary_operator(op, 4);}
-};
-
-vector<int> get_expr_opcode(Expr e) {
-    GetExprOpcode c;
-    e.accept(&c);
-    return c.opcode;
+    return sub;
 }
 
-// Replace self-reference to Func 'func' with arguments 'args' at index
-// 'value_index' in the Expr/Stmt with Var 'substitute'
+class FindConflict : public IRGraphVisitor {
+    using IRGraphVisitor::visit;
+
+    string var;
+
+    void visit(const Variable *v) {
+        if (var == v->name) {
+            if (expr.defined()) {
+                internal_assert(equal(expr, Expr(v)));
+            } else {
+                expr = Expr(v);
+            }
+        }
+    }
+public:
+    FindConflict(const string &v) : var(v) {}
+    Expr expr;
+};
+
+Expr find_conflict(Expr e, const string &v) {
+    FindConflict f(v);
+    e.accept(&f);
+    return f.expr;
+}
+
+// Replace self-references to 'func' with arguments 'args' at
+// 'value_index' in the Expr/Stmt with some Var
 class ConvertSelfRef : public IRMutator {
     using IRMutator::visit;
 
-    const string func;
-    const vector<Expr> args;
+    const string &func;
+    const vector<Expr> &args;
     // If that function has multiple values, which value does this
     // call node refer to?
-    int value_index;
-    vector<string> op_x_names;
-    map<int, Expr> *x_subs;
+    const int value_index;
+    const vector<string> &op_x_names;
     bool is_conditional;
 
     void visit(const Call *op) {
@@ -118,20 +126,11 @@ class ConvertSelfRef : public IRMutator {
                 }
             }
             // Substitute the call
-            const auto &iter = x_subs->find(op->value_index);
-            if (iter != x_subs->end()) {
-                const Variable *v = iter->second.as<Variable>();
-                internal_assert(v && (v->type == op->type));
-                debug(5) << "   Substituting Call " << op->name << " at value index "
-                         << op->value_index << " with " << v->name << "\n";
-                expr = iter->second;
-            } else {
-                internal_assert(op->value_index < (int)op_x_names.size());
-                debug(5) << "   Substituting Call " << op->name << " at value index "
-                         << op->value_index << " with " << op_x_names[op->value_index] << "\n";
-                expr = Variable::make(op->type, op_x_names[op->value_index]);
-                x_subs->emplace(op->value_index, expr);
-            }
+            internal_assert(op->value_index < (int)op_x_names.size());
+            debug(5) << "   Substituting Call " << op->name << " at value index "
+                     << op->value_index << " with " << op_x_names[op->value_index] << "\n";
+            expr = Variable::make(op->type, op_x_names[op->value_index]);
+
             if (op->value_index == value_index) {
                 x_part = op;
             } else {
@@ -158,291 +157,13 @@ class ConvertSelfRef : public IRMutator {
 
 public:
     ConvertSelfRef(const string &f, const vector<Expr> &args, int idx,
-                   const vector<string> &x_names, map<int, Expr> *subs) :
-        func(f), args(args), value_index(idx), op_x_names(x_names), x_subs(subs), is_conditional(false) {}
+                   const vector<string> &x_names) :
+        func(f), args(args), value_index(idx), op_x_names(x_names), is_conditional(false) {}
 
     bool is_solvable = true;
     set<int> x_dependencies; // Contains dependencies on self-reference at different tuple indices
     Expr x_part; // Undefined if there is no self-reference at value_index
 };
-
-// Given an update definition of a Func of the form: update(_x, ...), where '_x'
-// is the self-reference to the Func, try to infer a single Var '_y' that is the
-// remainder of the op not including '_x'. For example, min(_x, 2*g(r.x) + 4)
-// is converted into min(_x, _y), where '_y' is 2*g(r.x) + 4. If there is no
-// single Var that satisfies requirement, set 'is_solvable' to false.
-class ExtractBinaryOp : public IRMutator {
-    using IRMutator::visit;
-
-    const string func;
-    const vector<Expr> args;
-    map<int, Expr> self_ref_subs;
-    string op_y;
-    map<Expr, string, ExprCompare> y_subs;
-
-    enum OpType {
-        OP_X,       // x only or mixed of x/constant
-        OP_Y,       // y only
-        OP_MIXED,   // mixed of x/y
-    };
-
-    OpType type;
-
-    bool is_x(const string &name) {
-        for (const auto &iter : self_ref_subs) {
-            const Variable *v = iter.second.as<Variable>();
-            internal_assert(v);
-            if (v->name == name) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    template<typename T>
-    void visit_unary_op(const T *op) {
-        type = OP_Y;
-        current_y = Expr(op);
-        expr = Variable::make(op->type, op_y);
-    }
-
-    void visit(const IntImm *op)    { visit_unary_op<IntImm>(op); }
-    void visit(const UIntImm *op)   { visit_unary_op<UIntImm>(op); }
-    void visit(const FloatImm *op)  { visit_unary_op<FloatImm>(op); }
-    void visit(const StringImm *op) { visit_unary_op<StringImm>(op); }
-
-    void visit(const Variable *op) {
-        if (!is_solvable) {
-            return;
-        }
-        if (is_x(op->name)) {
-            type = OP_X;
-            expr = op;
-            return;
-        }
-        type = OP_Y;
-        current_y = Expr(op);
-        expr = Variable::make(op->type, op_y);
-    }
-
-    void visit(const Cast *op) {
-        if (!is_solvable) {
-            return;
-        }
-        Expr val = mutate(op->value);
-        if (type == OP_Y) {
-            current_y = Expr(op);
-            expr = Variable::make(op->type, op_y);
-        } else {
-            // Either x or pair of x/y
-            expr = Cast::make(op->type, val);
-        }
-    }
-
-    template<typename T, typename Opp>
-    void visit_binary_op(const T *op) {
-        if (!is_solvable) {
-            return;
-        }
-        Expr a = mutate(op->a);
-        OpType a_type = type;
-        Expr b = mutate(op->b);
-        OpType b_type = type;
-
-        internal_assert(a.type() == b.type());
-        if ((a_type == OP_MIXED) || (b_type == OP_MIXED)) {
-            is_solvable = false;
-            return;
-        }
-        if ((a_type == OP_X) && (b_type == OP_X)) {
-            is_solvable = false;
-            return;
-        }
-
-        if ((a_type == OP_X) || (b_type == OP_X)) {
-            // Pair of x and y
-            type = OP_MIXED;
-            expr = Opp::make(a, b);
-        } else {
-            internal_assert((a_type == OP_Y) && (b_type == OP_Y));
-            type = OP_Y;
-            current_y = Expr(op);
-            expr = Variable::make(op->type, op_y);
-        }
-    }
-
-    void visit(const Add *op) { visit_binary_op<Add, Add>(op); }
-    void visit(const Sub *op) { visit_binary_op<Sub, Sub>(op); }
-    void visit(const Mul *op) { visit_binary_op<Mul, Mul>(op); }
-    void visit(const Div *op) { visit_binary_op<Div, Div>(op); }
-    void visit(const Mod *op) { visit_binary_op<Mod, Mod>(op); }
-    void visit(const Min *op) { visit_binary_op<Min, Min>(op); }
-    void visit(const Max *op) { visit_binary_op<Max, Max>(op); }
-    void visit(const And *op) { visit_binary_op<And, And>(op); }
-    void visit(const Or *op) { visit_binary_op<Or, Or>(op); }
-    void visit(const LE *op) { visit_binary_op<LE, LE>(op); }
-    void visit(const LT *op) { visit_binary_op<LT, LT>(op); }
-    void visit(const GE *op) { visit_binary_op<GE, GE>(op); }
-    void visit(const GT *op) { visit_binary_op<GT, GT>(op); }
-    void visit(const EQ *op) { visit_binary_op<EQ, EQ>(op); }
-    void visit(const NE *op) { visit_binary_op<NE, NE>(op); }
-
-    void visit(const Load *op) {
-        internal_error << "Can't handle Load\n";
-    }
-
-    void visit(const Ramp *op) {
-        internal_error << "Can't handle Ramp\n";
-    }
-
-    void visit(const Broadcast *op) {
-        internal_error << "Can't handle Broadcast\n";
-    }
-
-    void visit(const Let *op) {
-        internal_error << "Let should have been substituted before calling this mutator\n";
-    }
-
-    void visit(const Select *op) {
-        if (!is_solvable) {
-            return;
-        }
-
-        Expr old_y;
-
-        Expr cond = mutate(op->condition);
-        if ((type != OP_X)) {
-            if (y_subs.count(current_y) == 0) {
-                old_y = current_y;
-            } else {
-                // We already have substitute for 'current_y' (e.g. Var 'y' from
-                // other Tuple element), use that instead of creating a new
-                // Var
-                cond = substitute(op_y, Variable::make(current_y.type(), y_subs[current_y]), cond);
-            }
-        }
-        if (!is_solvable) {
-            return;
-        }
-
-        Expr true_value = mutate(op->true_value);
-        if (!is_solvable) {
-            return;
-        }
-        if (type == OP_MIXED) {
-            // select(x + g(y1), x + g(y2), ...) is not solvable (it's not associative)
-            is_solvable = false;
-            return;
-        } else if (type == OP_Y) {
-            if (old_y.defined()) {
-                if (!equal(old_y, current_y)) {
-                    if (is_const(current_y)) {
-                        current_y = old_y;
-                    } else if (!is_const(old_y)) {
-                        is_solvable = false;
-                        return;
-                    }
-                }
-            }
-            old_y = current_y;
-        }
-
-        Expr false_value = mutate(op->false_value);
-        if (!is_solvable) {
-            return;
-        }
-        if (type == OP_MIXED) {
-            is_solvable = false;
-            return;
-        } else if (type == OP_Y) {
-            if (old_y.defined()) {
-                if (!equal(old_y, current_y)) {
-                    if (is_const(current_y)) {
-                        current_y = old_y;
-                    } else if (!is_const(old_y)) {
-                        is_solvable = false;
-                        return;
-                    }
-                }
-            }
-            old_y = current_y;
-        }
-        expr = Select::make(cond, true_value, false_value);
-    }
-
-    void visit(const Not *op) {
-        if (!is_solvable) {
-            return;
-        }
-        Expr a = mutate(op->a);
-        if (type == OP_Y) {
-            current_y = Expr(op);
-            expr = Variable::make(op->type, op_y);
-        } else {
-            expr = Not::make(a);
-        }
-    }
-
-    void visit(const Call *op) {
-        if (!is_solvable) {
-            return;
-        }
-        if (op->call_type != Call::Halide) {
-            is_solvable = false;
-            return;
-        }
-
-        // Mutate the args
-        for (size_t i = 0; i < op->args.size(); i++) {
-            Expr new_args = mutate(op->args[i]);
-            if (type != OP_Y) {
-                is_solvable = false;
-                return;
-            }
-        }
-        internal_assert(type == OP_Y);
-        current_y = Expr(op);
-        expr = Variable::make(op->type, op_y);
-    }
-
-public:
-    ExtractBinaryOp(const string &f, const vector<Expr> &args, const map<int, Expr> &x_subs,
-                      const string &y, const map<Expr, string, ExprCompare> &y_subs) :
-        func(f), args(args), self_ref_subs(x_subs), op_y(y), y_subs(y_subs), is_solvable(true) {}
-
-    bool is_solvable;
-    Expr current_y;
-};
-
-template<typename T>
-bool visit_associative_binary_op(int index, const string &op_x, const string &op_y,
-                                 Expr x_part, Expr lhs, Expr rhs, AssociativeOps &assoc_ops) {
-    const Variable *var_a = lhs.as<Variable>();
-    if (!var_a || (var_a->name != op_x)) {
-        debug(5) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
-        return false;
-    } else if (expr_uses_var(rhs, op_x)) {
-        debug(5) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
-        return false;
-    } else {
-        // op(x, y)
-        assoc_ops.x[index] = {op_x, x_part};
-        assoc_ops.y[index] = {op_y, rhs};
-    }
-    return true;
-}
-
-bool compare_expr_opcode(const vector<AssociativePair>& lhs, const vector<AssociativePair>& rhs) {
-    vector<vector<int>> lhs_opcode, rhs_opcode;
-    for (const auto &pair : lhs) {
-        lhs_opcode.push_back(get_expr_opcode(pair.op));
-    }
-    for (const auto &pair : rhs) {
-        rhs_opcode.push_back(get_expr_opcode(pair.op));
-    }
-    //std::cout << "lhs: " << lhs_opcode << ", rhs: " << rhs_opcode << ", lhs < rhs? " << (lhs_opcode < rhs_opcode) << "\n";
-    return lhs_opcode < rhs_opcode;
-}
 
 bool associative_op_pattern_match(Expr e,
                                   const AssociativePair &pattern,
@@ -453,35 +174,31 @@ bool associative_op_pattern_match(Expr e,
 
     map<string, Expr> result;
     if (expr_match(pattern.op, e, result)) {
-        debug(5) << "Find associative ops for " << e << " -> " << pattern.op
+        debug(5) << "Found associative ops for " << e << " -> " << pattern.op
                  << " with identity: " << pattern.identity
                  << ", y_part: " << result["y0"] << "\n";
 
-        for (const auto &x_name : x_names) {
-            const auto &iter = result.find(x_name);
+        for (size_t i = 0; i < x_names.size(); ++i) {
+            const auto &iter = result.find("x" + std::to_string(i));
             if (iter != result.end()) {
                 const Variable *xvar = iter->second.as<Variable>();
-                if ((xvar == nullptr) || (xvar->name != x_name)) {
-                    debug(5) << "...Skipping match since the x_part is different than expected "
-                             << iter->second << "\n";
+                if ((xvar == nullptr) || (xvar->name != x_names[i])) {
+                    debug(5) << "...Skipping match since the x_part is different than expected. "
+                             << "Expect: " << x_names[i] << "; get: " << iter->second << "\n";
                     return false;
                 }
-                debug(5) << "...x: " << iter->first << " -> " << iter->second << "\n";
             }
         }
-        for (const auto &y_name : y_names) {
-            debug(5) << "y_name: " << y_name << "\n";
-            const auto &iter = result.find(y_name);
+        for (size_t i = 0; i < y_names.size(); ++i) {
+            const auto &iter = result.find("y" + std::to_string(i));
             if (iter != result.end()) {
                 // Make sure that y_part should not depend on x vars
                 if (expr_uses_vars(iter->second, x_scope)) {
                     debug(5) << "...Skipping match since the y_part depends on x vars\n";
                     return false;
                 }
-                debug(5) << "...y: " << iter->first << " -> " << iter->second << "\n";
             }
         }
-
         // Make sure that the new matches are in agreement with any previous matches
         for (const auto &iter : result) {
             const auto &match_iter = match.find(iter.first);
@@ -494,7 +211,6 @@ bool associative_op_pattern_match(Expr e,
                 }
             }
         }
-
         return true;
     }
     return false;
@@ -508,75 +224,41 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
     internal_assert(op_x_names.size() == exprs.size());
     internal_assert(op_x_names.size() == assoc_ops.size());
 
-    vector<AssociativePair> expr_ops(exprs.size());
-    for (size_t i = 0; i < exprs.size(); ++i) {
-        expr_ops[i] = AssociativePair(exprs[i]);
+    Scope<int> x_scope;
+    for (const auto &x : op_x_names) {
+        x_scope.push(x, 0);
     }
 
-    //TODO(psuriana): Find a tighter bound
-    auto lower = table.begin();
-    //auto upper = std::upper_bound(table.begin(), table.end(), expr_ops, compare_expr_opcode);
-
-    auto upper = table.end();
-
-    //std::cout << "****lower: " << lower << ", upper: " << upper << "\n";
-
-    // We need to convert the variable names into x{tuple_idx}
-    // to match it with the associative ops table.
-    vector<string> pattern_x_names(op_x_names.size());
-    vector<string> pattern_y_names(op_y_names.size());
-    Scope<int> pattern_x_scope;
-    vector<Expr> sub_exprs(exprs);
-    for (size_t i = 0; i < op_x_names.size(); ++i) {
-        pattern_x_names[i] = "x" + std::to_string(i);
-        pattern_x_scope.push(pattern_x_names[i], 0);
-        pattern_y_names[i] = "y" + std::to_string(i);
-        for (size_t j = 0; j < sub_exprs.size(); ++j) {
-            if (!x_parts[i].defined()) {
-                continue;
-            }
-            debug(5) << "Substituting " << op_x_names[i] << " with " << x_parts[i] << " in " << sub_exprs[j] << "\n";
-            sub_exprs[j] = substitute(op_x_names[i],
-                                      Variable::make(x_parts[i].type(), pattern_x_names[i]),
-                                      sub_exprs[j]);
-        }
-        debug(5) << "**** expr: " << exprs[i] << " -> " << sub_exprs[i] << "\n";
-    }
-
-    debug(5) << "Table size: " << (upper-lower) << "\n";
-    for (; lower < upper; lower++) {
-        debug(5) << "Index " << (upper-lower) << "\n";
-        vector<AssociativePair> patterns = *lower;
+    for (const vector<AssociativePair> &patterns : table) {
         internal_assert(patterns.size() == op_x_names.size());
         map<string, Expr> pattern_match;
         bool matched = true;
+        // If any of element in 'patterns' does not match, try the next thing in
+        // the table.
         for (size_t i = 0; i < patterns.size(); ++i) {
-            if (!associative_op_pattern_match(sub_exprs[i], patterns[i], pattern_x_names,
-                                              pattern_y_names, pattern_x_scope, pattern_match)) {
+            if (!associative_op_pattern_match(exprs[i], patterns[i], op_x_names,
+                                              op_y_names, x_scope, pattern_match)) {
                 matched = false;
                 break;
             }
         }
-
         if (!matched) {
             continue;
         }
 
         vector<pair<Expr, Expr>> replacement;
-        for (const auto &y_name : pattern_y_names) {
-            debug(5) << "---Finding match for " << y_name << "\n";
-            const auto &iter = pattern_match.find(y_name);
+        for (size_t index = 0; index < op_y_names.size(); ++index) {
+            const auto &iter = pattern_match.find("y" + std::to_string(index));
             if (iter == pattern_match.end()) {
                 // Didn't find y{index} during pattern matching. Try next pattern.
                 matched = false;
                 break;
             }
             Expr y_part = iter->second;
-            int index = atoi(y_name.substr(1, y_name.size()-1).c_str());
-            internal_assert(y_name == "y" + std::to_string(index));
 
-            debug(5) << "Pattern: " << op_x_names[index] << " -> " << x_parts[index]
-                     << ", " << op_y_names[index] << " -> " << y_part << "\n";
+            debug(5) << "Pattern at index " << index << ": " << op_x_names[index]
+                     << " -> " << x_parts[index] << ", " << op_y_names[index]
+                     << " -> " << y_part << "\n";
             assoc_ops.x[index] = {op_x_names[index], x_parts[index]};
             assoc_ops.y[index] = {op_y_names[index], y_part};
             replacement.push_back({y_part, Variable::make(y_part.type(), op_y_names[index])});
@@ -600,91 +282,125 @@ bool find_match(const vector<vector<AssociativePair>> &table, const vector<strin
     return false;
 }
 
-bool extract_associative_op_single_element(int index, const vector<string> &op_x_names,
-                                           const vector<string> &op_y_names, Expr x_part,
-                                           Expr e, AssociativeOps &assoc_ops) {
+template<typename T>
+std::pair<bool, bool> visit_associative_binary_op(
+        int index, const string &op_x, const string &op_y,
+        Expr x_part, Expr lhs, Expr rhs, AssociativeOps &assoc_ops) {
+
+    const Variable *var_a = lhs.as<Variable>();
+    if (!var_a || (var_a->name != op_x)) {
+        debug(5) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
+        return {false, false};
+    } else if (expr_uses_var(rhs, op_x)) {
+        debug(5) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
+        return {false, false};
+    } else {
+        // op(x, y)
+        assoc_ops.x[index] = {op_x, x_part};
+        assoc_ops.y[index] = {op_y, rhs};
+    }
+    if (std::is_same<T, Sub>::value) {
+        // Sub is associative but not commutative
+        return {true, false};
+    }
+    return {true, true};
+}
+
+// Return a pair of booleans indicating if an operator is associative and commutative
+// respectively. 'assoc_ops' contains the the equivalent associative binary/unary operator
+// for that operator. If the operator is non-associative, 'assoc_ops' is not valid.
+std::pair<bool, bool> extract_associative_op_single_element(
+        int index, const vector<string> &op_x_names,
+        const vector<string> &op_y_names, Expr x_part,
+        Expr e, AssociativeOps &assoc_ops) {
+
     Type t = e.type();
     const string &op_x = op_x_names[index];
     const string &op_y = op_y_names[index];
     Expr x = Variable::make(t, op_x);
     Expr y = Variable::make(t, op_y);
 
-    debug(5) << "\n\nProving associativity of:  " << e << "\n";
-
     if (!x_part.defined()) { // op(y)
         // Update with no self-recurrence is associative and the identity can be
-        // anything since it's going to be replaced anyway
+        // anything since it's going to be replaced anyway, but it's not
+        // commutative
         assoc_ops.ops[index] = {y, make_const(t, 0)};
         assoc_ops.x[index] = {"", Expr()};
         assoc_ops.y[index] = {op_y, e};
-        return true;
+        return {true, false};
     }
 
-    bool success = false;
+    bool is_associative = false, is_commutative = false;
     if (const Add *a = e.as<Add>()) {
         assoc_ops.ops[index] = {x + y, make_const(t, 0)};
-        success = visit_associative_binary_op<Add>(index, op_x, op_y, x_part, a->a, a->b, assoc_ops);
+        std::tie(is_associative, is_commutative) =
+            visit_associative_binary_op<Add>(index, op_x, op_y, x_part, a->a, a->b, assoc_ops);
     } else if (const Sub *s = e.as<Sub>()) {
         assoc_ops.ops[index] = {x + y, make_const(t, 0)};
-        success = visit_associative_binary_op<Sub>(index, op_x, op_y, x_part, s->a, s->b, assoc_ops);
+        std::tie(is_associative, is_commutative) =
+            visit_associative_binary_op<Sub>(index, op_x, op_y, x_part, s->a, s->b, assoc_ops);
     } else if (const Mul *m = e.as<Mul>()) {
         assoc_ops.ops[index] = {x * y, make_const(t, 1)};
-        success = visit_associative_binary_op<Mul>(index, op_x, op_y, x_part, m->a, m->b, assoc_ops);
+        std::tie(is_associative, is_commutative) =
+            visit_associative_binary_op<Mul>(index, op_x, op_y, x_part, m->a, m->b, assoc_ops);
     } else if (const Min *m = e.as<Min>()) {
         assoc_ops.ops[index] = {Min::make(x, y), t.max()};
-        success = visit_associative_binary_op<Min>(index, op_x, op_y, x_part, m->a, m->b, assoc_ops);
+        std::tie(is_associative, is_commutative) =
+            visit_associative_binary_op<Min>(index, op_x, op_y, x_part, m->a, m->b, assoc_ops);
     } else if (const Max *m = e.as<Max>()) {
         assoc_ops.ops[index] = {Max::make(x, y), t.min()};
-        success = visit_associative_binary_op<Max>(index, op_x, op_y, x_part, m->a, m->b, assoc_ops);
+        std::tie(is_associative, is_commutative) =
+            visit_associative_binary_op<Max>(index, op_x, op_y, x_part, m->a, m->b, assoc_ops);
     } else if (const And *a = e.as<And>()) {
         assoc_ops.ops[index] = {And::make(x, y), make_const(t, 1)};
-        success = visit_associative_binary_op<And>(index, op_x, op_y, x_part, a->a, a->b, assoc_ops);
+        std::tie(is_associative, is_commutative) =
+            visit_associative_binary_op<And>(index, op_x, op_y, x_part, a->a, a->b, assoc_ops);
     } else if (const Or *o = e.as<Or>()) {
         assoc_ops.ops[index] = {Or::make(x, y), make_const(t, 0)};
-        success = visit_associative_binary_op<Or>(index, op_x, op_y, x_part, o->a, o->b, assoc_ops);
+        std::tie(is_associative, is_commutative) =
+            visit_associative_binary_op<Or>(index, op_x, op_y, x_part, o->a, o->b, assoc_ops);
     } else if (e.as<Let>()) {
         internal_error << "Let should have been substituted before calling this function\n";
     }
 
-    if (!success && t.is_int() && (t.bits() == 32)) {
+    // TODO(psuriana): this should return a boolean of {is_associative, is_commutative}
+    if (!is_associative && t.is_int() && (t.bits() == 32)) {
         // It's non-trivial binary ops. Try looking at the associative ops table for int32
         debug(5) << "Look-up associativity table for: " << e << "\n";
-        AssociativeOps temp(1);
-        success = find_match(get_i32_ops_table({e}), {op_x}, {op_y}, {x_part}, {e}, temp);
-        if (success) {
+        AssociativeOps tmp(1);
+        is_associative = find_match(get_i32_ops_table({e}), {op_x}, {op_y}, {x_part}, {e}, tmp);
+        if (is_associative) {
             // Copy the result over
-            assoc_ops.ops[index] = temp.ops[0];
-            assoc_ops.x[index] = temp.x[0];
-            assoc_ops.y[index] = temp.y[0];
+            assoc_ops.ops[index] = tmp.ops[0];
+            assoc_ops.x[index] = tmp.x[0];
+            assoc_ops.y[index] = tmp.y[0];
         }
     }
-    debug(5) << e << " is associative? " << success << "\n";
-    return success;
+    debug(5) << e << " -> is associative? " << is_associative << ", is commutative? " << is_commutative << "\n";
+    return {is_associative, is_commutative};
 }
 
-class FindConflict : public IRGraphVisitor {
-    using IRGraphVisitor::visit;
-
-    string var;
-
-    void visit(const Variable *v) {
-        if (var == v->name) {
-            if (expr.defined()) {
-                internal_assert(equal(expr, Expr(v)));
-            } else {
-                expr = Expr(v);
+void add_transitive_dependencies(vector<set<int>> &dependencies) {
+    // TODO(psuriana): there might be a better way to find all the transitive dependencies
+    bool change = true;
+    while (change) {
+        change = false;
+        for (size_t i = 0; i < dependencies.size(); ++i) {
+            for (size_t j = 0; j < dependencies.size(); ++j) {
+                if (i == j) {
+                    continue;
+                }
+                if (dependencies[i].find(j) != dependencies[i].end()) {
+                    for (const auto &idx : dependencies[j]) {
+                        if (dependencies[i].find(idx) == dependencies[i].end()) {
+                            dependencies[i].insert(idx);
+                            change = false;
+                        }
+                    }
+                }
             }
         }
     }
-public:
-    FindConflict(const string &v) : var(v) {}
-    Expr expr;
-};
-
-Expr find_conflict(Expr e, const string &v) {
-    FindConflict f(v);
-    e.accept(&f);
-    return f.expr;
 }
 
 // Given dependencies of each tuple element, compute the set of subgraphs:
@@ -721,85 +437,17 @@ vector<set<int>> compute_subgraphs(vector<set<int>> dependencies) {
     return subgraphs;
 }
 
-template <typename T>
-vector<T> get_subvector(const vector<T> &v, const set<int> &indices) {
-    vector<T> sub;
-    for (const auto &index : indices) {
-        internal_assert(index < (int)v.size());
-        sub.push_back(v[index]);
-    }
-    return sub;
-}
-
-void add_implicit_dependencies(vector<set<int>> &dependencies) {
-    //TODO(psuriana): there might be a better way to find all the intrinsic dependencies
-    bool change = true;
-    while (change) {
-        change = false;
-        for (size_t i = 0; i < dependencies.size(); ++i) {
-            for (size_t j = 0; j < dependencies.size(); ++j) {
-                if (i == j) {
-                    continue;
-                }
-                if (dependencies[i].find(j) != dependencies[i].end()) {
-                    for (const auto &idx : dependencies[j]) {
-                        if (dependencies[i].find(idx) == dependencies[i].end()) {
-                            dependencies[i].insert(idx);
-                            change = false;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 } // anonymous namespace
 
 
 AssociativityProverResult prove_associativity(const string &f, vector<Expr> args,
                                               vector<Expr> exprs) {
     AssociativeOps assoc_ops(exprs.size());
-    map<int, Expr> x_subs;
 
     for (Expr &arg : args) {
         arg = common_subexpression_elimination(arg);
         arg = simplify(arg);
         arg = substitute_in_all_lets(arg);
-    }
-
-    // Need to cleanup all occurences of x0, y0, etc, to avoid clashing during
-    // the wildcard matching later on.
-    map<string, Expr> dummy_subs;
-    map<string, Expr> reverse_dummy_subs;
-    for (size_t idx = 0; idx < exprs.size(); ++idx) {
-        {
-            string x_name = "x" + std::to_string(idx);
-            Expr conflict = find_conflict(exprs[idx], x_name);
-            if (conflict.defined()) {
-                const auto &iter = dummy_subs.find(x_name);
-                if (iter == dummy_subs.end()) {
-                    string x_dummy = unique_name("x_dummy" + std::to_string(idx));
-                    dummy_subs.emplace(x_name, Variable::make(conflict.type(), x_dummy));
-                    reverse_dummy_subs.emplace(x_dummy, conflict);
-                }
-            }
-        }
-        {
-            string y_name = "y" + std::to_string(idx);
-            Expr conflict = find_conflict(exprs[idx], y_name);
-            if (conflict.defined()) {
-                const auto &iter = dummy_subs.find(y_name);
-                if (iter == dummy_subs.end()) {
-                    string y_dummy = unique_name("y_dummy" + std::to_string(idx));
-                    dummy_subs.emplace(y_name, Variable::make(conflict.type(), y_dummy));
-                    reverse_dummy_subs.emplace(y_dummy, conflict);
-                }
-            }
-        }
-    }
-    for (size_t idx = 0; idx < exprs.size(); ++idx) {
-        exprs[idx] = substitute(dummy_subs, exprs[idx]);
     }
 
     vector<string> op_x_names(exprs.size()), op_y_names(exprs.size());
@@ -811,7 +459,7 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
     vector<set<int>> dependencies(exprs.size());
     vector<Expr> x_parts(exprs.size());
     bool all_independent = true;
-    bool all_i32 = true;
+    bool all_i32 = true; // TODO(psuriana): remove this restriction
 
     // For a Tuple of exprs to be associative, each element of the Tuple
     // has to be associative.
@@ -824,12 +472,12 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
         }
         exprs[idx] = simplify(exprs[idx]);
         exprs[idx] = common_subexpression_elimination(exprs[idx]);
-        // Simplify or the original expr might already have let exprs,
+        // Calling Simplify or the original expr itself might have let exprs,
         // so we should substitutes in all lets first
         exprs[idx] = substitute_in_all_lets(exprs[idx]);
 
         // Replace any self-reference to Func 'f' with a Var
-        ConvertSelfRef csr(f, args, idx, op_x_names, &x_subs);
+        ConvertSelfRef csr(f, args, idx, op_x_names);
         exprs[idx] = csr.mutate(exprs[idx]);
         if (!csr.is_solvable) {
             return AssociativityProverResult();
@@ -850,8 +498,8 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
         exprs[idx] = substitute_in_all_lets(exprs[idx]);
     }
 
-    // Find all implicit dependencies and add them to the graph
-    add_implicit_dependencies(dependencies);
+    // Find all transitive dependencies and add them to the graph
+    add_transitive_dependencies(dependencies);
 
     if (all_independent || (exprs.size() == 1)) {
         debug(5) << "All tuple elements are independent. Try proving associativity of "
@@ -861,7 +509,8 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
         for (size_t idx = 0; idx < exprs.size(); ++idx) {
             // Try to infer the 'y' part of the operator. If we couldn't find
             // a single 'y' that satisfy the operator, give up
-            bool is_associative = extract_associative_op_single_element(
+            bool is_associative, is_commutative;
+            std::tie(is_associative, is_commutative) = extract_associative_op_single_element(
                 idx, op_x_names, op_y_names, x_parts[idx], exprs[idx], assoc_ops);
             if (!is_associative) {
                 return AssociativityProverResult();
@@ -869,7 +518,7 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
         }
     } else {
         debug(5) << "There is cross-dependencies. Need to prove associativity in bulk.\n";
-        //TODO(psuriana): currently only works for 32-bit integers and maximum of 2 tuple elements
+        // TODO(psuriana): currently only works for 32-bit integers and maximum of 2 tuple elements
         if (!all_i32) {
             debug(5) << "Not all int 32\n";
             return AssociativityProverResult();
@@ -877,8 +526,6 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
 
         // Decompose the tuple into subgraphs and solve for each separately
         vector<set<int>> subgraphs = compute_subgraphs(dependencies);
-        //std::cout << "Computing subgraphs of dependencies: " << dependencies << "\n";
-        //std::cout << "Subgraphs: " << subgraphs << "\n";
         internal_assert(subgraphs.size() == exprs.size());
         for (size_t i = 0; i < subgraphs.size(); ++i) {
             if (subgraphs[i].empty()) {
@@ -886,12 +533,10 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
                 continue;
             }
             if (subgraphs[i].size() > 2) {
-                //TODO(psuriana): currently only support max of 2 tuple elements
-                //std::cout << "Subgraph bigger than 2: " << subgraphs[i] << "\n";
+                // TODO(psuriana): currently only support max of 2 tuple elements
+                debug(5) << "Subgraph size is bigger than 2: " << subgraphs[i] << "\n";
                 return AssociativityProverResult();
             }
-
-            //std::cout << "Solving for subgraph " << i << ": " << subgraphs[i] << "\n";
 
             vector<Expr> sub_exprs = get_subvector(exprs, subgraphs[i]);
             vector<string> sub_op_x_names = get_subvector(op_x_names, subgraphs[i]);
@@ -899,10 +544,12 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
             vector<Expr> sub_x_parts = get_subvector(x_parts, subgraphs[i]);
             AssociativeOps sub_assoc_ops(sub_exprs.size());
 
-            /*std::cout << "Subgraph exprs: " << sub_exprs << "\n";
-            std::cout << "Subgraph op x names: " << sub_op_x_names << "\n";
-            std::cout << "Subgraph op y names: " << sub_op_y_names << "\n";
-            std::cout << "Subgraph x parts: " << sub_x_parts << "\n";*/
+            // TODO(psuriana): In general, if we fail to find a match for the
+            // set of initial subgraphs, we need to consider other possible
+            // grouping of those initial subgraphs. Since only the 'x' is
+            // apparent from the Halide update definition, the compute_subgraphs
+            // method over-partitions the graph (e.g. 2x2 matrix multiplication
+            // written as a four-dimensional reduction).
 
             if (!find_match(get_i32_ops_table(sub_exprs), sub_op_x_names, sub_op_y_names,
                             sub_x_parts, sub_exprs, sub_assoc_ops)) {
@@ -910,7 +557,7 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
                 return AssociativityProverResult();
             }
 
-            debug(5) << "...Prove associativity of subgraph " << i << "\n";
+            debug(5) << "...Proving associativity of subgraph " << i << ": " << subgraphs[i] << "\n";
             const set<int> &indices = subgraphs[i];
             for (auto iter = indices.begin(); iter != indices.end(); ++iter) {
                 int index = *iter;
@@ -942,13 +589,6 @@ AssociativityProverResult prove_associativity(const string &f, vector<Expr> args
                 assoc_ops.y[index] = sub_assoc_ops.y[j];
             }
         }
-    }
-
-    // Replace the dummy variables
-    for (size_t idx = 0; idx < exprs.size(); ++idx) {
-        assoc_ops.ops[idx].op = substitute(reverse_dummy_subs, assoc_ops.ops[idx].op);
-        assoc_ops.x[idx].expr = substitute(reverse_dummy_subs, assoc_ops.x[idx].expr);
-        assoc_ops.y[idx].expr = substitute(reverse_dummy_subs, assoc_ops.y[idx].expr);
     }
 
     return AssociativityProverResult(true, assoc_ops);
@@ -1059,11 +699,11 @@ void associativity_test() {
     Expr g_call_1 = Call::make(t, "g", {rx}, Call::CallType::Halide, nullptr, 1);
 
     // f(x) = f(x) - g(rx) -> Is associative given that the merging operator is +
-    /*check_associativity("f", {x}, {f_call_0 - g_call_0}, true,
+    check_associativity("f", {x}, {f_call_0 - g_call_0}, true,
                         {{AssociativePair(x + y, 0)},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", g_call_0)}
-                        });*/
+                        });
 
     // f(x) = min(f(x), int16(z))
     check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))}, true,
@@ -1124,22 +764,14 @@ void associativity_test() {
     // f(x) = f(x) -> associative but doesn't really make any sense, so we'll treat it as non-associative
     check_associativity("f", {x}, {f_call_0}, false, AssociativeOps());
 
-    // f(x) = max(max(min(f(x), g(rx) + 2), f(x)), g(rx) + 2) -> can be simplify into max(f(x), g(rx) + 2)
+    // f(x) = max(max(min(f(x), g(rx) + 2), f(x)), g(rx) + 2) -> can be simplified into max(f(x), g(rx) + 2)
     check_associativity("f", {x}, {max(max(min(f_call_0, g_call_0 + 2), f_call_0), g_call_0 + 2)}, true,
                         {{AssociativePair(max(x, y), t.min())},
                          {Replacement("x", f_call_0)},
                          {Replacement("y", g_call_0 + 2)}
                         });
 
-    // f(x) = ((min(max((f(x)*g(rx)), g(rx)), (f(x)*g(rx))) + g(rx)) + f(x))
-    /*check_associativity("f", {x}, {((min(max((g_call_0*f_call_0), g_call_0), (f_call_0*g_call_0)) + g_call_0) + f_call_0)},
-                        true,
-                        {{AssociativePair(((min(max((x*y), y), (x*y)) + y) + x), make_const(t, 0))},
-                         {Replacement("x", f_call_0)},
-                         {Replacement("y", g_call_0)}
-                        });*/
-
-    // f(x) = Tuple(f(x)[0]*g(r.x)[0] - f(x)[1]*g(r.x)[1], f(x)[0]*g(r.x)[1] + f(x)[1]*g(r.x)[0])
+    // Complex multiplication: f(x) = Tuple(f(x)[0]*g(r.x)[0] - f(x)[1]*g(r.x)[1], f(x)[0]*g(r.x)[1] + f(x)[1]*g(r.x)[0])
     check_associativity("f", {x}, {f_call_0*g_call_0 - f_call_1*g_call_1, f_call_0*g_call_1 + f_call_1*g_call_0}, true,
                         {{AssociativePair(xs[0]*ys[0] - xs[1]*ys[1], make_const(t, 1)),
                             AssociativePair(xs[1]*ys[0] + xs[0]*ys[1], make_const(t, 0))},
@@ -1147,7 +779,7 @@ void associativity_test() {
                          {Replacement("y0", g_call_0), Replacement("y1", g_call_1)},
                         });
 
-    // f(x) = Tuple(min(f(x)[0], g(r.x)[0]), select(f(x)[0] < g(r.x)[0], f(x)[1], r.x)
+    // 1D argmin: f(x) = Tuple(min(f(x)[0], g(r.x)[0]), select(f(x)[0] < g(r.x)[0], f(x)[1], r.x)
     check_associativity("f", {x}, {min(f_call_0, g_call_0), select(f_call_0 < g_call_0, f_call_1, rx)}, true,
                         {{AssociativePair(min(xs[0], ys[0]), t.max()),
                             AssociativePair(select(xs[0] < ys[0], xs[1], ys[1]), make_const(t, 0))},
@@ -1169,6 +801,7 @@ void associativity_test() {
         Expr f_xy_call_2 = Call::make(t, "f", {x, y}, Call::CallType::Halide, nullptr, 2);
         Expr g_xy_call_0 = Call::make(t, "g", {rx, ry}, Call::CallType::Halide, nullptr, 0);
 
+        // 2D argmin:
         // f(x, y) = Tuple(min(f(x, y)[0], g(r.x, r.y)[0]),
         //                 select(f(x, y)[0] < g(r.x, r.y)[0], f(x)[1], r.x),
         //                 select(f(x, y)[0] < g(r.x, r.y)[0], f(x)[2], r.y))
@@ -1183,44 +816,6 @@ void associativity_test() {
                              {Replacement("x0", f_xy_call_0), Replacement("x1", f_xy_call_1), Replacement("x2", f_xy_call_2)},
                              {Replacement("y0", g_xy_call_0), Replacement("y1", rx), Replacement("y2", ry)},
                             });
-    }
-
-    {
-        vector<set<int>> dependencies(4);
-        dependencies[0] = {0};
-        dependencies[1] = {1};
-        dependencies[2] = {0, 1, 2};
-        dependencies[3] = {0, 1, 3};
-        vector<set<int>> subgraphs = compute_subgraphs(dependencies);
-        std::cout << "\nComputing subgraphs of: " << dependencies << "\n";
-        std::cout << "Result: " << subgraphs << "\n";
-    }
-    {
-        vector<set<int>> dependencies(2);
-        dependencies[0] = {1, 0};
-        dependencies[1] = {1, 0};
-        vector<set<int>> subgraphs = compute_subgraphs(dependencies);
-        std::cout << "\nComputing subgraphs of: " << dependencies << "\n";
-        std::cout << "Result: " << subgraphs << "\n";
-    }
-    {
-        vector<set<int>> dependencies(3);
-        dependencies[0] = {1};
-        dependencies[1] = {2};
-        dependencies[2] = {0, 2};
-        vector<set<int>> subgraphs = compute_subgraphs(dependencies);
-        std::cout << "\nComputing subgraphs of: " << dependencies << "\n";
-        std::cout << "Result: " << subgraphs << "\n";
-    }
-    {
-        vector<set<int>> dependencies(4);
-        dependencies[0] = {1};
-        dependencies[1] = {2};
-        dependencies[2] = {3};
-        dependencies[3] = {0};
-        vector<set<int>> subgraphs = compute_subgraphs(dependencies);
-        std::cout << "\nComputing subgraphs of: " << dependencies << "\n";
-        std::cout << "Result: " << subgraphs << "\n";
     }
 
     std::cout << "Associativity test passed" << std::endl;
