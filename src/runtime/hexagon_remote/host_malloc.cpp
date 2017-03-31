@@ -102,6 +102,11 @@ extern "C" {
 // behavior from our buffers.
 __attribute__((weak)) void remote_register_buf(void* buf, int size, int fd);
 
+// Similar to the above, but allows passing attributes.
+__attribute__((weak)) void remote_register_buf_attr(void* buf, int size, int fd, int attr);
+
+#define FASTRPC_ATTR_NON_COHERENT  2
+
 void halide_hexagon_host_malloc_init() {
     pthread_mutex_init(&allocations_mutex, NULL);
     ion_fd = open("/dev/ion", O_RDONLY, 0);
@@ -163,7 +168,9 @@ void *halide_hexagon_host_malloc(size_t size) {
     }
 
     // Register the buffer, so we get zero copy.
-    if (remote_register_buf) {
+    if (remote_register_buf_attr) {
+        remote_register_buf_attr(buf, size, buf_fd, 0);
+    } else if (remote_register_buf) {
         remote_register_buf(buf, size, buf_fd);
     }
 
@@ -217,7 +224,9 @@ void halide_hexagon_host_free(void *ptr) {
     }
 
     // Unregister the buffer.
-    if (remote_register_buf) {
+    if (remote_register_buf_attr) {
+        remote_register_buf_attr(rec->buf, rec->size, -1, 0);
+    } else if (remote_register_buf) {
         remote_register_buf(rec->buf, rec->size, -1);
     }
 
