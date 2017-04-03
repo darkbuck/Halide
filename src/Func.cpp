@@ -604,7 +604,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     user_assert(assoc_result.associative())
         << "Failed to call rfactor() on " << stage_name
         << " since it can't prove associativity of the operator\n";
-    internal_assert(assoc_result.ops().size() == values.size());
+    internal_assert(assoc_result.size() == values.size());
 
     vector<Split> &splits = definition.schedule().splits();
     vector<ReductionVariable> &rvars = definition.schedule().rvars();
@@ -746,7 +746,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     vector<Expr> init_vals(values.size());
     for (size_t i = 0; i < init_vals.size(); ++i) {
-        init_vals[i] = assoc_result.ops()[i].identity;
+        init_vals[i] = assoc_result.pattern.identities[i];
     }
 
     Func intm(func_name + "_intm");
@@ -863,12 +863,12 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         // to collect all substitutions first.
         map<string, Expr> replacement;
         for (size_t i = 0; i < f_values.size(); ++i) {
-            replacement.emplace(assoc_result.y()[i].var, intm(f_load_args)[i]);
-            if (!assoc_result.x()[i].var.empty()) {
+            replacement.emplace(assoc_result.ys[i].var, intm(f_load_args)[i]);
+            if (!assoc_result.xs[i].var.empty()) {
                 Expr prev_val = Call::make(intm.output_types()[i], func_name,
                                            f_store_args, Call::CallType::Halide,
                                            nullptr, i);
-                replacement.emplace(assoc_result.x()[i].var, prev_val);
+                replacement.emplace(assoc_result.xs[i].var, prev_val);
             } else {
                 user_warning << "Update definition of " << stage_name << " at index " << i
                              << " doesn't depend on the previous value. This isn't a"
@@ -877,14 +877,14 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         }
 
         for (size_t i = 0; i < f_values.size(); ++i) {
-            f_values[i] = substitute(replacement, assoc_result.ops()[i].op);
+            f_values[i] = substitute(replacement, assoc_result.pattern.ops[i]);
         }
     } else {
         Expr prev_val = Call::make(intm.output_types()[0], func_name,
                                    f_store_args, Call::CallType::Halide);
-        Expr val = substitute(assoc_result.y()[0].var, intm(f_load_args), assoc_result.ops()[0].op);
-        if (!assoc_result.x()[0].var.empty()) {
-            val = substitute(assoc_result.x()[0].var, prev_val, val);
+        Expr val = substitute(assoc_result.ys[0].var, intm(f_load_args), assoc_result.pattern.ops[0]);
+        if (!assoc_result.xs[0].var.empty()) {
+            val = substitute(assoc_result.xs[0].var, prev_val, val);
         } else {
             user_warning << "Update definition of " << stage_name
                          << " doesn't depend on the previous value. This isn't a"

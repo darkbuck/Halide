@@ -14,24 +14,38 @@
 namespace Halide {
 namespace Internal {
 
-// Pair of associative op and its identity
-struct AssociativePair {
-    Expr op;
-    Expr identity;
+// Represent an associative op with its identity. The op may be multi-dimensional,
+// e.g. complex multiplication. 'is_commutative' is set to true if the op is also
+// commutative in addition to being associative.
+struct AssociativePattern {
+    std::vector<Expr> ops;
+    std::vector<Expr> identities;
+    bool is_commutative;
 
-    AssociativePair() {}
-    AssociativePair(Expr op) : op(op) {}
-    AssociativePair(Expr op, Expr id) : op(op), identity(id) {}
+    AssociativePattern() : is_commutative(false) {}
+    AssociativePattern(size_t size) : ops(size), identities(size), is_commutative(false) {}
+    AssociativePattern(const std::vector<Expr> &ops, const std::vector<Expr> &ids, bool is_commutative)
+        : ops(ops), identities(ids), is_commutative(is_commutative) {}
+    AssociativePattern(Expr op, Expr id, bool is_commutative)
+        : ops({op}), identities({id}), is_commutative(is_commutative) {}
 
-    bool operator==(const AssociativePair &other) const {
-        return equal(op, other.op) && equal(identity, other.identity);
+    bool operator==(const AssociativePattern &other) const {
+        if ((is_commutative != other.is_commutative) || (ops.size() != other.ops.size())) {
+            return false;
+        }
+        for (size_t i = 0; i < size(); ++i) {
+            if (!equal(ops[i], other.ops[i]) || !equal(identities[i], other.identities[i])) {
+                return false;
+            }
+        }
+        return true;
     }
-    bool operator!=(const AssociativePair &other) const {
-        return !(*this == other);
-    }
+    bool operator!=(const AssociativePattern &other) const { return !(*this == other); }
+    size_t size() const { return ops.size(); }
+    bool commutative() const { return is_commutative; }
 };
 
-const std::vector<std::vector<AssociativePair>> &get_i32_ops_table(const std::vector<Expr> &exprs);
+const std::vector<AssociativePattern> &get_i32_ops_table(const std::vector<Expr> &exprs);
 
 }
 }

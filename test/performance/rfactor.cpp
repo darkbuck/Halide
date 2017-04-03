@@ -42,9 +42,9 @@ int one_d_max() {
     const int trials = 10;
     const int iterations = 10;
 
-    Image<float> vec_A(size);
-    Image<float> ref_output = Image<float>::make_scalar();
-    Image<float> output = Image<float>::make_scalar();
+    Buffer<float> vec_A(size);
+    Buffer<float> ref_output = Buffer<float>::make_scalar();
+    Buffer<float> output = Buffer<float>::make_scalar();
 
     // init randomly
     for (int ix = 0; ix < size; ix++) {
@@ -73,7 +73,7 @@ int one_d_max() {
 int two_d_histogram() {
     int W = 1024*N1, H = 1024*N2;
 
-    Image<uint8_t> in(W, H);
+    Buffer<uint8_t> in(W, H);
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
             in(x, y) = rand();
@@ -108,7 +108,7 @@ int two_d_histogram() {
     ref.realize(256);
     hist.realize(256);
 
-    Image<int> result(256);
+    Buffer<int> result(256);
     double t_ref = benchmark(trials, iterations, [&]() {
         ref.realize(result);
     });
@@ -116,7 +116,7 @@ int two_d_histogram() {
         hist.realize(result);
     });
 
-    double gbits = in.type().bits * W * H / 1e9; // bits per seconds
+    double gbits = in.type().bits() * W * H / 1e9; // bits per seconds
 
     printf("Histogram ref: %fms, %f Gbps\n", t_ref * 1e3, (gbits / t_ref));
     printf("Histogram with rfactor: %fms, %f Gbps\n", t * 1e3, (gbits / t));
@@ -163,7 +163,7 @@ int four_d_argmin() {
     const int iterations = 10;
     const int trials = 10;
 
-    Image<uint8_t> vec(size, size, size, size);
+    Buffer<uint8_t> vec(size, size, size, size);
 
     // init randomly
     for (int iw = 0; iw < size; iw++) {
@@ -236,7 +236,7 @@ int complex_multiply() {
     const int trials = 10;
     const int iterations = 10;
 
-    Image<int32_t> vec0(size), vec1(size);
+    Buffer<int32_t> vec0(size), vec1(size);
 
     // init randomly
     for (int ix = 0; ix < size; ix++) {
@@ -303,9 +303,9 @@ int dot_product() {
     const int trials = 10;
     const int iterations = 10;
 
-    Image<float> vec_A(size), vec_B(size);
-    Image<float> ref_output = Image<float>::make_scalar();
-    Image<float> output = Image<float>::make_scalar();
+    Buffer<float> vec_A(size), vec_B(size);
+    Buffer<float> ref_output = Buffer<float>::make_scalar();
+    Buffer<float> output = Buffer<float>::make_scalar();
 
     // init randomly
     for (int ix = 0; ix < size; ix++) {
@@ -384,7 +384,7 @@ int kitchen_sink() {
     const int trials = 10;
     const int iterations = 10;
 
-    Image<int32_t> vec_A(size);
+    Buffer<int32_t> vec_A(size);
 
     // init randomly
     for (int ix = 0; ix < size; ix++) {

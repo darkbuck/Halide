@@ -1,5 +1,6 @@
 #include "AssociativeOpsTable.h"
 
+using std::string;
 using std::vector;
 
 namespace Halide {
@@ -7,13 +8,15 @@ namespace Internal {
 
 namespace {
 
-struct OpIdPair {
-    std::string op;
-    int64_t identity;
+struct OpsIds {
+    vector<string> ops;
+    vector<int64_t> identities;
+    bool is_commutative;
 
-    OpIdPair() {}
-    OpIdPair(const std::string &op) : op(op) {}
-    OpIdPair(const std::string &op, int64_t id) : op(op), identity(id) {}
+    OpsIds() : is_commutative(false) {}
+    OpsIds(const vector<string> &ops, const vector<int64_t> &ids, bool is_commutative)
+        : ops(ops), identities(ids), is_commutative(is_commutative) {}
+    size_t size() const { return ops.size(); }
 };
 
 const size_t single_i32_add_size = 15;
@@ -30,161 +33,161 @@ const size_t double_i32_min_size = 15;
 const size_t double_i32_sub_size = 9;
 const size_t double_i32_select_size = 0;
 
-const OpIdPair single_i32_add[][1]  = {
-    {{"Add(X0, Y0)", 0}},
-    {{"Add(Max(Min(Y0, K0), Y0), X0)", 0}},
-    {{"Add(Max(Sub(K0, Y0), Y0), X0)", 0}},
-    {{"Add(Min(Max(Y0, K0), Y0), X0)", 0}},
-    {{"Add(Min(Sub(K0, Y0), Y0), X0)", 0}},
-    {{"Add(Max(Min(Min(Y0, K0), Y0), Y0), X0)", 0}},
-    {{"Add(Max(Min(Mul(X0, Y0), Y0), Y0), X0)", 0}},
-    {{"Add(Max(Min(Sub(X0, Y0), Y0), Y0), X0)", 0}},
-    {{"Add(Max(Min(Sub(Y0, X0), Y0), Y0), X0)", 0}},
-    {{"Add(Min(Max(Max(Y0, K0), Y0), Y0), X0)", 0}},
-    {{"Add(Min(Max(Mul(X0, Y0), Y0), Y0), X0)", 0}},
-    {{"Add(Min(Max(Sub(X0, Y0), Y0), Y0), X0)", 0}},
-    {{"Add(Min(Max(Sub(Y0, X0), Y0), Y0), X0)", 0}},
-    {{"Add(Min(Sub(Y0, X0), K0), Max(Y0, X0))", -1}},
-    {{"Add(Min(Y0, X0), Max(Sub(Y0, X0), K0))", 0}},
+const OpsIds single_i32_add[] = {
+    {{"Add(X0, Y0)"}, {0}, true},
+    {{"Add(Max(Min(Y0, K0), Y0), X0)"}, {0}, true},
+    {{"Add(Max(Sub(K0, Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Min(Max(Y0, K0), Y0), X0)"}, {0}, true},
+    {{"Add(Min(Sub(K0, Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Max(Min(Min(Y0, K0), Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Max(Min(Mul(X0, Y0), Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Max(Min(Sub(X0, Y0), Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Max(Min(Sub(Y0, X0), Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Min(Max(Max(Y0, K0), Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Min(Max(Mul(X0, Y0), Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Min(Max(Sub(X0, Y0), Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Min(Max(Sub(Y0, X0), Y0), Y0), X0)"}, {0}, true},
+    {{"Add(Min(Sub(Y0, X0), K0), Max(Y0, X0))"}, {-1}, true},
+    {{"Add(Min(Y0, X0), Max(Sub(Y0, X0), K0))"}, {0}, true},
 };
-const OpIdPair single_i32_mul[][1]  = {
-    {{"Mul(X0, Y0)", 1}},
-    {{"Mul(Max(Min(Mul(X0, Y0), Y0), Y0), X0)", 1}},
-    {{"Mul(Max(Min(Sub(X0, Y0), Y0), Y0), X0)", 1}},
-    {{"Mul(Max(Min(Sub(Y0, X0), Y0), Y0), X0)", 1}},
-    {{"Mul(Min(Max(Mul(X0, Y0), Y0), Y0), X0)", 1}},
-    {{"Mul(Min(Max(Sub(X0, Y0), Y0), Y0), X0)", 1}},
-    {{"Mul(Min(Max(Sub(Y0, X0), Y0), Y0), X0)", 1}},
-    {{"Mul(Sub(Max(Min(X0, K0), Y0), Y0), X0)", -1}},
-    {{"Mul(Sub(Min(Max(X0, K0), Y0), Y0), X0)", -1}},
-    {{"Mul(Max(Min(Add(Max(X0, K0), Y0), Y0), Y0), X0)", 1}},
-    {{"Mul(Max(Min(Add(Min(X0, K0), Y0), Y0), Y0), X0)", 1}},
-    {{"Mul(Max(Min(Add(Min(Y0, X0), K0), Y0), Y0), X0)", 1}},
-    {{"Mul(Max(Min(Add(Mul(X0, K0), Y0), Y0), Y0), X0)", 1}},
-    {{"Mul(Max(Min(Add(Mul(X0, Y0), Y0), Y0), Y0), X0)", 1}},
-    {{"Mul(Max(Min(Add(Y0, Mul(X0, K0)), Y0), Y0), X0)", 1}},
+const OpsIds single_i32_mul[] = {
+    {{"Mul(X0, Y0)"}, {1}, true},
+    {{"Mul(Max(Min(Mul(X0, Y0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Max(Min(Sub(X0, Y0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Max(Min(Sub(Y0, X0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Min(Max(Mul(X0, Y0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Min(Max(Sub(X0, Y0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Min(Max(Sub(Y0, X0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Sub(Max(Min(X0, K0), Y0), Y0), X0)"}, {-1}, true},
+    {{"Mul(Sub(Min(Max(X0, K0), Y0), Y0), X0)"}, {-1}, true},
+    {{"Mul(Max(Min(Add(Max(X0, K0), Y0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Max(Min(Add(Min(X0, K0), Y0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Max(Min(Add(Min(Y0, X0), K0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Max(Min(Add(Mul(X0, K0), Y0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Max(Min(Add(Mul(X0, Y0), Y0), Y0), Y0), X0)"}, {1}, true},
+    {{"Mul(Max(Min(Add(Y0, Mul(X0, K0)), Y0), Y0), X0)"}, {1}, true},
 };
-const OpIdPair single_i32_max[][1]  = {
-    {{"Max(X0, Y0)", -2147483648}},
-    {{"Max(Y0, X0)", -2147483648}},
-    {{"Max(Min(X0, K0), Y0)", -2147483648}},
-    {{"Max(Min(Y0, X0), Y0)", -2147483648}},
-    {{"Max(Min(Y0, X0), Y0)", 0}},
-    {{"Max(Add(Min(Y0, X0), Y0), Y0)", 0}},
-    {{"Max(Min(Add(Y0, X0), Y0), Y0)", 0}},
-    {{"Max(Min(Max(Y0, K0), X0), Y0)", -2147483648}},
-    {{"Max(Min(Max(Y0, K0), Y0), X0)", -2147483648}},
-    {{"Max(Min(Max(Y0, X0), K0), Y0)", -2147483648}},
-    {{"Max(Min(Max(Y0, X0), Y0), Y0)", -2147483648}},
-    {{"Max(Min(Max(Y0, X0), Y0), Y0)", 0}},
-    {{"Max(Min(Min(Y0, K0), X0), Y0)", 0}},
-    {{"Max(Min(Mul(X0, Y0), Y0), Y0)", 0}},
-    {{"Max(Min(Mul(Y0, X0), Y0), Y0)", 0}},
+const OpsIds single_i32_max[] = {
+    {{"Max(X0, Y0)"}, {-2147483648}, true},
+    {{"Max(Y0, X0)"}, {-2147483648}, true},
+    {{"Max(Min(X0, K0), Y0)"}, {-2147483648}, true},
+    {{"Max(Min(Y0, X0), Y0)"}, {-2147483648}, true},
+    {{"Max(Min(Y0, X0), Y0)"}, {0}, true},
+    {{"Max(Add(Min(Y0, X0), Y0), Y0)"}, {0}, true},
+    {{"Max(Min(Add(Y0, X0), Y0), Y0)"}, {0}, true},
+    {{"Max(Min(Max(Y0, K0), X0), Y0)"}, {-2147483648}, true},
+    {{"Max(Min(Max(Y0, K0), Y0), X0)"}, {-2147483648}, true},
+    {{"Max(Min(Max(Y0, X0), K0), Y0)"}, {-2147483648}, true},
+    {{"Max(Min(Max(Y0, X0), Y0), Y0)"}, {-2147483648}, true},
+    {{"Max(Min(Max(Y0, X0), Y0), Y0)"}, {0}, true},
+    {{"Max(Min(Min(Y0, K0), X0), Y0)"}, {0}, true},
+    {{"Max(Min(Mul(X0, Y0), Y0), Y0)"}, {0}, true},
+    {{"Max(Min(Mul(Y0, X0), Y0), Y0)"}, {0}, true},
 };
-const OpIdPair single_i32_min[][1]  = {
-    {{"Min(X0, Y0)", 2147483647}},
-    {{"Min(Max(X0, K0), Y0)", 2147483647}},
-    {{"Min(Max(Y0, X0), Y0)", 0}},
-    {{"Min(Max(Y0, X0), Y0)", 2147483647}},
-    {{"Min(Add(Max(Y0, X0), Y0), Y0)", 0}},
-    {{"Min(Max(Add(Y0, X0), Y0), Y0)", 0}},
-    {{"Min(Max(Max(Y0, K0), X0), Y0)", 0}},
-    {{"Min(Max(Min(Y0, K0), X0), Y0)", 2147483647}},
-    {{"Min(Max(Min(Y0, K0), Y0), X0)", 2147483647}},
-    {{"Min(Max(Min(Y0, X0), K0), Y0)", 2147483647}},
-    {{"Min(Max(Min(Y0, X0), Y0), Y0)", 0}},
-    {{"Min(Max(Min(Y0, X0), Y0), Y0)", 2147483647}},
-    {{"Min(Max(Mul(X0, Y0), Y0), Y0)", 0}},
-    {{"Min(Max(Mul(Y0, X0), Y0), Y0)", 0}},
-    {{"Min(Max(Sub(K0, Y0), X0), Y0)", 0}},
+const OpsIds single_i32_min[] = {
+    {{"Min(X0, Y0)"}, {2147483647}, true},
+    {{"Min(Max(X0, K0), Y0)"}, {2147483647}, true},
+    {{"Min(Max(Y0, X0), Y0)"}, {0}, true},
+    {{"Min(Max(Y0, X0), Y0)"}, {2147483647}, true},
+    {{"Min(Add(Max(Y0, X0), Y0), Y0)"}, {0}, true},
+    {{"Min(Max(Add(Y0, X0), Y0), Y0)"}, {0}, true},
+    {{"Min(Max(Max(Y0, K0), X0), Y0)"}, {0}, true},
+    {{"Min(Max(Min(Y0, K0), X0), Y0)"}, {2147483647}, true},
+    {{"Min(Max(Min(Y0, K0), Y0), X0)"}, {2147483647}, true},
+    {{"Min(Max(Min(Y0, X0), K0), Y0)"}, {2147483647}, true},
+    {{"Min(Max(Min(Y0, X0), Y0), Y0)"}, {0}, true},
+    {{"Min(Max(Min(Y0, X0), Y0), Y0)"}, {2147483647}, true},
+    {{"Min(Max(Mul(X0, Y0), Y0), Y0)"}, {0}, true},
+    {{"Min(Max(Mul(Y0, X0), Y0), Y0)"}, {0}, true},
+    {{"Min(Max(Sub(K0, Y0), X0), Y0)"}, {0}, true},
 };
-const OpIdPair single_i32_sub[][1]  = {
-    {{"Sub(Add(Max(Y0, X0), Y0), Max(X0, K0))", -2147483648}},
-    {{"Sub(Add(Min(Y0, X0), Y0), Min(X0, K0))", 2147483647}},
-    {{"Sub(Max(Add(Y0, X0), K0), Max(Y0, X0))", -1}},
-    {{"Sub(Max(Y0, X0), Max(Sub(X0, Y0), K0))", 0}},
-    {{"Sub(Min(Add(Y0, X0), K0), Min(Y0, X0))", 1}},
-    {{"Sub(Min(Y0, X0), Min(Sub(X0, Y0), K0))", 0}},
-    {{"Sub(Add(Max(Min(Min(Sub(Y0, X0), X0), K0), X0), Y0), X0)", 0}},
-    {{"Sub(Add(Max(Min(X0, Y0), K0), Max(X0, Y0)), Max(X0, K0))", -2147483648}},
-    {{"Sub(Add(Min(Max(Max(Sub(Y0, X0), X0), K0), X0), Y0), X0)", 0}},
-    {{"Sub(Add(Min(Max(X0, Y0), K0), Min(X0, Y0)), Min(X0, K0))", 2147483647}},
+const OpsIds single_i32_sub[] = {
+    {{"Sub(Add(Max(Y0, X0), Y0), Max(X0, K0))"}, {-2147483648}, true},
+    {{"Sub(Add(Min(Y0, X0), Y0), Min(X0, K0))"}, {2147483647}, true},
+    {{"Sub(Max(Add(Y0, X0), K0), Max(Y0, X0))"}, {-1}, true},
+    {{"Sub(Max(Y0, X0), Max(Sub(X0, Y0), K0))"}, {0}, true},
+    {{"Sub(Min(Add(Y0, X0), K0), Min(Y0, X0))"}, {1}, true},
+    {{"Sub(Min(Y0, X0), Min(Sub(X0, Y0), K0))"}, {0}, true},
+    {{"Sub(Add(Max(Min(Min(Sub(Y0, X0), X0), K0), X0), Y0), X0)"}, {0}, true},
+    {{"Sub(Add(Max(Min(X0, Y0), K0), Max(X0, Y0)), Max(X0, K0))"}, {-2147483648}, true},
+    {{"Sub(Add(Min(Max(Max(Sub(Y0, X0), X0), K0), X0), Y0), X0)"}, {0}, true},
+    {{"Sub(Add(Min(Max(X0, Y0), K0), Min(X0, Y0)), Min(X0, K0))"}, {2147483647}, true},
 };
-const OpIdPair single_i32_select[][1]  = {
-};
-
-const OpIdPair double_i32_add[][2] = {
-    {{"Add(X0, Y0)", 0}, {"Add(X0, Y1)", 0}},
-    {{"Add(X0, Y0)", 0}, {"Add(X1, Y0)", 0}},
-    {{"Add(X0, Y1)", 0}, {"Add(X1, Y1)", 0}},
-    {{"Add(X1, Y0)", 0}, {"Add(X1, Y1)", 0}},
-    {{"Add(X0, Y0)", 0}, {"Add(Mul(X0, K0), Y1)", 0}},
-    {{"Add(X0, Y0)", 0}, {"Add(Mul(X0, Y0), Add(Y1, X1))", 0}},
-    {{"Add(X0, Y0)", 0}, {"Max(Min(X0, X1), Max(X1, Y1))", -2147483648}},
-    {{"Add(X0, Y0)", 0}, {"Max(Min(X0, Y1), Max(Y1, X1))", -2147483648}},
-    {{"Add(X0, Y0)", 0}, {"Min(Max(X0, X1), Min(X1, Y1))", 2147483647}},
-    {{"Add(X0, Y0)", 0}, {"Min(Max(X0, Y1), Min(Y1, X1))", 2147483647}},
-    {{"Add(X0, Y0)", 0}, {"Sub(X1, Y0)", 0}},
-    {{"Add(X0, Y0)", 0}, {"Sub(Y1, X0)", 0}},
-    {{"Add(X0, Y0)", 0}, {"Sub(Y1, Mul(X0, K0))", 0}},
-    {{"Add(X0, Y0)", 0}, {"Sub(Add(Y1, X1), Mul(X0, Y0))", 0}},
-};
-const OpIdPair double_i32_mul[][2] = {
-    {{"Mul(X0, Y0)", 1}, {"Add(Mul(X0, Y1), X1)", 0}},
-    {{"Mul(X0, Y0)", 1}, {"Add(Mul(X1, Y0), Y1)", 0}},
-    {{"Mul(X0, Y0)", 1}, {"Add(Mul(X0, Y0), Sub(Y1, Y0))", 0}},
-    {{"Mul(X0, Y0)", 1}, {"Add(Mul(X0, Y1), Mul(X1, Y0))", 0}},
-    {{"Mul(X0, Y0)", 1}, {"Add(Mul(X1, Y0), Add(Y0, Y1))", -1}},
-    {{"Mul(X0, Y0)", 1}, {"Add(Mul(X1, Y0), Sub(Y1, Y0))", 1}},
-    {{"Mul(X0, Y0)", 1}, {"Mul(X0, Y1)", 0}},
-    {{"Mul(X0, Y0)", 1}, {"Mul(X1, Y0)", 0}},
-    {{"Mul(X1, Y0)", 0}, {"Mul(X1, Y1)", 1}},
-    {{"Mul(X0, Y0)", 1}, {"Max(Min(X0, X1), Max(X1, Y1))", -2147483648}},
-    {{"Mul(X0, Y0)", 1}, {"Max(Min(X0, Y1), Max(Y1, X1))", -2147483648}},
-    {{"Mul(X0, Y0)", 1}, {"Min(Max(X0, X1), Min(X1, Y1))", 2147483647}},
-    {{"Mul(X0, Y0)", 1}, {"Min(Max(X0, Y1), Min(Y1, X1))", 2147483647}},
-    {{"Mul(X0, Y0)", 1}, {"Sub(Add(Y0, Y1), Mul(X0, Y0))", 0}},
-};
-const OpIdPair double_i32_max[][2] = {
-    {{"Max(X0, Y0)", -2147483648}, {"Select(LT(Y0, X0), X1, Y1)", 0}},
-    {{"Max(X0, Y0)", -2147483648}, {"Add(Max(X0, Y0), Sub(Y1, Y0))", 0}},
-    {{"Max(X0, Y0)", -2147483648}, {"Add(Min(X0, Y0), Add(Y1, X1))", -2147483648}},
-    {{"Max(X0, Y0)", -2147483648}, {"Add(Min(X0, Y0), Sub(X1, Y0))", 0}},
-    {{"Max(Max(Min(Mul(X0, Y0), X0), Y0), X0)", -2147483648}, {"Add(Max(Sub(X1, X0), Y0), Max(X0, Y0))", 0}},
-    {{"Max(Max(Min(Mul(X0, Y0), X0), Y0), X0)", -2147483648}, {"Add(Min(Max(X0, K0), Y0), Sub(X1, Y0))", 0}},
-    {{"Max(Min(Min(Mul(X0, Y0), X0), K0), X0)", 0}, {"Add(Mul(Max(X0, X1), Y1), Add(X1, Y1))", 0}},
-    {{"Max(Min(Max(X0, K0), Min(K0, X1)), Y0)", -2147483647}, {"Mul(Sub(Add(Max(X1, Y1), X1), Min(X0, X1)), Add(X0, X1))", -2147483648}},
-    {{"Max(X0, Y0)", -2147483648}, {"Max(X0, Y1)", 0}},
-    {{"Max(X0, Y0)", -2147483648}, {"Max(X1, Y0)", 0}},
-    {{"Max(X0, Y0)", -2147483648}, {"Max(Y0, X1)", 0}},
-    {{"Max(X0, Y1)", 0}, {"Max(X1, Y1)", -2147483648}},
-};
-const OpIdPair double_i32_min[][2] = {
-    {{"Min(X0, Y0)", 2147483647}, {"Select(LT(X0, Y0), X1, Y1)", 0}},
-    {{"Min(X0, Y0)", 2147483647}, {"Add(Max(X0, Y0), Add(Y1, X1))", -2147483647}},
-    {{"Min(X0, Y0)", 2147483647}, {"Add(Max(X0, Y0), Sub(X1, Y0))", 0}},
-    {{"Min(X0, Y0)", 2147483647}, {"Add(Min(X0, Y0), Sub(Y1, Y0))", 0}},
-    {{"Min(Min(Max(Mul(X0, Y0), X0), Y0), X0)", 2147483647}, {"Add(Max(Min(X0, K0), Y0), Sub(X1, Y0))", 0}},
-    {{"Min(Min(Max(Mul(X0, Y0), X0), Y0), X0)", 2147483647}, {"Add(Min(Sub(X1, X0), Y0), Min(X0, Y0))", 0}},
-    {{"Min(X0, Y0)", 2147483647}, {"Mul(Max(X0, Y0), Mul(Y1, X1))", 2147483647}},
-    {{"Min(X0, Y0)", 2147483647}, {"Max(Min(X0, Y1), X1)", -2147483648}},
-};
-const OpIdPair double_i32_sub[][2] = {
-    {{"Sub(X0, Y1)", 0}, {"Add(X1, Y1)", 0}},
-    {{"Sub(Y0, X1)", 0}, {"Add(X1, Y1)", 0}},
-    {{"Sub(Mul(X0, Y0), Mul(X1, Y1))", 1}, {"Add(Mul(X1, Y0), Mul(X0, Y1))", 0}},
-    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), K0))", 0}, {"Sub(Add(X1, Y1), Max(Sub(X1, X0), K0))", 2147483647}},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", 0}, {"Sub(Add(X1, Y1), Min(Sub(X1, X0), K0))", -2147483648}},
-    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), K0))", 0}, {"Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))", 2147483647}},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", 0}, {"Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))", -2147483648}},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", 0}, {"Sub(Y1, Mul(Min(Mul(X0, X1), X0), Sub(X0, X1)))", -2147483648}},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", 0}, {"Sub(Max(X1, Y1), Mul(Min(Mul(X0, X1), X0), Add(X0, X1)))", -2147483648}},
-};
-const OpIdPair double_i32_select[][2] = {
+const OpsIds single_i32_select[] = {
 };
 
-Expr convert_to_expr_term_helper(const std::string &nodes, int &cursor, Type t) {
-    std::string op = nodes.substr(cursor, 2);
+const OpsIds double_i32_add[] = {
+    {{"Add(X0, Y0)", "Add(X0, Y1)"}, {0, 0}, true},
+    {{"Add(X0, Y0)", "Add(X1, Y0)"}, {0, 0}, true},
+    {{"Add(X0, Y1)", "Add(X1, Y1)"}, {0, 0}, true},
+    {{"Add(X1, Y0)", "Add(X1, Y1)"}, {0, 0}, true},
+    {{"Add(X0, Y0)", "Add(Mul(X0, K0), Y1)"}, {0, 0}, true},
+    {{"Add(X0, Y0)", "Add(Mul(X0, Y0), Add(Y1, X1))"}, {0, 0}, true},
+    {{"Add(X0, Y0)", "Max(Min(X0, X1), Max(X1, Y1))"}, {0, -2147483648}, true},
+    {{"Add(X0, Y0)", "Max(Min(X0, Y1), Max(Y1, X1))"}, {0, -2147483648}, true},
+    {{"Add(X0, Y0)", "Min(Max(X0, X1), Min(X1, Y1))"}, {0, 2147483647}, true},
+    {{"Add(X0, Y0)", "Min(Max(X0, Y1), Min(Y1, X1))"}, {0, 2147483647}, true},
+    {{"Add(X0, Y0)", "Sub(X1, Y0)"}, {0, 0}, true},
+    {{"Add(X0, Y0)", "Sub(Y1, X0)"}, {0, 0}, true},
+    {{"Add(X0, Y0)", "Sub(Y1, Mul(X0, K0))"}, {0, 0}, true},
+    {{"Add(X0, Y0)", "Sub(Add(Y1, X1), Mul(X0, Y0))"}, {0, 0}, true},
+};
+const OpsIds double_i32_mul[] = {
+    {{"Mul(X0, Y0)", "Add(Mul(X0, Y1), X1)"}, {1, 0}, true},
+    {{"Mul(X0, Y0)", "Add(Mul(X1, Y0), Y1)"}, {1, 0}, true},
+    {{"Mul(X0, Y0)", "Add(Mul(X0, Y0), Sub(Y1, Y0))"}, {1, 0}, true},
+    {{"Mul(X0, Y0)", "Add(Mul(X0, Y1), Mul(X1, Y0))"}, {1, 0}, true},
+    {{"Mul(X0, Y0)", "Add(Mul(X1, Y0), Add(Y0, Y1))"}, {1, -1}, true},
+    {{"Mul(X0, Y0)", "Add(Mul(X1, Y0), Sub(Y1, Y0))"}, {1, 1}, true},
+    {{"Mul(X0, Y0)", "Mul(X0, Y1)"}, {1, 0}, true},
+    {{"Mul(X0, Y0)", "Mul(X1, Y0)"}, {1, 0}, true},
+    {{"Mul(X1, Y0)", "Mul(X1, Y1)"}, {0, 1}, true},
+    {{"Mul(X0, Y0)", "Max(Min(X0, X1), Max(X1, Y1))"}, {1, -2147483648}, true},
+    {{"Mul(X0, Y0)", "Max(Min(X0, Y1), Max(Y1, X1))"}, {1, -2147483648}, true},
+    {{"Mul(X0, Y0)", "Min(Max(X0, X1), Min(X1, Y1))"}, {1, 2147483647}, true},
+    {{"Mul(X0, Y0)", "Min(Max(X0, Y1), Min(Y1, X1))"}, {1, 2147483647}, true},
+    {{"Mul(X0, Y0)", "Sub(Add(Y0, Y1), Mul(X0, Y0))"}, {1, 0}, true},
+};
+const OpsIds double_i32_max[] = {
+    {{"Max(X0, Y0)", "Select(LT(Y0, X0), X1, Y1)"}, {-2147483648, 0}, true},
+    {{"Max(X0, Y0)", "Add(Max(X0, Y0), Sub(Y1, Y0))"}, {-2147483648, 0}, true},
+    {{"Max(X0, Y0)", "Add(Min(X0, Y0), Add(Y1, X1))"}, {-2147483648, -2147483648}, true},
+    {{"Max(X0, Y0)", "Add(Min(X0, Y0), Sub(X1, Y0))"}, {-2147483648, 0}, true},
+    {{"Max(Max(Min(Mul(X0, Y0), X0), Y0), X0)", "Add(Max(Sub(X1, X0), Y0), Max(X0, Y0))"}, {-2147483648, 0}, true},
+    {{"Max(Max(Min(Mul(X0, Y0), X0), Y0), X0)", "Add(Min(Max(X0, K0), Y0), Sub(X1, Y0))"}, {-2147483648, 0}, true},
+    {{"Max(Min(Min(Mul(X0, Y0), X0), K0), X0)", "Add(Mul(Max(X0, X1), Y1), Add(X1, Y1))"}, {0, 0}, true},
+    {{"Max(Min(Max(X0, K0), Min(K0, X1)), Y0)", "Mul(Sub(Add(Max(X1, Y1), X1), Min(X0, X1)), Add(X0, X1))"}, {-2147483648, -2147483648}, true},
+    {{"Max(X0, Y0)", "Max(X0, Y1)"}, {-2147483648, 0}, true},
+    {{"Max(X0, Y0)", "Max(X1, Y0)"}, {-2147483648, 0}, true},
+    {{"Max(X0, Y0)", "Max(Y0, X1)"}, {-2147483648, 0}, true},
+    {{"Max(X0, Y1)", "Max(X1, Y1)"}, {0, -2147483648}, true},
+};
+const OpsIds double_i32_min[] = {
+    {{"Min(X0, Y0)", "Select(LT(X0, Y0), X1, Y1)"}, {2147483647, 0}, true},
+    {{"Min(X0, Y0)", "Add(Max(X0, Y0), Add(Y1, X1))"}, {2147483647, -2147483647}, true},
+    {{"Min(X0, Y0)", "Add(Max(X0, Y0), Sub(X1, Y0))"}, {2147483647, 0}, true},
+    {{"Min(X0, Y0)", "Add(Min(X0, Y0), Sub(Y1, Y0))"}, {2147483647, 0}, true},
+    {{"Min(Min(Max(Mul(X0, Y0), X0), Y0), X0)", "Add(Max(Min(X0, K0), Y0), Sub(X1, Y0))"}, {2147483647, 0}, true},
+    {{"Min(Min(Max(Mul(X0, Y0), X0), Y0), X0)", "Add(Min(Sub(X1, X0), Y0), Min(X0, Y0))"}, {2147483647, 0}, true},
+    {{"Min(X0, Y0)", "Mul(Max(X0, Y0), Mul(Y1, X1))"}, {2147483647, 2147483647}, true},
+    {{"Min(X0, Y0)", "Max(Min(X0, Y1), X1)"}, {2147483647, -2147483648}, true},
+};
+const OpsIds double_i32_sub[] = {
+    {{"Sub(X0, Y1)", "Add(X1, Y1)"}, {0, 0}, true},
+    {{"Sub(Y0, X1)", "Add(X1, Y1)"}, {0, 0}, true},
+    {{"Sub(Mul(X0, Y0), Mul(X1, Y1))", "Add(Mul(X1, Y0), Mul(X0, Y1))"}, {1, 0}, true},
+    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), K0))", "Sub(Add(X1, Y1), Max(Sub(X1, X0), K0))"}, {0, 2147483647}, true},
+    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", "Sub(Add(X1, Y1), Min(Sub(X1, X0), K0))"}, {0, -2147483648}, true},
+    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), K0))", "Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))"}, {0, 2147483647}, true},
+    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", "Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))"}, {0, -2147483648}, true},
+    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", "Sub(Y1, Mul(Min(Mul(X0, X1), X0), Sub(X0, X1)))"}, {0, -2147483648}, true},
+    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", "Sub(Max(X1, Y1), Mul(Min(Mul(X0, X1), X0), Add(X0, X1)))"}, {0, -2147483648}, true},
+};
+const OpsIds double_i32_select[] = {
+};
+
+Expr convert_to_expr_term_helper(const string &nodes, int &cursor, Type t) {
+    string op = nodes.substr(cursor, 2);
     if (op == "X0") {
         cursor += 2;
         return Variable::make(t, "x0");
@@ -262,199 +265,196 @@ Expr convert_to_expr_term_helper(const std::string &nodes, int &cursor, Type t) 
     return Expr();
 }
 
-AssociativePair convert_op_to_halide_expr(const OpIdPair &pair, Type t) {
-    int cursor = 0;
-    Expr expr = convert_to_expr_term_helper(pair.op, cursor, t);
-    return AssociativePair(expr, make_const(t, pair.identity));
-}
-
-vector<AssociativePair> convert_ops_to_halide_expr(const OpIdPair *data, Type t, size_t size) {
-    vector<AssociativePair> result(size);
-    for (int i = 0; i < (int)size; ++i) {
-        result[i] = convert_op_to_halide_expr(data[i], t);
+AssociativePattern convert_op_to_halide_expr(const OpsIds &ops_ids, Type t) {
+    AssociativePattern pattern(ops_ids.size());
+    for (size_t i = 0; i < ops_ids.size(); ++i) {
+        int cursor = 0;
+        pattern.ops[i] = convert_to_expr_term_helper(ops_ids.ops[i], cursor, t);
+        pattern.identities[i] = make_const(t, ops_ids.identities[i]);
     }
-    return result;
+    pattern.is_commutative = ops_ids.is_commutative;
+    return pattern;
 }
 
-const vector<vector<AssociativePair>> &get_single_i32_ops_table_add(Expr e) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(252);
-    if (exprs.size() != single_i32_add_size) {
+const vector<AssociativePattern> &get_single_i32_ops_table_add() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(single_i32_add_size);
+    if (patterns.size() != single_i32_add_size) {
         for (int i = 0; i < (int)single_i32_add_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(single_i32_add[i], Int(32), 1));
+            patterns.push_back(convert_op_to_halide_expr(single_i32_add[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_single_i32_ops_table_mul(Expr e) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(222);
-    if (exprs.size() != single_i32_mul_size) {
+const vector<AssociativePattern> &get_single_i32_ops_table_mul() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(single_i32_mul_size);
+    if (patterns.size() != single_i32_mul_size) {
         for (int i = 0; i < (int)single_i32_mul_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(single_i32_mul[i], Int(32), 1));
+            patterns.push_back(convert_op_to_halide_expr(single_i32_mul[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_single_i32_ops_table_max(Expr e) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(2880);
-    if (exprs.size() != single_i32_max_size) {
+const vector<AssociativePattern> &get_single_i32_ops_table_max() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(single_i32_max_size);
+    if (patterns.size() != single_i32_max_size) {
         for (int i = 0; i < (int)single_i32_max_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(single_i32_max[i], Int(32), 1));
+            patterns.push_back(convert_op_to_halide_expr(single_i32_max[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_single_i32_ops_table_min(Expr e) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(2797);
-    if (exprs.size() != single_i32_min_size) {
+const vector<AssociativePattern> &get_single_i32_ops_table_min() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(single_i32_min_size);
+    if (patterns.size() != single_i32_min_size) {
         for (int i = 0; i < (int)single_i32_min_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(single_i32_min[i], Int(32), 1));
+            patterns.push_back(convert_op_to_halide_expr(single_i32_min[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_single_i32_ops_table_sub(Expr e) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(10);
-    if (exprs.size() != single_i32_sub_size) {
+const vector<AssociativePattern> &get_single_i32_ops_table_sub() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(single_i32_sub_size);
+    if (patterns.size() != single_i32_sub_size) {
         for (int i = 0; i < (int)single_i32_sub_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(single_i32_sub[i], Int(32), 1));
+            patterns.push_back(convert_op_to_halide_expr(single_i32_sub[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_single_i32_ops_table_select(Expr e) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(0);
-    if (exprs.size() != single_i32_select_size) {
+const vector<AssociativePattern> &get_single_i32_ops_table_select() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(single_i32_select_size);
+    if (patterns.size() != single_i32_select_size) {
         for (int i = 0; i < (int)single_i32_select_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(single_i32_select[i], Int(32), 1));
+            patterns.push_back(convert_op_to_halide_expr(single_i32_select[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
 
-const vector<vector<AssociativePair>> &get_double_i32_ops_table_add(Expr e0, Expr e1) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(0);
-    if (exprs.size() != double_i32_add_size) {
+const vector<AssociativePattern> &get_double_i32_ops_table_add() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(double_i32_add_size);
+    if (patterns.size() != double_i32_add_size) {
         for (int i = 0; i < (int)double_i32_add_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(double_i32_add[i], Int(32), 2));
+            patterns.push_back(convert_op_to_halide_expr(double_i32_add[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_double_i32_ops_table_mul(Expr e0, Expr e1) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(0);
-    if (exprs.size() != double_i32_mul_size) {
+const vector<AssociativePattern> &get_double_i32_ops_table_mul() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(double_i32_mul_size);
+    if (patterns.size() != double_i32_mul_size) {
         for (int i = 0; i < (int)double_i32_mul_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(double_i32_mul[i], Int(32), 2));
+            patterns.push_back(convert_op_to_halide_expr(double_i32_mul[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_double_i32_ops_table_max(Expr e0, Expr e1) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(0);
-    if (exprs.size() != double_i32_max_size) {
+const vector<AssociativePattern> &get_double_i32_ops_table_max() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(double_i32_max_size);
+    if (patterns.size() != double_i32_max_size) {
         for (int i = 0; i < (int)double_i32_max_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(double_i32_max[i], Int(32), 2));
+            patterns.push_back(convert_op_to_halide_expr(double_i32_max[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_double_i32_ops_table_min(Expr e0, Expr e1) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(0);
-    if (exprs.size() != double_i32_min_size) {
+const vector<AssociativePattern> &get_double_i32_ops_table_min() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(double_i32_min_size);
+    if (patterns.size() != double_i32_min_size) {
         for (int i = 0; i < (int)double_i32_min_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(double_i32_min[i], Int(32), 2));
+            patterns.push_back(convert_op_to_halide_expr(double_i32_min[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_double_i32_ops_table_sub(Expr e0, Expr e1) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(0);
-    if (exprs.size() != double_i32_sub_size) {
+const vector<AssociativePattern> &get_double_i32_ops_table_sub() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(double_i32_sub_size);
+    if (patterns.size() != double_i32_sub_size) {
         for (int i = 0; i < (int)double_i32_sub_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(double_i32_sub[i], Int(32), 2));
+            patterns.push_back(convert_op_to_halide_expr(double_i32_sub[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
-const vector<vector<AssociativePair>> &get_double_i32_ops_table_select(Expr e0, Expr e1) {
-    static vector<vector<AssociativePair>> exprs;
-    exprs.reserve(0);
-    if (exprs.size() != double_i32_select_size) {
+const vector<AssociativePattern> &get_double_i32_ops_table_select() {
+    static vector<AssociativePattern> patterns;
+    patterns.reserve(double_i32_select_size);
+    if (patterns.size() != double_i32_select_size) {
         for (int i = 0; i < (int)double_i32_select_size; ++i) {
-            exprs.push_back(convert_ops_to_halide_expr(double_i32_select[i], Int(32), 2));
+            patterns.push_back(convert_op_to_halide_expr(double_i32_select[i], Int(32)));
         }
     }
-    return exprs;
+    return patterns;
 }
 
 } // anonymous namespace
 
-const std::vector<std::vector<AssociativePair>> &get_i32_ops_table(const vector<Expr> &exprs) {
+const vector<AssociativePattern> &get_i32_ops_table(const vector<Expr> &exprs) {
 
-    static std::vector<std::vector<AssociativePair>> empty;
+    static vector<AssociativePattern> empty;
     if (exprs[0].as<Halide::Internal::Add>()) {
         debug(5) << "Returning add root table\n";
         if (exprs.size() == 1) {
-            return get_single_i32_ops_table_add(exprs[0]);
+            return get_single_i32_ops_table_add();
         } else if (exprs.size() == 2) {
-            return get_double_i32_ops_table_add(exprs[0], exprs[1]);
+            return get_double_i32_ops_table_add();
         }
     } else if (exprs[0].as<Halide::Internal::Sub>()) {
         debug(5) << "Returning sub root table\n";
         if (exprs.size() == 1) {
-            return get_single_i32_ops_table_sub(exprs[0]);
+            return get_single_i32_ops_table_sub();
         } else if (exprs.size() == 2) {
-            return get_double_i32_ops_table_sub(exprs[0], exprs[1]);
+            return get_double_i32_ops_table_sub();
         }
     } else if (exprs[0].as<Halide::Internal::Mul>()) {
         debug(5) << "Returning mul root table\n";
         if (exprs.size() == 1) {
-            return get_single_i32_ops_table_mul(exprs[0]);
+            return get_single_i32_ops_table_mul();
         } else if (exprs.size() == 2) {
-            return get_double_i32_ops_table_mul(exprs[0], exprs[1]);
+            return get_double_i32_ops_table_mul();
         }
     } else if (exprs[0].as<Halide::Internal::Min>()) {
         debug(5) << "Returning min root table\n";
         if (exprs.size() == 1) {
-            return get_single_i32_ops_table_min(exprs[0]);
+            return get_single_i32_ops_table_min();
         } else if (exprs.size() == 2) {
-            return get_double_i32_ops_table_min(exprs[0], exprs[1]);
+            return get_double_i32_ops_table_min();
         }
     } else if (exprs[0].as<Halide::Internal::Max>()) {
         debug(5) << "Returning max root table\n";
         if (exprs.size() == 1) {
-            return get_single_i32_ops_table_max(exprs[0]);
+            return get_single_i32_ops_table_max();
         } else if (exprs.size() == 2) {
-            return get_double_i32_ops_table_max(exprs[0], exprs[1]);
+            return get_double_i32_ops_table_max();
         }
     } else if (exprs[0].as<Halide::Internal::Select>()) {
         debug(5) << "Returning select root table\n";
         if (exprs.size() == 1) {
-            return get_single_i32_ops_table_select(exprs[0]);
+            return get_single_i32_ops_table_select();
         } else if (exprs.size() == 2) {
-            return get_double_i32_ops_table_select(exprs[0], exprs[1]);
+            return get_double_i32_ops_table_select();
         }
     }
     debug(5) << "Returning empty table\n";
