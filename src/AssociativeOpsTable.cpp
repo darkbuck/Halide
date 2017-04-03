@@ -411,25 +411,37 @@ const vector<AssociativePattern> &get_double_i32_ops_table_select() {
 
 } // anonymous namespace
 
-const vector<AssociativePattern> &get_i32_ops_table(const vector<Expr> &exprs) {
+const vector<AssociativePattern> &get_ops_table(const vector<Expr> &exprs) {
+    internal_assert(!exprs.empty());
 
+    // Make sure every expr in the list has the same type
     static vector<AssociativePattern> empty;
+    for (size_t i = 1; i < exprs.size() - 1; ++i) {
+        user_assert(exprs[i-1].type() == exprs[i].type())
+            << "Tuple elements have different type. Can't prove associativity\n";
+        return empty;
+    }
+    if (exprs.size() > 2) {
+        debug(5) << "Returning empty table\n";
+        return empty;
+    }
+
     if (exprs[0].as<Halide::Internal::Add>()) {
-        debug(5) << "Returning add root table\n";
+        debug(5) << "Returning add root table for type " << exprs[0].type() << "\n";
         if (exprs.size() == 1) {
             return get_single_i32_ops_table_add();
         } else if (exprs.size() == 2) {
             return get_double_i32_ops_table_add();
         }
     } else if (exprs[0].as<Halide::Internal::Sub>()) {
-        debug(5) << "Returning sub root table\n";
+        debug(5) << "Returning mul root table for type " << exprs[0].type() << "\n";
         if (exprs.size() == 1) {
             return get_single_i32_ops_table_sub();
         } else if (exprs.size() == 2) {
             return get_double_i32_ops_table_sub();
         }
     } else if (exprs[0].as<Halide::Internal::Mul>()) {
-        debug(5) << "Returning mul root table\n";
+        debug(5) << "Returning min root table for type " << exprs[0].type() << "\n";
         if (exprs.size() == 1) {
             return get_single_i32_ops_table_mul();
         } else if (exprs.size() == 2) {
@@ -443,14 +455,14 @@ const vector<AssociativePattern> &get_i32_ops_table(const vector<Expr> &exprs) {
             return get_double_i32_ops_table_min();
         }
     } else if (exprs[0].as<Halide::Internal::Max>()) {
-        debug(5) << "Returning max root table\n";
+        debug(5) << "Returning max root table for type " << exprs[0].type() << "\n";
         if (exprs.size() == 1) {
             return get_single_i32_ops_table_max();
         } else if (exprs.size() == 2) {
             return get_double_i32_ops_table_max();
         }
     } else if (exprs[0].as<Halide::Internal::Select>()) {
-        debug(5) << "Returning select root table\n";
+        debug(5) << "Returning select root table for type " << exprs[0].type() << "\n";
         if (exprs.size() == 1) {
             return get_single_i32_ops_table_select();
         } else if (exprs.size() == 2) {

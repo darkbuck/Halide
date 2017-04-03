@@ -45,7 +45,7 @@ struct AssociativePattern {
     bool commutative() const { return is_commutative; }
 };
 
-const std::vector<AssociativePattern> &get_i32_ops_table(const std::vector<Expr> &exprs);
+const std::vector<AssociativePattern> &get_ops_table(const std::vector<Expr> &exprs);
 
 }
 }

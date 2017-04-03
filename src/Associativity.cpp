@@ -350,7 +350,7 @@ std::pair<bool, bool> extract_associative_op_single_element(
         // It's non-trivial binary ops. Try looking at the associative ops table for int32
         debug(5) << "Look-up associativity table for: " << e << "\n";
         AssociativeOp tmp(1);
-        is_associative = find_match(get_i32_ops_table({e}), {op_x}, {op_y}, {x_part}, {e}, tmp);
+        is_associative = find_match(get_ops_table({e}), {op_x}, {op_y}, {x_part}, {e}, tmp);
         if (is_associative) {
             // Copy the result over
             assoc_op.pattern.ops[index] = tmp.pattern.ops[0];
@@ -441,7 +441,6 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
     vector<set<int>> dependencies(exprs.size());
     vector<Expr> x_parts(exprs.size());
     bool all_independent = true;
-    bool all_i32 = true; // TODO(psuriana): remove this restriction
 
     // For a Tuple of exprs to be associative, each element of the Tuple
     // has to be associative.
@@ -449,9 +448,6 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
         string op_x = op_x_names[idx];
         string op_y = op_y_names[idx];
 
-        if (!exprs[idx].type().is_int() || exprs[idx].type().bits() != 32) {
-            all_i32 = false;
-        }
         exprs[idx] = simplify(exprs[idx]);
         exprs[idx] = common_subexpression_elimination(exprs[idx]);
         // Calling Simplify or the original expr itself might have let exprs,
@@ -500,11 +496,6 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
         }
     } else {
         debug(5) << "There is cross-dependencies. Need to prove associativity in bulk.\n";
-        // TODO(psuriana): currently only works for 32-bit integers and maximum of 2 tuple elements
-        if (!all_i32) {
-            debug(5) << "Not all int 32\n";
-            return AssociativeOp();
-        }
 
         // Decompose the tuple into subgraphs and solve for each separately
         vector<set<int>> subgraphs = compute_subgraphs(dependencies);
@@ -533,7 +524,7 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
             // method over-partitions the graph (e.g. 2x2 matrix multiplication
             // written as a four-dimensional reduction).
 
-            if (!find_match(get_i32_ops_table(sub_exprs), sub_op_x_names, sub_op_y_names,
+            if (!find_match(get_ops_table(sub_exprs), sub_op_x_names, sub_op_y_names,
                             sub_x_parts, sub_exprs, sub_assoc_op)) {
                 debug(5) << "Cannot find matching associative ops\n";
                 return AssociativeOp();
