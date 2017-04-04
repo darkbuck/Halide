@@ -190,6 +190,8 @@ bool associative_op_pattern_match(Expr e,
     return false;
 }
 
+// Return true if we are able to find a match in the table (i.e. the op can be
+// proven associative)
 bool find_match(const vector<AssociativePattern> &table, const vector<string> &op_x_names,
                 const vector<string> &op_y_names, const vector<Expr> &x_parts,
                 const vector<Expr> &exprs, AssociativeOp &assoc_op) {
@@ -257,30 +259,6 @@ bool find_match(const vector<AssociativePattern> &table, const vector<string> &o
     return false;
 }
 
-template<typename T>
-std::pair<bool, bool> visit_associative_binary_op(
-        int index, const string &op_x, const string &op_y,
-        Expr x_part, Expr lhs, Expr rhs, AssociativeOp &assoc_op) {
-
-    const Variable *var_a = lhs.as<Variable>();
-    if (!var_a || (var_a->name != op_x)) {
-        debug(5) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
-        return {false, false};
-    } else if (expr_uses_var(rhs, op_x)) {
-        debug(5) << "Can't prove associativity of " << T::make(lhs, rhs) << "\n";
-        return {false, false};
-    } else {
-        // op(x, y)
-        assoc_op.xs[index] = {op_x, x_part};
-        assoc_op.ys[index] = {op_y, rhs};
-    }
-    if (std::is_same<T, Sub>::value) {
-        // Sub is associative but not commutative
-        return {true, false};
-    }
-    return {true, true};
-}
-
 // Return a pair of booleans indicating if an operator is associative and commutative
 // respectively. 'assoc_op' contains the the equivalent associative binary/unary operator
 // for that operator. If the operator is non-associative, 'assoc_op' is not valid.
@@ -292,72 +270,30 @@ std::pair<bool, bool> extract_associative_op_single_element(
     Type t = e.type();
     const string &op_x = op_x_names[index];
     const string &op_y = op_y_names[index];
-    Expr x = Variable::make(t, op_x);
-    Expr y = Variable::make(t, op_y);
 
+    // TODO(psuriana): not sure if this is true for multi-dimensional tuple
     if (!x_part.defined()) { // op(y)
         // Update with no self-recurrence is associative and the identity can be
         // anything since it's going to be replaced anyway, but it's not
         // commutative
-        assoc_op.pattern.ops[index] = y;
+        assoc_op.pattern.ops[index] = Variable::make(t, op_y);
         assoc_op.pattern.identities[index] = make_const(t, 0);
         assoc_op.xs[index] = {"", Expr()};
         assoc_op.ys[index] = {op_y, e};
         return {true, false};
     }
 
+    // TODO(psuriana): determine commutativity
     bool is_associative = false, is_commutative = false;
-    if (const Add *a = e.as<Add>()) {
-        assoc_op.pattern.ops[index] = x + y;
-        assoc_op.pattern.identities[index] = make_const(t, 0);
-        std::tie(is_associative, is_commutative) =
-            visit_associative_binary_op<Add>(index, op_x, op_y, x_part, a->a, a->b, assoc_op);
-    } else if (const Sub *s = e.as<Sub>()) {
-        assoc_op.pattern.ops[index] = x + y;
-        assoc_op.pattern.identities[index] = make_const(t, 0);
-        std::tie(is_associative, is_commutative) =
-            visit_associative_binary_op<Sub>(index, op_x, op_y, x_part, s->a, s->b, assoc_op);
-    } else if (const Mul *m = e.as<Mul>()) {
-        assoc_op.pattern.ops[index] = x * y;
-        assoc_op.pattern.identities[index] = make_const(t, 1);
-        std::tie(is_associative, is_commutative) =
-            visit_associative_binary_op<Mul>(index, op_x, op_y, x_part, m->a, m->b, assoc_op);
-    } else if (const Min *m = e.as<Min>()) {
-        assoc_op.pattern.ops[index] = Min::make(x, y);
-        assoc_op.pattern.identities[index] = t.max();
-        std::tie(is_associative, is_commutative) =
-            visit_associative_binary_op<Min>(index, op_x, op_y, x_part, m->a, m->b, assoc_op);
-    } else if (const Max *m = e.as<Max>()) {
-        assoc_op.pattern.ops[index] = Max::make(x, y);
-        assoc_op.pattern.identities[index] = t.min();
-        std::tie(is_associative, is_commutative) =
-            visit_associative_binary_op<Max>(index, op_x, op_y, x_part, m->a, m->b, assoc_op);
-    } else if (const And *a = e.as<And>()) {
-        assoc_op.pattern.ops[index] = And::make(x, y);
-        assoc_op.pattern.identities[index] = make_const(t, 1);
-        std::tie(is_associative, is_commutative) =
-            visit_associative_binary_op<And>(index, op_x, op_y, x_part, a->a, a->b, assoc_op);
-    } else if (const Or *o = e.as<Or>()) {
-        assoc_op.pattern.ops[index] = Or::make(x, y);
-        assoc_op.pattern.identities[index] = make_const(t, 0);
-        std::tie(is_associative, is_commutative) =
-            visit_associative_binary_op<Or>(index, op_x, op_y, x_part, o->a, o->b, assoc_op);
-    } else if (e.as<Let>()) {
-        internal_error << "Let should have been substituted before calling this function\n";
-    }
-
-    if (!is_associative && t.is_int() && (t.bits() == 32)) {
-        // It's non-trivial binary ops. Try looking at the associative ops table for int32
-        debug(5) << "Look-up associativity table for: " << e << "\n";
-        AssociativeOp tmp(1);
-        is_associative = find_match(get_ops_table({e}), {op_x}, {op_y}, {x_part}, {e}, tmp);
-        if (is_associative) {
-            // Copy the result over
-            assoc_op.pattern.ops[index] = tmp.pattern.ops[0];
-            assoc_op.pattern.identities[index] = tmp.pattern.identities[0];
-            assoc_op.xs[index] = tmp.xs[0];
-            assoc_op.ys[index] = tmp.ys[0];
-        }
+    debug(5) << "Look-up associativity table for: " << e << "\n";
+    AssociativeOp tmp(1);
+    is_associative = find_match(get_ops_table({e}), {op_x}, {op_y}, {x_part}, {e}, tmp);
+    if (is_associative) {
+        // Copy the result over
+        assoc_op.pattern.ops[index] = tmp.pattern.ops[0];
+        assoc_op.pattern.identities[index] = tmp.pattern.identities[0];
+        assoc_op.xs[index] = tmp.xs[0];
+        assoc_op.ys[index] = tmp.ys[0];
     }
     debug(5) << e << " -> is associative? " << is_associative << ", is commutative? " << is_commutative << "\n";
     return {is_associative, is_commutative};
@@ -673,15 +609,6 @@ void associativity_test() {
     Expr f_call_2 = Call::make(t, "f", {x}, Call::CallType::Halide, nullptr, 2);
     Expr g_call_0 = Call::make(t, "g", {rx}, Call::CallType::Halide, nullptr, 0);
     Expr g_call_1 = Call::make(t, "g", {rx}, Call::CallType::Halide, nullptr, 1);
-
-    // f(x) = f(x) - g(rx) -> Is associative given that the merging operator is +
-    check_associativity("f", {x}, {f_call_0 - g_call_0},
-                        AssociativeOp(
-                          AssociativePattern(x + y, 0, true),
-                          {Replacement("x", f_call_0)},
-                          {Replacement("y", g_call_0)},
-                          true)
-                        );
 
     // f(x) = min(f(x), int16(z))
     check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
