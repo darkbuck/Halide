@@ -43,6 +43,16 @@ struct AssociativePattern {
     bool operator!=(const AssociativePattern &other) const { return !(*this == other); }
     size_t size() const { return ops.size(); }
     bool commutative() const { return is_commutative; }
+
+    friend std::ostream& operator<<(std::ostream &stream, const AssociativePattern &p) {
+        stream << "{\n";
+        for (size_t i = 0; i < p.ops.size(); ++i) {
+            stream << "   " << p.ops[i] << ", " << p.identities[i] << "\n";
+        }
+        stream << "    commutative? " << p.is_commutative << "\n";
+        stream << "}\n";
+        return stream;
+    }
 };
 
 const std::vector<AssociativePattern> &get_ops_table(const std::vector<Expr> &exprs);
