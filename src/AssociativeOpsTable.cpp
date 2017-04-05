@@ -84,10 +84,10 @@ ValType convert_halide_type_to_val_type(const Type &halide_t) {
     } else {
         internal_assert(halide_t.is_float());
         if (halide_t.bits() == 32) {
-            val_t = ValType::UInt32;
+            val_t = ValType::Float32;
         } else {
             internal_assert(halide_t.bits() == 64);
-            val_t = ValType::UInt64;
+            val_t = ValType::Float64;
         }
     }
     return val_t;
@@ -411,11 +411,11 @@ static const map<TableKey, OpsIds const *> val_type_to_luts = {
     {TableKey(ValType::All, RootExpr::Select, 2), &double_gen_select[0]},
 };
 
-const vector<AssociativePattern> &get_ops_table_helper(const TableKey &key) {
-    vector<AssociativePattern> &table = pattern_tables[key];
+const vector<AssociativePattern> &get_ops_table_helper(Type t, RootExpr root, size_t dim) {
+    TableKey key(convert_halide_type_to_val_type(t), root, dim);
+    TableKey gen_key(ValType::All, root, dim);
 
-    TableKey gen_key = key;
-    gen_key.type = ValType::All;
+    vector<AssociativePattern> &table = pattern_tables[key];
 
     size_t gen_size = pattern_table_sizes.find(gen_key)->second;
     //size_t size = pattern_table_sizes.find(key)->second;
@@ -426,7 +426,7 @@ const vector<AssociativePattern> &get_ops_table_helper(const TableKey &key) {
         OpsIds const *gen_lut_table = val_type_to_luts.find(gen_key)->second;
         internal_assert(gen_lut_table != nullptr);
         for (size_t i = 0; i < gen_size; ++i) {
-            table.push_back(convert_pattern_to_halide_expr(gen_lut_table[i], Int(32)));
+            table.push_back(convert_pattern_to_halide_expr(gen_lut_table[i], t));
         }
 
         // TODO(psuriana): Add the type-specific LUT
@@ -452,9 +452,7 @@ const vector<AssociativePattern> &get_ops_table(const vector<Expr> &exprs) {
         return empty;
     }
 
-    ValType type = convert_halide_type_to_val_type(exprs[0].type());
     RootExpr root = RootExpr::Unknown;
-
     if (exprs[0].as<Halide::Internal::Add>()) {
         debug(5) << "Returning add root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Add;
@@ -476,11 +474,11 @@ const vector<AssociativePattern> &get_ops_table(const vector<Expr> &exprs) {
     }
 
     if (root != RootExpr::Unknown) {
-        const vector<AssociativePattern> &table = get_ops_table_helper(TableKey(type, root, exprs.size()));
-        /*debug(5) << "\tTable size: " << table.size() << "\n";
+        const vector<AssociativePattern> &table = get_ops_table_helper(exprs[0].type(), root, exprs.size());
+        debug(5) << "\tTable size: " << table.size() << "\n";
         for (const auto &p : table) {
             debug(5) << p << "\n";
-        }*/
+        }
         return table;
     }
     debug(5) << "Returning empty table\n";

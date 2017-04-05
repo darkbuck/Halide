@@ -35,31 +35,6 @@ vector<T> get_subvector(const vector<T> &v, const set<int> &indices) {
     return sub;
 }
 
-class FindConflict : public IRGraphVisitor {
-    using IRGraphVisitor::visit;
-
-    string var;
-
-    void visit(const Variable *v) {
-        if (var == v->name) {
-            if (expr.defined()) {
-                internal_assert(equal(expr, Expr(v)));
-            } else {
-                expr = Expr(v);
-            }
-        }
-    }
-public:
-    FindConflict(const string &v) : var(v) {}
-    Expr expr;
-};
-
-Expr find_conflict(Expr e, const string &v) {
-    FindConflict f(v);
-    e.accept(&f);
-    return f.expr;
-}
-
 // Replace self-references to 'func' with arguments 'args' at
 // 'value_index' in the Expr/Stmt with some Var
 class ConvertSelfRef : public IRMutator {
@@ -191,7 +166,7 @@ bool associative_op_pattern_match(Expr e,
 }
 
 // Return true if we are able to find a match in the table (i.e. the op can be
-// proven associative)
+// proven associative) and update 'assoc_op'.
 bool find_match(const vector<AssociativePattern> &table, const vector<string> &op_x_names,
                 const vector<string> &op_y_names, const vector<Expr> &x_parts,
                 const vector<Expr> &exprs, AssociativeOp &assoc_op) {
@@ -253,20 +228,19 @@ bool find_match(const vector<AssociativePattern> &table, const vector<string> &o
             assoc_op.pattern.ops[index] = e;
             assoc_op.pattern.identities[index] = pattern.identities[index];
         }
+        assoc_op.is_associative = true;
+        assoc_op.pattern.is_commutative = pattern.is_commutative;
         return true;
     }
-
     return false;
 }
 
 // Return a pair of booleans indicating if an operator is associative and commutative
 // respectively. 'assoc_op' contains the the equivalent associative binary/unary operator
 // for that operator. If the operator is non-associative, 'assoc_op' is not valid.
-std::pair<bool, bool> extract_associative_op_single_element(
-        int index, const vector<string> &op_x_names,
-        const vector<string> &op_y_names, Expr x_part,
-        Expr e, AssociativeOp &assoc_op) {
-
+bool extract_associative_op_single_element(int index, const vector<string> &op_x_names,
+                                           const vector<string> &op_y_names, Expr x_part,
+                                           Expr e, AssociativeOp &assoc_op) {
     Type t = e.type();
     const string &op_x = op_x_names[index];
     const string &op_y = op_y_names[index];
@@ -276,27 +250,32 @@ std::pair<bool, bool> extract_associative_op_single_element(
         // Update with no self-recurrence is associative and the identity can be
         // anything since it's going to be replaced anyway, but it's not
         // commutative
+        assoc_op.is_associative = true;
         assoc_op.pattern.ops[index] = Variable::make(t, op_y);
         assoc_op.pattern.identities[index] = make_const(t, 0);
+        assoc_op.pattern.is_commutative = false;
         assoc_op.xs[index] = {"", Expr()};
         assoc_op.ys[index] = {op_y, e};
-        return {true, false};
+        return true;
     }
 
     // TODO(psuriana): determine commutativity
-    bool is_associative = false, is_commutative = false;
+    bool is_associative = false;
     debug(5) << "Look-up associativity table for: " << e << "\n";
     AssociativeOp tmp(1);
     is_associative = find_match(get_ops_table({e}), {op_x}, {op_y}, {x_part}, {e}, tmp);
     if (is_associative) {
         // Copy the result over
+        assoc_op.is_associative = true;
         assoc_op.pattern.ops[index] = tmp.pattern.ops[0];
         assoc_op.pattern.identities[index] = tmp.pattern.identities[0];
+        assoc_op.pattern.is_commutative = tmp.pattern.is_commutative;
         assoc_op.xs[index] = tmp.xs[0];
         assoc_op.ys[index] = tmp.ys[0];
     }
-    debug(5) << e << " -> is associative? " << is_associative << ", is commutative? " << is_commutative << "\n";
-    return {is_associative, is_commutative};
+    debug(5) << e << " -> is associative? " << is_associative
+             << ", is commutative? " << assoc_op.pattern.is_commutative << "\n";
+    return is_associative;
 }
 
 void add_transitive_dependencies(vector<set<int>> &dependencies) {
@@ -423,8 +402,7 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
         for (size_t idx = 0; idx < exprs.size(); ++idx) {
             // Try to infer the 'y' part of the operator. If we couldn't find
             // a single 'y' that satisfy the operator, give up
-            bool is_associative, is_commutative;
-            std::tie(is_associative, is_commutative) = extract_associative_op_single_element(
+            bool is_associative = extract_associative_op_single_element(
                 idx, op_x_names, op_y_names, x_parts[idx], exprs[idx], assoc_op);
             if (!is_associative) {
                 return AssociativeOp();
@@ -494,15 +472,15 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
                     }
                 }
 
+                assoc_op.is_associative = sub_assoc_op.is_associative;
                 assoc_op.pattern.ops[index] = sub_assoc_op.pattern.ops[j];
                 assoc_op.pattern.identities[index] = sub_assoc_op.pattern.identities[j];
+                assoc_op.pattern.is_commutative = sub_assoc_op.pattern.is_commutative;
                 assoc_op.xs[index] = sub_assoc_op.xs[j];
                 assoc_op.ys[index] = sub_assoc_op.ys[j];
             }
         }
     }
-
-    assoc_op.is_associative = true;
     return assoc_op;
 }
 
