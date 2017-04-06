@@ -1,10 +1,10 @@
 #include "Halide.h"
-#include "benchmark.h"
+#include "halide_benchmark.h"
 #include <stdio.h>
 #include <memory>
 
 using namespace Halide;
-using namespace Halide::Internal;
+using namespace Halide::Tools;
 
 // Controls the size of the input data
 #define N1 4
