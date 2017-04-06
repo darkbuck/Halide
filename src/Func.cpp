@@ -599,12 +599,12 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     // Check whether the operator is associative and determine the operator and
     // its identity for each value in the definition if it is a Tuple
-    const auto &assoc_result = prove_associativity(func_name, args, values);
+    const auto &prover_result = prove_associativity(func_name, args, values);
 
-    user_assert(assoc_result.associative())
+    user_assert(prover_result.associative())
         << "Failed to call rfactor() on " << stage_name
         << " since it can't prove associativity of the operator\n";
-    internal_assert(assoc_result.size() == values.size());
+    internal_assert(prover_result.size() == values.size());
 
     vector<Split> &splits = definition.schedule().splits();
     vector<ReductionVariable> &rvars = definition.schedule().rvars();
@@ -643,7 +643,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     // If the operator is associative but non-commutative, rfactor() on inner
     // dimensions (excluding the outer dimensions) is not valid.
-    /*if (!prover_result.is_commutative) {
+    if (!prover_result.commutative()) {
         int last_rvar = -1;
         for (int i = dims.size() - 1; i >= 0; --i) {
             if ((last_rvar != -1) && is_rfactored[i]) {
@@ -658,7 +658,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
                 last_rvar = i;
             }
         }
-    }*/
+    }
 
     // We need to apply the split directives on the reduction vars, so that we can
     // correctly lift the RVars not in 'rvars_kept' and distribute the RVars to the
@@ -746,7 +746,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     vector<Expr> init_vals(values.size());
     for (size_t i = 0; i < init_vals.size(); ++i) {
-        init_vals[i] = assoc_result.pattern.identities[i];
+        init_vals[i] = prover_result.pattern.identities[i];
     }
 
     Func intm(func_name + "_intm");
@@ -863,12 +863,12 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         // to collect all substitutions first.
         map<string, Expr> replacement;
         for (size_t i = 0; i < f_values.size(); ++i) {
-            replacement.emplace(assoc_result.ys[i].var, intm(f_load_args)[i]);
-            if (!assoc_result.xs[i].var.empty()) {
+            replacement.emplace(prover_result.ys[i].var, intm(f_load_args)[i]);
+            if (!prover_result.xs[i].var.empty()) {
                 Expr prev_val = Call::make(intm.output_types()[i], func_name,
                                            f_store_args, Call::CallType::Halide,
                                            nullptr, i);
-                replacement.emplace(assoc_result.xs[i].var, prev_val);
+                replacement.emplace(prover_result.xs[i].var, prev_val);
             } else {
                 user_warning << "Update definition of " << stage_name << " at index " << i
                              << " doesn't depend on the previous value. This isn't a"
@@ -877,14 +877,14 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         }
 
         for (size_t i = 0; i < f_values.size(); ++i) {
-            f_values[i] = substitute(replacement, assoc_result.pattern.ops[i]);
+            f_values[i] = substitute(replacement, prover_result.pattern.ops[i]);
         }
     } else {
         Expr prev_val = Call::make(intm.output_types()[0], func_name,
                                    f_store_args, Call::CallType::Halide);
-        Expr val = substitute(assoc_result.ys[0].var, intm(f_load_args), assoc_result.pattern.ops[0]);
-        if (!assoc_result.xs[0].var.empty()) {
-            val = substitute(assoc_result.xs[0].var, prev_val, val);
+        Expr val = substitute(prover_result.ys[0].var, intm(f_load_args), prover_result.pattern.ops[0]);
+        if (!prover_result.xs[0].var.empty()) {
+            val = substitute(prover_result.xs[0].var, prev_val, val);
         } else {
             user_warning << "Update definition of " << stage_name
                          << " doesn't depend on the previous value. This isn't a"
