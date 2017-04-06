@@ -578,6 +578,33 @@ void check_associativity(const string &f, vector<Expr> args, vector<Expr> exprs,
 void associativity_test() {
     typedef AssociativeOp::Replacement Replacement;
 
+    {
+        // Tests for logical And/Or
+        Type t = UInt(1);
+        Expr x = Variable::make(t, "x");
+        Expr y = Variable::make(t, "y");
+        Expr x_idx = Variable::make(Int(32), "x_idx");
+        Expr f_call_0 = Call::make(t, "f", {x_idx}, Call::CallType::Halide, nullptr, 0);
+
+        // f(x) = y && f(x)
+        check_associativity("f", {x_idx}, {And::make(y, f_call_0)},
+                            AssociativeOp(
+                              AssociativePattern(And::make(x, y), const_true(), true),
+                              {Replacement("x", f_call_0)},
+                              {Replacement("y", y)},
+                              true)
+                            );
+
+        // f(x) = y || f(x)
+        check_associativity("f", {x_idx}, {Or::make(y, f_call_0)},
+                            AssociativeOp(
+                              AssociativePattern(Or::make(x, y), const_false(), true),
+                              {Replacement("x", f_call_0)},
+                              {Replacement("y", y)},
+                              true)
+                            );
+    }
+
     Type t = Int(32);
     Expr x = Variable::make(t, "x");
     Expr y = Variable::make(t, "y");
