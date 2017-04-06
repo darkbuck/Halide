@@ -123,6 +123,7 @@ bool associative_op_pattern_match(Expr e,
                                   map<string, Expr> &match) {
 
     map<string, Expr> result;
+    debug(5) << "Compare pattern: " << op << ", with expr: " << e << ", match? " << expr_match(op, e, result) << "\n";
     if (expr_match(op, e, result)) {
         debug(5) << "Found associative ops for " << e << " -> " << op
                  << ", y_part: " << result["y0"] << "\n";
@@ -148,6 +149,17 @@ bool associative_op_pattern_match(Expr e,
                 }
             }
         }
+        for (size_t i = 0; i < x_names.size(); ++i) {
+            const auto &iter = result.find("k" + std::to_string(i));
+            if (iter != result.end()) {
+                // Make sure that k_part is constant
+                if (!is_const(iter->second)) {
+                    debug(5) << "...Skipping match since the k_part is not constant\n";
+                    return false;
+                }
+            }
+        }
+
         // Make sure that the new matches are in agreement with any previous matches
         for (const auto &iter : result) {
             const auto &match_iter = match.find(iter.first);
@@ -197,19 +209,19 @@ bool find_match(const vector<AssociativePattern> &table, const vector<string> &o
             continue;
         }
 
-        vector<pair<Expr, Expr>> replacement;
+        vector<pair<Expr, Expr>> replacement; // find -> replacement
         for (size_t index = 0; index < op_y_names.size(); ++index) {
-            const auto &iter = pattern_match.find("y" + std::to_string(index));
-            if (iter == pattern_match.end()) {
+            const auto &y_iter = pattern_match.find("y" + std::to_string(index));
+            if (y_iter == pattern_match.end()) {
                 // Didn't find y{index} during pattern matching. Try next pattern.
                 matched = false;
                 break;
             }
-            Expr y_part = iter->second;
-
-            debug(5) << "Pattern at index " << index << ": " << op_x_names[index]
-                     << " -> " << x_parts[index] << ", " << op_y_names[index]
+            Expr y_part = y_iter->second;
+            debug(5) << "Pattern at index " << index << ":\n  " << op_x_names[index]
+                     << " -> " << x_parts[index] << "\n  " << op_y_names[index]
                      << " -> " << y_part << "\n";
+
             assoc_op.xs[index] = {op_x_names[index], x_parts[index]};
             assoc_op.ys[index] = {op_y_names[index], y_part};
             replacement.push_back({y_part, Variable::make(y_part.type(), op_y_names[index])});
@@ -239,8 +251,8 @@ bool find_match(const vector<AssociativePattern> &table, const vector<string> &o
 // respectively. 'assoc_op' contains the the equivalent associative binary/unary operator
 // for that operator. If the operator is non-associative, 'assoc_op' is not valid.
 bool extract_associative_op_single_element(int index, const vector<string> &op_x_names,
-                                           const vector<string> &op_y_names, Expr x_part,
-                                           Expr e, AssociativeOp &assoc_op) {
+                                           const vector<string> &op_y_names,
+                                           Expr x_part, Expr e, AssociativeOp &assoc_op) {
     Type t = e.type();
     const string &op_x = op_x_names[index];
     const string &op_y = op_y_names[index];
@@ -360,9 +372,6 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
     // For a Tuple of exprs to be associative, each element of the Tuple
     // has to be associative.
     for (int idx = exprs.size()-1; idx >= 0; --idx) {
-        string op_x = op_x_names[idx];
-        string op_y = op_y_names[idx];
-
         exprs[idx] = simplify(exprs[idx]);
         exprs[idx] = common_subexpression_elimination(exprs[idx]);
         // Calling Simplify or the original expr itself might have let exprs,
@@ -387,7 +396,7 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
 
         exprs[idx] = common_subexpression_elimination(exprs[idx]);
         exprs[idx] = simplify(exprs[idx]);
-        exprs[idx] = solve_expression(exprs[idx], op_x).result; // Move 'x' to the left as possible
+        exprs[idx] = solve_expression(exprs[idx], op_x_names[idx]).result; // Move 'x' to the left as possible
         exprs[idx] = substitute_in_all_lets(exprs[idx]);
     }
 
@@ -481,6 +490,7 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
             }
         }
     }
+    debug(5) << "Found associative ops:\n" << assoc_op << "\n";
     return assoc_op;
 }
 
@@ -535,15 +545,14 @@ void check_associativity(const string &f, vector<Expr> args, vector<Expr> exprs,
             internal_assert(equal(result.ys[i].expr, assoc_op.ys[i].expr))
                 << "Checking associativity: " << print_args(f, args, exprs) << "\n"
                 << "  Index: " << i << "\n"
-                << "  Expect y: " << assoc_op.xs[i].expr << "\n"
+                << "  Expect y: " << assoc_op.ys[i].expr << "\n"
                 << "  instead of " << result.ys[i].expr << "\n";
 
             if (result.xs[i].expr.defined()) {
                 replacement.emplace(assoc_op.xs[i].var, Variable::make(result.xs[i].expr.type(), result.xs[i].var));
             }
-            if (result.ys[i].expr.defined()) {
-                replacement.emplace(assoc_op.ys[i].var, Variable::make(result.ys[i].expr.type(), result.ys[i].var));
-            }
+            internal_assert(result.ys[i].expr.defined());
+            replacement.emplace(assoc_op.ys[i].var, Variable::make(result.ys[i].expr.type(), result.ys[i].var));
         }
 
         for (size_t i = 0; i < assoc_op.size(); ++i) {
@@ -588,7 +597,16 @@ void associativity_test() {
     Expr g_call_0 = Call::make(t, "g", {rx}, Call::CallType::Halide, nullptr, 0);
     Expr g_call_1 = Call::make(t, "g", {rx}, Call::CallType::Halide, nullptr, 1);
 
-    // f(x) = min(f(x), int16(z))
+    // f(x) = max(min(f(x), 10), y + int16(z))
+    check_associativity("f", {x}, {max(min(f_call_0, make_const(t, 10)), y + Cast::make(Int(16), z))},
+                        AssociativeOp(
+                          AssociativePattern(max(min(x, make_const(t, 10)), y), t.min(), true),
+                          {Replacement("x", f_call_0)},
+                          {Replacement("y", y + Cast::make(Int(16), z))},
+                          true)
+                        );
+
+    // f(x) = min(f(x), y + int16(z))
     check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
                         AssociativeOp(
                           AssociativePattern(min(x, y), t.max(), true),

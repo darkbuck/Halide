@@ -74,6 +74,17 @@ struct AssociativeOp {
     bool associative() const { return is_associative; }
     bool commutative() const { return pattern.is_commutative; }
     size_t size() const { return pattern.size(); }
+
+    friend std::ostream& operator<<(std::ostream &stream, const AssociativeOp &op) {
+        stream << "Pattern:\n" << op.pattern;
+        stream << "is associative? " << op.is_associative << "\n";
+        for (size_t i = 0; i < op.xs.size(); ++i) {
+            stream << "  " << op.xs[i].var << " -> " << op.xs[i].expr << "\n";
+            stream << "  " << op.ys[i].var << " -> " << op.ys[i].expr << "\n";
+        }
+        stream << "\n";
+        return stream;
+    }
 };
 
 /**

@@ -47,9 +47,9 @@ struct AssociativePattern {
     friend std::ostream& operator<<(std::ostream &stream, const AssociativePattern &p) {
         stream << "{\n";
         for (size_t i = 0; i < p.ops.size(); ++i) {
-            stream << "   " << p.ops[i] << ", " << p.identities[i] << "\n";
+            stream << "  op_" << i << " ->" << p.ops[i] << ", id_" << i << " -> " << p.identities[i] << "\n";
         }
-        stream << "    commutative? " << p.is_commutative << "\n";
+        stream << "  commutative? " << p.is_commutative << "\n";
         stream << "}\n";
         return stream;
     }

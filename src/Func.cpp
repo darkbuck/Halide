@@ -863,7 +863,9 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         // to collect all substitutions first.
         map<string, Expr> replacement;
         for (size_t i = 0; i < f_values.size(); ++i) {
+            internal_assert(!prover_result.ys[i].var.empty());
             replacement.emplace(prover_result.ys[i].var, intm(f_load_args)[i]);
+
             if (!prover_result.xs[i].var.empty()) {
                 Expr prev_val = Call::make(intm.output_types()[i], func_name,
                                            f_store_args, Call::CallType::Halide,
@@ -875,13 +877,13 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
                              << " reduction operation\n";
             }
         }
-
         for (size_t i = 0; i < f_values.size(); ++i) {
             f_values[i] = substitute(replacement, prover_result.pattern.ops[i]);
         }
     } else {
         Expr prev_val = Call::make(intm.output_types()[0], func_name,
                                    f_store_args, Call::CallType::Halide);
+        internal_assert(!prover_result.ys[0].var.empty());
         Expr val = substitute(prover_result.ys[0].var, intm(f_load_args), prover_result.pattern.ops[0]);
         if (!prover_result.xs[0].var.empty()) {
             val = substitute(prover_result.xs[0].var, prev_val, val);
