@@ -118,6 +118,7 @@ struct TableKey {
 };
 
 static map<TableKey, vector<AssociativePattern>> pattern_tables;
+
 static const map<TableKey, size_t> pattern_table_sizes = {
     {TableKey(ValType::All, RootExpr::Add, 1), 15},
     {TableKey(ValType::All, RootExpr::Mul, 1), 15},
@@ -125,13 +126,155 @@ static const map<TableKey, size_t> pattern_table_sizes = {
     {TableKey(ValType::All, RootExpr::Min, 1), 15},
     {TableKey(ValType::All, RootExpr::Sub, 1), 10},
     {TableKey(ValType::All, RootExpr::Select, 1), 0},
-
     {TableKey(ValType::All, RootExpr::Add, 2), 14},
     {TableKey(ValType::All, RootExpr::Mul, 2), 14},
     {TableKey(ValType::All, RootExpr::Max, 2), 15},
     {TableKey(ValType::All, RootExpr::Min, 2), 15},
     {TableKey(ValType::All, RootExpr::Sub, 2), 9},
     {TableKey(ValType::All, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::UInt1, RootExpr::Add, 1), 0},
+    {TableKey(ValType::UInt1, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::UInt1, RootExpr::Max, 1), 0},
+    {TableKey(ValType::UInt1, RootExpr::Min, 1), 0},
+    {TableKey(ValType::UInt1, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::UInt1, RootExpr::Select, 1), 0},
+    {TableKey(ValType::UInt1, RootExpr::Add, 2), 0},
+    {TableKey(ValType::UInt1, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::UInt1, RootExpr::Max, 2), 0},
+    {TableKey(ValType::UInt1, RootExpr::Min, 2), 0},
+    {TableKey(ValType::UInt1, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::UInt1, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::UInt8, RootExpr::Add, 1), 0},
+    {TableKey(ValType::UInt8, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::UInt8, RootExpr::Max, 1), 0},
+    {TableKey(ValType::UInt8, RootExpr::Min, 1), 0},
+    {TableKey(ValType::UInt8, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::UInt8, RootExpr::Select, 1), 0},
+    {TableKey(ValType::UInt8, RootExpr::Add, 2), 0},
+    {TableKey(ValType::UInt8, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::UInt8, RootExpr::Max, 2), 0},
+    {TableKey(ValType::UInt8, RootExpr::Min, 2), 0},
+    {TableKey(ValType::UInt8, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::UInt8, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::UInt16, RootExpr::Add, 1), 0},
+    {TableKey(ValType::UInt16, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::UInt16, RootExpr::Max, 1), 0},
+    {TableKey(ValType::UInt16, RootExpr::Min, 1), 0},
+    {TableKey(ValType::UInt16, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::UInt16, RootExpr::Select, 1), 0},
+    {TableKey(ValType::UInt16, RootExpr::Add, 2), 0},
+    {TableKey(ValType::UInt16, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::UInt16, RootExpr::Max, 2), 0},
+    {TableKey(ValType::UInt16, RootExpr::Min, 2), 0},
+    {TableKey(ValType::UInt16, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::UInt16, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::UInt32, RootExpr::Add, 1), 0},
+    {TableKey(ValType::UInt32, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::UInt32, RootExpr::Max, 1), 0},
+    {TableKey(ValType::UInt32, RootExpr::Min, 1), 0},
+    {TableKey(ValType::UInt32, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::UInt32, RootExpr::Select, 1), 0},
+    {TableKey(ValType::UInt32, RootExpr::Add, 2), 0},
+    {TableKey(ValType::UInt32, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::UInt32, RootExpr::Max, 2), 0},
+    {TableKey(ValType::UInt32, RootExpr::Min, 2), 0},
+    {TableKey(ValType::UInt32, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::UInt32, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::UInt64, RootExpr::Add, 1), 0},
+    {TableKey(ValType::UInt64, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::UInt64, RootExpr::Max, 1), 0},
+    {TableKey(ValType::UInt64, RootExpr::Min, 1), 0},
+    {TableKey(ValType::UInt64, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::UInt64, RootExpr::Select, 1), 0},
+    {TableKey(ValType::UInt64, RootExpr::Add, 2), 0},
+    {TableKey(ValType::UInt64, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::UInt64, RootExpr::Max, 2), 0},
+    {TableKey(ValType::UInt64, RootExpr::Min, 2), 0},
+    {TableKey(ValType::UInt64, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::UInt64, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::Int8, RootExpr::Add, 1), 0},
+    {TableKey(ValType::Int8, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::Int8, RootExpr::Max, 1), 0},
+    {TableKey(ValType::Int8, RootExpr::Min, 1), 0},
+    {TableKey(ValType::Int8, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::Int8, RootExpr::Select, 1), 0},
+    {TableKey(ValType::Int8, RootExpr::Add, 2), 0},
+    {TableKey(ValType::Int8, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::Int8, RootExpr::Max, 2), 0},
+    {TableKey(ValType::Int8, RootExpr::Min, 2), 0},
+    {TableKey(ValType::Int8, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::Int8, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::Int16, RootExpr::Add, 1), 0},
+    {TableKey(ValType::Int16, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::Int16, RootExpr::Max, 1), 0},
+    {TableKey(ValType::Int16, RootExpr::Min, 1), 0},
+    {TableKey(ValType::Int16, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::Int16, RootExpr::Select, 1), 0},
+    {TableKey(ValType::Int16, RootExpr::Add, 2), 0},
+    {TableKey(ValType::Int16, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::Int16, RootExpr::Max, 2), 0},
+    {TableKey(ValType::Int16, RootExpr::Min, 2), 0},
+    {TableKey(ValType::Int16, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::Int16, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::Int32, RootExpr::Add, 1), 0},
+    {TableKey(ValType::Int32, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::Int32, RootExpr::Max, 1), 0},
+    {TableKey(ValType::Int32, RootExpr::Min, 1), 0},
+    {TableKey(ValType::Int32, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::Int32, RootExpr::Select, 1), 0},
+    {TableKey(ValType::Int32, RootExpr::Add, 2), 0},
+    {TableKey(ValType::Int32, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::Int32, RootExpr::Max, 2), 0},
+    {TableKey(ValType::Int32, RootExpr::Min, 2), 0},
+    {TableKey(ValType::Int32, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::Int32, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::Int64, RootExpr::Add, 1), 0},
+    {TableKey(ValType::Int64, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::Int64, RootExpr::Max, 1), 0},
+    {TableKey(ValType::Int64, RootExpr::Min, 1), 0},
+    {TableKey(ValType::Int64, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::Int64, RootExpr::Select, 1), 0},
+    {TableKey(ValType::Int64, RootExpr::Add, 2), 0},
+    {TableKey(ValType::Int64, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::Int64, RootExpr::Max, 2), 0},
+    {TableKey(ValType::Int64, RootExpr::Min, 2), 0},
+    {TableKey(ValType::Int64, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::Int64, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::Float32, RootExpr::Add, 1), 0},
+    {TableKey(ValType::Float32, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::Float32, RootExpr::Max, 1), 0},
+    {TableKey(ValType::Float32, RootExpr::Min, 1), 0},
+    {TableKey(ValType::Float32, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::Float32, RootExpr::Select, 1), 0},
+    {TableKey(ValType::Float32, RootExpr::Add, 2), 0},
+    {TableKey(ValType::Float32, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::Float32, RootExpr::Max, 2), 0},
+    {TableKey(ValType::Float32, RootExpr::Min, 2), 0},
+    {TableKey(ValType::Float32, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::Float32, RootExpr::Select, 2), 0},
+
+    {TableKey(ValType::Float64, RootExpr::Add, 1), 0},
+    {TableKey(ValType::Float64, RootExpr::Mul, 1), 0},
+    {TableKey(ValType::Float64, RootExpr::Max, 1), 0},
+    {TableKey(ValType::Float64, RootExpr::Min, 1), 0},
+    {TableKey(ValType::Float64, RootExpr::Sub, 1), 0},
+    {TableKey(ValType::Float64, RootExpr::Select, 1), 0},
+    {TableKey(ValType::Float64, RootExpr::Add, 2), 0},
+    {TableKey(ValType::Float64, RootExpr::Mul, 2), 0},
+    {TableKey(ValType::Float64, RootExpr::Max, 2), 0},
+    {TableKey(ValType::Float64, RootExpr::Min, 2), 0},
+    {TableKey(ValType::Float64, RootExpr::Sub, 2), 0},
+    {TableKey(ValType::Float64, RootExpr::Select, 2), 0},
 };
 
 const OpsIds single_gen_add[] = {
@@ -216,7 +359,6 @@ const OpsIds single_gen_sub[] = {
 };
 const OpsIds single_gen_select[] = {
 };
-
 const OpsIds double_gen_add[] = {
     {{"Add(X0, Y0)", "Add(X0, Y1)"}, {Identity::Zero, Identity::Zero}, true},
     {{"Add(X0, Y0)", "Add(X1, Y0)"}, {Identity::Zero, Identity::Zero}, true},
@@ -285,6 +427,281 @@ const OpsIds double_gen_sub[] = {
     {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", "Sub(Max(X1, Y1), Mul(Min(Mul(X0, X1), X0), Add(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
 };
 const OpsIds double_gen_select[] = {
+};
+
+const OpsIds single_uint1_add[] = {
+};
+const OpsIds single_uint1_mul[] = {
+};
+const OpsIds single_uint1_max[] = {
+};
+const OpsIds single_uint1_min[] = {
+};
+const OpsIds single_uint1_sub[] = {
+};
+const OpsIds single_uint1_select[] = {
+};
+const OpsIds double_uint1_add[] = {
+};
+const OpsIds double_uint1_mul[] = {
+};
+const OpsIds double_uint1_max[] = {
+};
+const OpsIds double_uint1_min[] = {
+};
+const OpsIds double_uint1_sub[] = {
+};
+const OpsIds double_uint1_select[] = {
+};
+
+const OpsIds single_uint8_add[] = {
+};
+const OpsIds single_uint8_mul[] = {
+};
+const OpsIds single_uint8_max[] = {
+};
+const OpsIds single_uint8_min[] = {
+};
+const OpsIds single_uint8_sub[] = {
+};
+const OpsIds single_uint8_select[] = {
+};
+const OpsIds double_uint8_add[] = {
+};
+const OpsIds double_uint8_mul[] = {
+};
+const OpsIds double_uint8_max[] = {
+};
+const OpsIds double_uint8_min[] = {
+};
+const OpsIds double_uint8_sub[] = {
+};
+const OpsIds double_uint8_select[] = {
+};
+
+const OpsIds single_uint16_add[] = {
+};
+const OpsIds single_uint16_mul[] = {
+};
+const OpsIds single_uint16_max[] = {
+};
+const OpsIds single_uint16_min[] = {
+};
+const OpsIds single_uint16_sub[] = {
+};
+const OpsIds single_uint16_select[] = {
+};
+const OpsIds double_uint16_add[] = {
+};
+const OpsIds double_uint16_mul[] = {
+};
+const OpsIds double_uint16_max[] = {
+};
+const OpsIds double_uint16_min[] = {
+};
+const OpsIds double_uint16_sub[] = {
+};
+const OpsIds double_uint16_select[] = {
+};
+
+const OpsIds single_uint32_add[] = {
+};
+const OpsIds single_uint32_mul[] = {
+};
+const OpsIds single_uint32_max[] = {
+};
+const OpsIds single_uint32_min[] = {
+};
+const OpsIds single_uint32_sub[] = {
+};
+const OpsIds single_uint32_select[] = {
+};
+const OpsIds double_uint32_add[] = {
+};
+const OpsIds double_uint32_mul[] = {
+};
+const OpsIds double_uint32_max[] = {
+};
+const OpsIds double_uint32_min[] = {
+};
+const OpsIds double_uint32_sub[] = {
+};
+const OpsIds double_uint32_select[] = {
+};
+
+const OpsIds single_uint64_add[] = {
+};
+const OpsIds single_uint64_mul[] = {
+};
+const OpsIds single_uint64_max[] = {
+};
+const OpsIds single_uint64_min[] = {
+};
+const OpsIds single_uint64_sub[] = {
+};
+const OpsIds single_uint64_select[] = {
+};
+const OpsIds double_uint64_add[] = {
+};
+const OpsIds double_uint64_mul[] = {
+};
+const OpsIds double_uint64_max[] = {
+};
+const OpsIds double_uint64_min[] = {
+};
+const OpsIds double_uint64_sub[] = {
+};
+const OpsIds double_uint64_select[] = {
+};
+
+const OpsIds single_int8_add[] = {
+};
+const OpsIds single_int8_mul[] = {
+};
+const OpsIds single_int8_max[] = {
+};
+const OpsIds single_int8_min[] = {
+};
+const OpsIds single_int8_sub[] = {
+};
+const OpsIds single_int8_select[] = {
+};
+const OpsIds double_int8_add[] = {
+};
+const OpsIds double_int8_mul[] = {
+};
+const OpsIds double_int8_max[] = {
+};
+const OpsIds double_int8_min[] = {
+};
+const OpsIds double_int8_sub[] = {
+};
+const OpsIds double_int8_select[] = {
+};
+
+const OpsIds single_int16_add[] = {
+};
+const OpsIds single_int16_mul[] = {
+};
+const OpsIds single_int16_max[] = {
+};
+const OpsIds single_int16_min[] = {
+};
+const OpsIds single_int16_sub[] = {
+};
+const OpsIds single_int16_select[] = {
+};
+const OpsIds double_int16_add[] = {
+};
+const OpsIds double_int16_mul[] = {
+};
+const OpsIds double_int16_max[] = {
+};
+const OpsIds double_int16_min[] = {
+};
+const OpsIds double_int16_sub[] = {
+};
+const OpsIds double_int16_select[] = {
+};
+
+const OpsIds single_int32_add[] = {
+};
+const OpsIds single_int32_mul[] = {
+};
+const OpsIds single_int32_max[] = {
+};
+const OpsIds single_int32_min[] = {
+};
+const OpsIds single_int32_sub[] = {
+};
+const OpsIds single_int32_select[] = {
+};
+const OpsIds double_int32_add[] = {
+};
+const OpsIds double_int32_mul[] = {
+};
+const OpsIds double_int32_max[] = {
+};
+const OpsIds double_int32_min[] = {
+};
+const OpsIds double_int32_sub[] = {
+};
+const OpsIds double_int32_select[] = {
+};
+
+const OpsIds single_int64_add[] = {
+};
+const OpsIds single_int64_mul[] = {
+};
+const OpsIds single_int64_max[] = {
+};
+const OpsIds single_int64_min[] = {
+};
+const OpsIds single_int64_sub[] = {
+};
+const OpsIds single_int64_select[] = {
+};
+const OpsIds double_int64_add[] = {
+};
+const OpsIds double_int64_mul[] = {
+};
+const OpsIds double_int64_max[] = {
+};
+const OpsIds double_int64_min[] = {
+};
+const OpsIds double_int64_sub[] = {
+};
+const OpsIds double_int64_select[] = {
+};
+
+const OpsIds single_float32_add[] = {
+};
+const OpsIds single_float32_mul[] = {
+};
+const OpsIds single_float32_max[] = {
+};
+const OpsIds single_float32_min[] = {
+};
+const OpsIds single_float32_sub[] = {
+};
+const OpsIds single_float32_select[] = {
+};
+const OpsIds double_float32_add[] = {
+};
+const OpsIds double_float32_mul[] = {
+};
+const OpsIds double_float32_max[] = {
+};
+const OpsIds double_float32_min[] = {
+};
+const OpsIds double_float32_sub[] = {
+};
+const OpsIds double_float32_select[] = {
+};
+
+const OpsIds single_float64_add[] = {
+};
+const OpsIds single_float64_mul[] = {
+};
+const OpsIds single_float64_max[] = {
+};
+const OpsIds single_float64_min[] = {
+};
+const OpsIds single_float64_sub[] = {
+};
+const OpsIds single_float64_select[] = {
+};
+const OpsIds double_float64_add[] = {
+};
+const OpsIds double_float64_mul[] = {
+};
+const OpsIds double_float64_max[] = {
+};
+const OpsIds double_float64_min[] = {
+};
+const OpsIds double_float64_sub[] = {
+};
+const OpsIds double_float64_select[] = {
 };
 
 Expr convert_op_halide_expr(const string &nodes, int &cursor, Type t) {
@@ -402,35 +819,181 @@ static const map<TableKey, OpsIds const *> val_type_to_luts = {
     {TableKey(ValType::All, RootExpr::Min, 1), &single_gen_min[0]},
     {TableKey(ValType::All, RootExpr::Sub, 1), &single_gen_sub[0]},
     {TableKey(ValType::All, RootExpr::Select, 1), &single_gen_select[0]},
-
     {TableKey(ValType::All, RootExpr::Add, 2), &double_gen_add[0]},
     {TableKey(ValType::All, RootExpr::Mul, 2), &double_gen_mul[0]},
     {TableKey(ValType::All, RootExpr::Max, 2), &double_gen_max[0]},
     {TableKey(ValType::All, RootExpr::Min, 2), &double_gen_min[0]},
     {TableKey(ValType::All, RootExpr::Sub, 2), &double_gen_sub[0]},
     {TableKey(ValType::All, RootExpr::Select, 2), &double_gen_select[0]},
+
+    {TableKey(ValType::UInt1, RootExpr::Add, 1), &single_uint1_add[0]},
+    {TableKey(ValType::UInt1, RootExpr::Mul, 1), &single_uint1_mul[0]},
+    {TableKey(ValType::UInt1, RootExpr::Max, 1), &single_uint1_max[0]},
+    {TableKey(ValType::UInt1, RootExpr::Min, 1), &single_uint1_min[0]},
+    {TableKey(ValType::UInt1, RootExpr::Sub, 1), &single_uint1_sub[0]},
+    {TableKey(ValType::UInt1, RootExpr::Select, 1), &single_uint1_select[0]},
+    {TableKey(ValType::UInt1, RootExpr::Add, 2), &double_uint1_add[0]},
+    {TableKey(ValType::UInt1, RootExpr::Mul, 2), &double_uint1_mul[0]},
+    {TableKey(ValType::UInt1, RootExpr::Max, 2), &double_uint1_max[0]},
+    {TableKey(ValType::UInt1, RootExpr::Min, 2), &double_uint1_min[0]},
+    {TableKey(ValType::UInt1, RootExpr::Sub, 2), &double_uint1_sub[0]},
+    {TableKey(ValType::UInt1, RootExpr::Select, 2), &double_uint1_select[0]},
+
+    {TableKey(ValType::UInt8, RootExpr::Add, 1), &single_uint8_add[0]},
+    {TableKey(ValType::UInt8, RootExpr::Mul, 1), &single_uint8_mul[0]},
+    {TableKey(ValType::UInt8, RootExpr::Max, 1), &single_uint8_max[0]},
+    {TableKey(ValType::UInt8, RootExpr::Min, 1), &single_uint8_min[0]},
+    {TableKey(ValType::UInt8, RootExpr::Sub, 1), &single_uint8_sub[0]},
+    {TableKey(ValType::UInt8, RootExpr::Select, 1), &single_uint8_select[0]},
+    {TableKey(ValType::UInt8, RootExpr::Add, 2), &double_uint8_add[0]},
+    {TableKey(ValType::UInt8, RootExpr::Mul, 2), &double_uint8_mul[0]},
+    {TableKey(ValType::UInt8, RootExpr::Max, 2), &double_uint8_max[0]},
+    {TableKey(ValType::UInt8, RootExpr::Min, 2), &double_uint8_min[0]},
+    {TableKey(ValType::UInt8, RootExpr::Sub, 2), &double_uint8_sub[0]},
+    {TableKey(ValType::UInt8, RootExpr::Select, 2), &double_uint8_select[0]},
+
+    {TableKey(ValType::UInt16, RootExpr::Add, 1), &single_uint16_add[0]},
+    {TableKey(ValType::UInt16, RootExpr::Mul, 1), &single_uint16_mul[0]},
+    {TableKey(ValType::UInt16, RootExpr::Max, 1), &single_uint16_max[0]},
+    {TableKey(ValType::UInt16, RootExpr::Min, 1), &single_uint16_min[0]},
+    {TableKey(ValType::UInt16, RootExpr::Sub, 1), &single_uint16_sub[0]},
+    {TableKey(ValType::UInt16, RootExpr::Select, 1), &single_uint16_select[0]},
+    {TableKey(ValType::UInt16, RootExpr::Add, 2), &double_uint16_add[0]},
+    {TableKey(ValType::UInt16, RootExpr::Mul, 2), &double_uint16_mul[0]},
+    {TableKey(ValType::UInt16, RootExpr::Max, 2), &double_uint16_max[0]},
+    {TableKey(ValType::UInt16, RootExpr::Min, 2), &double_uint16_min[0]},
+    {TableKey(ValType::UInt16, RootExpr::Sub, 2), &double_uint16_sub[0]},
+    {TableKey(ValType::UInt16, RootExpr::Select, 2), &double_uint16_select[0]},
+
+    {TableKey(ValType::UInt32, RootExpr::Add, 1), &single_uint32_add[0]},
+    {TableKey(ValType::UInt32, RootExpr::Mul, 1), &single_uint32_mul[0]},
+    {TableKey(ValType::UInt32, RootExpr::Max, 1), &single_uint32_max[0]},
+    {TableKey(ValType::UInt32, RootExpr::Min, 1), &single_uint32_min[0]},
+    {TableKey(ValType::UInt32, RootExpr::Sub, 1), &single_uint32_sub[0]},
+    {TableKey(ValType::UInt32, RootExpr::Select, 1), &single_uint32_select[0]},
+    {TableKey(ValType::UInt32, RootExpr::Add, 2), &double_uint32_add[0]},
+    {TableKey(ValType::UInt32, RootExpr::Mul, 2), &double_uint32_mul[0]},
+    {TableKey(ValType::UInt32, RootExpr::Max, 2), &double_uint32_max[0]},
+    {TableKey(ValType::UInt32, RootExpr::Min, 2), &double_uint32_min[0]},
+    {TableKey(ValType::UInt32, RootExpr::Sub, 2), &double_uint32_sub[0]},
+    {TableKey(ValType::UInt32, RootExpr::Select, 2), &double_uint32_select[0]},
+
+    {TableKey(ValType::UInt64, RootExpr::Add, 1), &single_uint64_add[0]},
+    {TableKey(ValType::UInt64, RootExpr::Mul, 1), &single_uint64_mul[0]},
+    {TableKey(ValType::UInt64, RootExpr::Max, 1), &single_uint64_max[0]},
+    {TableKey(ValType::UInt64, RootExpr::Min, 1), &single_uint64_min[0]},
+    {TableKey(ValType::UInt64, RootExpr::Sub, 1), &single_uint64_sub[0]},
+    {TableKey(ValType::UInt64, RootExpr::Select, 1), &single_uint64_select[0]},
+    {TableKey(ValType::UInt64, RootExpr::Add, 2), &double_uint64_add[0]},
+    {TableKey(ValType::UInt64, RootExpr::Mul, 2), &double_uint64_mul[0]},
+    {TableKey(ValType::UInt64, RootExpr::Max, 2), &double_uint64_max[0]},
+    {TableKey(ValType::UInt64, RootExpr::Min, 2), &double_uint64_min[0]},
+    {TableKey(ValType::UInt64, RootExpr::Sub, 2), &double_uint64_sub[0]},
+    {TableKey(ValType::UInt64, RootExpr::Select, 2), &double_uint64_select[0]},
+
+    {TableKey(ValType::Int8, RootExpr::Add, 1), &single_int8_add[0]},
+    {TableKey(ValType::Int8, RootExpr::Mul, 1), &single_int8_mul[0]},
+    {TableKey(ValType::Int8, RootExpr::Max, 1), &single_int8_max[0]},
+    {TableKey(ValType::Int8, RootExpr::Min, 1), &single_int8_min[0]},
+    {TableKey(ValType::Int8, RootExpr::Sub, 1), &single_int8_sub[0]},
+    {TableKey(ValType::Int8, RootExpr::Select, 1), &single_int8_select[0]},
+    {TableKey(ValType::Int8, RootExpr::Add, 2), &double_int8_add[0]},
+    {TableKey(ValType::Int8, RootExpr::Mul, 2), &double_int8_mul[0]},
+    {TableKey(ValType::Int8, RootExpr::Max, 2), &double_int8_max[0]},
+    {TableKey(ValType::Int8, RootExpr::Min, 2), &double_int8_min[0]},
+    {TableKey(ValType::Int8, RootExpr::Sub, 2), &double_int8_sub[0]},
+    {TableKey(ValType::Int8, RootExpr::Select, 2), &double_int8_select[0]},
+
+    {TableKey(ValType::Int16, RootExpr::Add, 1), &single_int16_add[0]},
+    {TableKey(ValType::Int16, RootExpr::Mul, 1), &single_int16_mul[0]},
+    {TableKey(ValType::Int16, RootExpr::Max, 1), &single_int16_max[0]},
+    {TableKey(ValType::Int16, RootExpr::Min, 1), &single_int16_min[0]},
+    {TableKey(ValType::Int16, RootExpr::Sub, 1), &single_int16_sub[0]},
+    {TableKey(ValType::Int16, RootExpr::Select, 1), &single_int16_select[0]},
+    {TableKey(ValType::Int16, RootExpr::Add, 2), &double_int16_add[0]},
+    {TableKey(ValType::Int16, RootExpr::Mul, 2), &double_int16_mul[0]},
+    {TableKey(ValType::Int16, RootExpr::Max, 2), &double_int16_max[0]},
+    {TableKey(ValType::Int16, RootExpr::Min, 2), &double_int16_min[0]},
+    {TableKey(ValType::Int16, RootExpr::Sub, 2), &double_int16_sub[0]},
+    {TableKey(ValType::Int16, RootExpr::Select, 2), &double_int16_select[0]},
+
+    {TableKey(ValType::Int32, RootExpr::Add, 1), &single_int32_add[0]},
+    {TableKey(ValType::Int32, RootExpr::Mul, 1), &single_int32_mul[0]},
+    {TableKey(ValType::Int32, RootExpr::Max, 1), &single_int32_max[0]},
+    {TableKey(ValType::Int32, RootExpr::Min, 1), &single_int32_min[0]},
+    {TableKey(ValType::Int32, RootExpr::Sub, 1), &single_int32_sub[0]},
+    {TableKey(ValType::Int32, RootExpr::Select, 1), &single_int32_select[0]},
+    {TableKey(ValType::Int32, RootExpr::Add, 2), &double_int32_add[0]},
+    {TableKey(ValType::Int32, RootExpr::Mul, 2), &double_int32_mul[0]},
+    {TableKey(ValType::Int32, RootExpr::Max, 2), &double_int32_max[0]},
+    {TableKey(ValType::Int32, RootExpr::Min, 2), &double_int32_min[0]},
+    {TableKey(ValType::Int32, RootExpr::Sub, 2), &double_int32_sub[0]},
+    {TableKey(ValType::Int32, RootExpr::Select, 2), &double_int32_select[0]},
+
+    {TableKey(ValType::Int64, RootExpr::Add, 1), &single_int64_add[0]},
+    {TableKey(ValType::Int64, RootExpr::Mul, 1), &single_int64_mul[0]},
+    {TableKey(ValType::Int64, RootExpr::Max, 1), &single_int64_max[0]},
+    {TableKey(ValType::Int64, RootExpr::Min, 1), &single_int64_min[0]},
+    {TableKey(ValType::Int64, RootExpr::Sub, 1), &single_int64_sub[0]},
+    {TableKey(ValType::Int64, RootExpr::Select, 1), &single_int64_select[0]},
+    {TableKey(ValType::Int64, RootExpr::Add, 2), &double_int64_add[0]},
+    {TableKey(ValType::Int64, RootExpr::Mul, 2), &double_int64_mul[0]},
+    {TableKey(ValType::Int64, RootExpr::Max, 2), &double_int64_max[0]},
+    {TableKey(ValType::Int64, RootExpr::Min, 2), &double_int64_min[0]},
+    {TableKey(ValType::Int64, RootExpr::Sub, 2), &double_int64_sub[0]},
+    {TableKey(ValType::Int64, RootExpr::Select, 2), &double_int64_select[0]},
+
+    {TableKey(ValType::Float32, RootExpr::Add, 1), &single_int32_add[0]},
+    {TableKey(ValType::Float32, RootExpr::Mul, 1), &single_int32_mul[0]},
+    {TableKey(ValType::Float32, RootExpr::Max, 1), &single_int32_max[0]},
+    {TableKey(ValType::Float32, RootExpr::Min, 1), &single_int32_min[0]},
+    {TableKey(ValType::Float32, RootExpr::Sub, 1), &single_int32_sub[0]},
+    {TableKey(ValType::Float32, RootExpr::Select, 1), &single_int32_select[0]},
+    {TableKey(ValType::Float32, RootExpr::Add, 2), &double_int32_add[0]},
+    {TableKey(ValType::Float32, RootExpr::Mul, 2), &double_int32_mul[0]},
+    {TableKey(ValType::Float32, RootExpr::Max, 2), &double_int32_max[0]},
+    {TableKey(ValType::Float32, RootExpr::Min, 2), &double_int32_min[0]},
+    {TableKey(ValType::Float32, RootExpr::Sub, 2), &double_int32_sub[0]},
+    {TableKey(ValType::Float32, RootExpr::Select, 2), &double_int32_select[0]},
+
+    {TableKey(ValType::Float64, RootExpr::Add, 1), &single_int64_add[0]},
+    {TableKey(ValType::Float64, RootExpr::Mul, 1), &single_int64_mul[0]},
+    {TableKey(ValType::Float64, RootExpr::Max, 1), &single_int64_max[0]},
+    {TableKey(ValType::Float64, RootExpr::Min, 1), &single_int64_min[0]},
+    {TableKey(ValType::Float64, RootExpr::Sub, 1), &single_int64_sub[0]},
+    {TableKey(ValType::Float64, RootExpr::Select, 1), &single_int64_select[0]},
+    {TableKey(ValType::Float64, RootExpr::Add, 2), &double_int64_add[0]},
+    {TableKey(ValType::Float64, RootExpr::Mul, 2), &double_int64_mul[0]},
+    {TableKey(ValType::Float64, RootExpr::Max, 2), &double_int64_max[0]},
+    {TableKey(ValType::Float64, RootExpr::Min, 2), &double_int64_min[0]},
+    {TableKey(ValType::Float64, RootExpr::Sub, 2), &double_int64_sub[0]},
+    {TableKey(ValType::Float64, RootExpr::Select, 2), &double_int64_select[0]},
 };
 
 const vector<AssociativePattern> &get_ops_table_helper(Type t, RootExpr root, size_t dim) {
-    TableKey key(convert_halide_type_to_val_type(t), root, dim);
     TableKey gen_key(ValType::All, root, dim);
+    TableKey key(convert_halide_type_to_val_type(t), root, dim);
 
     vector<AssociativePattern> &table = pattern_tables[key];
 
-    size_t gen_size = pattern_table_sizes.find(gen_key)->second;
-    //size_t size = pattern_table_sizes.find(key)->second;
-
     if (table.empty()) { // Populate the table if we haven't done so previously
-        table.reserve(gen_size);
+        size_t gen_size = pattern_table_sizes.find(gen_key)->second;
+        size_t size = pattern_table_sizes.find(key)->second;
+        table.reserve(gen_size + size);
 
+        // Add the general associative ops LUT
         OpsIds const *gen_lut_table = val_type_to_luts.find(gen_key)->second;
         internal_assert(gen_lut_table != nullptr);
         for (size_t i = 0; i < gen_size; ++i) {
             table.push_back(convert_pattern_to_halide_expr(gen_lut_table[i], t));
         }
 
-        // TODO(psuriana): Add the type-specific LUT
-        //OpsIds const *lut_table = val_type_to_luts.find(gen_key)->second;
+        // Add the type-specific associative ops LUT
+        OpsIds const *lut_table = val_type_to_luts.find(key)->second;
+        internal_assert(lut_table != nullptr);
+        for (size_t i = 0; i < size; ++i) {
+            table.push_back(convert_pattern_to_halide_expr(lut_table[i], t));
+        }
     }
     return table;
 }
