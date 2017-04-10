@@ -158,16 +158,13 @@ void populate_ops_table_single_general_select(Type t, vector<AssociativePattern>
 void populate_ops_table_double_general_add(Type t, vector<AssociativePattern> &table) {
     declare_vars(t);
     table = {
-        {{Add::make(x0, y0), Add::make(x0, y1)}, {zero, zero}, true},
-        {{Add::make(x0, y0), Add::make(x1, y0)}, {zero, zero}, true},
+        {{x0 + y0, x0 + y1}, {zero, zero}, true},
     };
 }
 
 void populate_ops_table_double_general_mul(Type t, vector<AssociativePattern> &table) {
     declare_vars(t);
     table = {
-        {{Mul::make(x0, y0), Add::make(Mul::make(x0, y1), x1)}, {one, zero}, true},
-        {{Mul::make(x0, y0), Add::make(Mul::make(x1, y0), y1)}, {one, zero}, true},
     };
 }
 
@@ -215,8 +212,30 @@ void populate_ops_table_single_uint1_or(Type t, vector<AssociativePattern> &tabl
 void populate_ops_table_single_uint8_cast(Type t, vector<AssociativePattern> &table) {
     declare_vars(t);
     Expr k0_uint16 = Variable::make(UInt(16), "k0");
+    Expr k0_uint32 = Variable::make(UInt(32), "k0");
+    Expr k0_uint64 = Variable::make(UInt(64), "k0");
     table = {
         {cast<uint8_t>(min(cast<uint16_t>(x0 + y0), k0_uint16)), zero, true},
+        {cast<uint8_t>(min(cast<uint32_t>(x0 + y0), k0_uint32)), zero, true},
+        {cast<uint8_t>(min(cast<uint64_t>(x0 + y0), k0_uint64)), zero, true},
+    };
+}
+
+void populate_ops_table_single_uint16_cast(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    Expr k0_uint32 = Variable::make(UInt(32), "k0");
+    Expr k0_uint64 = Variable::make(UInt(64), "k0");
+    table = {
+        {cast<uint16_t>(min(cast<uint32_t>(x0 + y0), k0_uint32)), zero, true},
+        {cast<uint16_t>(min(cast<uint64_t>(x0 + y0), k0_uint64)), zero, true},
+    };
+}
+
+void populate_ops_table_single_uint32_cast(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    Expr k0_uint64 = Variable::make(UInt(64), "k0");
+    table = {
+        {cast<uint32_t>(min(cast<uint64_t>(x0 + y0), k0_uint64)), zero, true},
     };
 }
 
@@ -238,6 +257,8 @@ static const map<TableKey, void(*)(Type, vector<AssociativePattern> &)> val_type
     {TableKey(ValType::UInt1, RootExpr::Or, 1), &populate_ops_table_single_uint1_or},
 
     {TableKey(ValType::UInt8, RootExpr::Cast, 1), &populate_ops_table_single_uint8_cast},
+    {TableKey(ValType::UInt8, RootExpr::Cast, 1), &populate_ops_table_single_uint16_cast},
+    {TableKey(ValType::UInt8, RootExpr::Cast, 1), &populate_ops_table_single_uint32_cast},
 };
 
 const vector<AssociativePattern> &get_ops_table_helper(Type t, RootExpr root, size_t dim) {
