@@ -651,15 +651,6 @@ void associativity_test() {
     Expr g_call_0 = Call::make(t, "g", {rx}, Call::CallType::Halide, nullptr, 0);
     Expr g_call_1 = Call::make(t, "g", {rx}, Call::CallType::Halide, nullptr, 1);
 
-    // f(x) = max(min(f(x), 10), y + int16(z))
-    check_associativity("f", {x}, {max(min(f_call_0, make_const(t, 10)), y + Cast::make(Int(16), z))},
-                        AssociativeOp(
-                          AssociativePattern(max(min(x, make_const(t, 10)), y), t.min(), true),
-                          {Replacement("x", f_call_0)},
-                          {Replacement("y", y + Cast::make(Int(16), z))},
-                          true)
-                        );
-
     // f(x) = min(f(x), y + int16(z))
     check_associativity("f", {x}, {min(f_call_0, y + Cast::make(Int(16), z))},
                         AssociativeOp(

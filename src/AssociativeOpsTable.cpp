@@ -119,20 +119,6 @@ void populate_ops_table_single_general_add(Type t, vector<AssociativePattern> &t
     declare_vars(t);
     table = {
         {x0 + y0, zero, true},
-        {Add::make(max(min(y0, k0), y0), x0), zero, true},
-        {Add::make(max(Sub::make(k0, y0), y0), x0), zero, true},
-        {Add::make(min(max(y0, k0), y0), x0), zero, true},
-        {Add::make(min(Sub::make(k0, y0), y0), x0), zero, true},
-        {Add::make(max(min(min(y0, k0), y0), y0), x0), zero, true},
-        {Add::make(max(min(Mul::make(x0, y0), y0), y0), x0), zero, true},
-        {Add::make(max(min(Sub::make(x0, y0), y0), y0), x0), zero, true},
-        {Add::make(max(min(Sub::make(y0, x0), y0), y0), x0), zero, true},
-        {Add::make(min(max(max(y0, k0), y0), y0), x0), zero, true},
-        {Add::make(min(max(Mul::make(x0, y0), y0), y0), x0), zero, true},
-        {Add::make(min(max(Sub::make(x0, y0), y0), y0), x0), zero, true},
-        {Add::make(min(max(Sub::make(y0, x0), y0), y0), x0), zero, true},
-        {Add::make(min(Sub::make(y0, x0), k0), max(y0, x0)), neg_one, true},
-        {Add::make(min(y0, x0), max(Sub::make(y0, x0), k0)), zero, true},
     };
 }
 
@@ -140,20 +126,6 @@ void populate_ops_table_single_general_mul(Type t, vector<AssociativePattern> &t
     declare_vars(t);
     table = {
         {x0 * y0, one, true},
-        {Mul::make(max(min(Mul::make(x0, y0), y0), y0), x0), one, true},
-        {Mul::make(max(min(Sub::make(x0, y0), y0), y0), x0), one, true},
-        {Mul::make(max(min(Sub::make(y0, x0), y0), y0), x0), one, true},
-        {Mul::make(min(max(Mul::make(x0, y0), y0), y0), x0), one, true},
-        {Mul::make(min(max(Sub::make(x0, y0), y0), y0), x0), one, true},
-        {Mul::make(min(max(Sub::make(y0, x0), y0), y0), x0), one, true},
-        {Mul::make(Sub::make(max(min(x0, k0), y0), y0), x0), neg_one, true},
-        {Mul::make(Sub::make(min(max(x0, k0), y0), y0), x0), neg_one, true},
-        {Mul::make(max(min(Add::make(max(x0, k0), y0), y0), y0), x0), one, true},
-        {Mul::make(max(min(Add::make(min(x0, k0), y0), y0), y0), x0), one, true},
-        {Mul::make(max(min(Add::make(min(y0, x0), k0), y0), y0), x0), one, true},
-        {Mul::make(max(min(Add::make(Mul::make(x0, k0), y0), y0), y0), x0), one, true},
-        {Mul::make(max(min(Add::make(Mul::make(x0, y0), y0), y0), y0), x0), one, true},
-        {Mul::make(max(min(Add::make(y0, Mul::make(x0, k0)), y0), y0), x0), one, true},
     };
 }
 
@@ -161,18 +133,6 @@ void populate_ops_table_single_general_max(Type t, vector<AssociativePattern> &t
     declare_vars(t);
     table = {
         {max(x0, y0), tmin, true},
-        {max(min(x0, k0), y0), tmin, true},
-        {max(min(y0, x0), y0), tmin, true},
-        {max(min(y0, x0), y0), zero, true},
-        {max(min(y0, x0) + y0, y0), zero, true},
-        {max(min(Add::make(y0, x0), y0), y0), zero, true},
-        {max(min(max(y0, k0), x0), y0), tmin, true},
-        {max(min(max(y0, k0), y0), x0), tmin, true},
-        {max(min(max(y0, x0), k0), y0), tmin, true},
-        {max(min(max(y0, x0), y0), y0), tmin, true},
-        {max(min(max(y0, x0), y0), y0), zero, true},
-        {max(min(min(y0, k0), x0), y0), zero, true},
-        {max(min(x0 * y0, y0), y0), zero, true},
     };
 }
 
@@ -180,36 +140,12 @@ void populate_ops_table_single_general_min(Type t, vector<AssociativePattern> &t
     declare_vars(t);
     table = {
         {min(x0, y0), tmax, true},
-        {min(max(x0, k0), y0), tmax, true},
-        {min(max(y0, x0), y0), zero, true},
-        {min(max(y0, x0), y0), tmax, true},
-        {min(Add::make(max(y0, x0), y0), y0), zero, true},
-        {min(max(Add::make(y0, x0), y0), y0), zero, true},
-        {min(max(max(y0, k0), x0), y0), zero, true},
-        {min(max(min(y0, k0), x0), y0), tmax, true},
-        {min(max(min(y0, k0), y0), x0), tmax, true},
-        {min(max(min(y0, x0), k0), y0), tmax, true},
-        {min(max(min(y0, x0), y0), y0), zero, true},
-        {min(max(min(y0, x0), y0), y0), tmax, true},
-        {min(max(Mul::make(x0, y0), y0), y0), zero, true},
-        {min(max(Mul::make(y0, x0), y0), y0), zero, true},
-        {min(max(Sub::make(k0, y0), x0), y0), zero, true},
     };
 }
 
 void populate_ops_table_single_general_sub(Type t, vector<AssociativePattern> &table) {
     declare_vars(t);
     table = {
-        {Sub::make(Add::make(max(y0, x0), y0), max(x0, k0)), tmin, true},
-        {Sub::make(Add::make(min(y0, x0), y0), min(x0, k0)), tmax, true},
-        {Sub::make(max(Add::make(y0, x0), k0), max(y0, x0)), neg_one, true},
-        {Sub::make(max(y0, x0), max(Sub::make(x0, y0), k0)), zero, true},
-        {Sub::make(min(Add::make(y0, x0), k0), min(y0, x0)), one, true},
-        {Sub::make(min(y0, x0), min(Sub::make(x0, y0), k0)), zero, true},
-        {Sub::make(Add::make(max(min(min(Sub::make(y0, x0), x0), k0), x0), y0), x0), zero, true},
-        {Sub::make(Add::make(max(min(x0, y0), k0), max(x0, y0)), max(x0, k0)), tmin, true},
-        {Sub::make(Add::make(min(max(max(Sub::make(y0, x0), x0), k0), x0), y0), x0), zero, true},
-        {Sub::make(Add::make(min(max(x0, y0), k0), min(x0, y0)), min(x0, k0)), tmax, true},
     };
 }
 
@@ -224,18 +160,6 @@ void populate_ops_table_double_general_add(Type t, vector<AssociativePattern> &t
     table = {
         {{Add::make(x0, y0), Add::make(x0, y1)}, {zero, zero}, true},
         {{Add::make(x0, y0), Add::make(x1, y0)}, {zero, zero}, true},
-        {{Add::make(x0, y1), Add::make(x1, y1)}, {zero, zero}, true},
-        {{Add::make(x1, y0), Add::make(x1, y1)}, {zero, zero}, true},
-        {{Add::make(x0, y0), Add::make(Mul::make(x0, k0), y1)}, {zero, zero}, true},
-        {{Add::make(x0, y0), Add::make(Mul::make(x0, y0), Add::make(y1, x1))}, {zero, zero}, true},
-        {{Add::make(x0, y0), max(min(x0, x1), max(x1, y1))}, {zero, tmin}, true},
-        {{Add::make(x0, y0), max(min(x0, y1), max(y1, x1))}, {zero, tmin}, true},
-        {{Add::make(x0, y0), min(max(x0, x1), min(x1, y1))}, {zero, tmax}, true},
-        {{Add::make(x0, y0), min(max(x0, y1), min(y1, x1))}, {zero, tmax}, true},
-        {{Add::make(x0, y0), Sub::make(x1, y0)}, {zero, zero}, true},
-        {{Add::make(x0, y0), Sub::make(y1, x0)}, {zero, zero}, true},
-        {{Add::make(x0, y0), Sub::make(y1, Mul::make(x0, k0))}, {zero, zero}, true},
-        {{Add::make(x0, y0), Sub::make(Add::make(y1, x1), Mul::make(x0, y0))}, {zero, zero}, true},
     };
 }
 
@@ -244,65 +168,27 @@ void populate_ops_table_double_general_mul(Type t, vector<AssociativePattern> &t
     table = {
         {{Mul::make(x0, y0), Add::make(Mul::make(x0, y1), x1)}, {one, zero}, true},
         {{Mul::make(x0, y0), Add::make(Mul::make(x1, y0), y1)}, {one, zero}, true},
-        {{Mul::make(x0, y0), Add::make(Mul::make(x0, y0), Sub::make(y1, y0))}, {one, zero}, true},
-        {{Mul::make(x0, y0), Add::make(Mul::make(x0, y1), Mul::make(x1, y0))}, {one, zero}, true},
-        {{Mul::make(x0, y0), Add::make(Mul::make(x1, y0), Add::make(y0, y1))}, {one, neg_one}, true},
-        {{Mul::make(x0, y0), Add::make(Mul::make(x1, y0), Sub::make(y1, y0))}, {one, one}, true},
-        {{Mul::make(x0, y0), Mul::make(x0, y1)}, {one, zero}, true},
-        {{Mul::make(x0, y0), Mul::make(x1, y0)}, {one, zero}, true},
-        {{Mul::make(x1, y0), Mul::make(x1, y1)}, {zero, one}, true},
-        {{Mul::make(x0, y0), max(min(x0, x1), max(x1, y1))}, {one, tmin}, true},
-        {{Mul::make(x0, y0), max(min(x0, y1), max(y1, x1))}, {one, tmin}, true},
-        {{Mul::make(x0, y0), min(max(x0, x1), min(x1, y1))}, {one, tmax}, true},
-        {{Mul::make(x0, y0), min(max(x0, y1), min(y1, x1))}, {one, tmax}, true},
-        {{Mul::make(x0, y0), Sub::make(Add::make(y0, y1), Mul::make(x0, y0))}, {one, zero}, true},
     };
 }
 
 void populate_ops_table_double_general_max(Type t, vector<AssociativePattern> &table) {
     declare_vars(t);
     table = {
-        {{max(x0, y0), select(LT::make(y0, x0), x1, y1)}, {tmin, zero}, true},
-        {{max(x0, y0), Add::make(max(x0, y0), Sub::make(y1, y0))}, {tmin, zero}, true},
-        {{max(x0, y0), Add::make(min(x0, y0), Add::make(y1, x1))}, {tmin, tmin}, true},
-        {{max(x0, y0), Add::make(min(x0, y0), Sub::make(x1, y0))}, {tmin, zero}, true},
-        {{max(max(min(Mul::make(x0, y0), x0), y0), x0), Add::make(max(Sub::make(x1, x0), y0), max(x0, y0))}, {tmin, zero}, true},
-        {{max(max(min(Mul::make(x0, y0), x0), y0), x0), Add::make(min(max(x0, k0), y0), Sub::make(x1, y0))}, {tmin, zero}, true},
-        {{max(min(min(Mul::make(x0, y0), x0), k0), x0), Add::make(Mul::make(max(x0, x1), y1), Add::make(x1, y1))}, {zero, zero}, true},
-        {{max(min(max(x0, k0), min(k0, x1)), y0), Mul::make(Sub::make(Add::make(max(x1, y1), x1), min(x0, x1)), Add::make(x0, x1))}, {tmin, tmin}, true},
-        {{max(x0, y0), max(x0, y1)}, {tmin, zero}, true},
-        {{max(x0, y0), max(x1, y0)}, {tmin, zero}, true},
-        {{max(x0, y0), max(y0, x1)}, {tmin, zero}, true},
-        {{max(x0, y1), max(x1, y1)}, {zero, tmin}, true},
+        {{max(x0, y0), select(y0 < x0, x1, y1)}, {tmin, zero}, true},
     };
 }
 
 void populate_ops_table_double_general_min(Type t, vector<AssociativePattern> &table) {
     declare_vars(t);
     table = {
-        {{min(x0, y0), select(LT::make(x0, y0), x1, y1)}, {tmax, zero}, true},
-        {{min(x0, y0), Add::make(max(x0, y0), Add::make(y1, x1))}, {tmax, tmin}, true},
-        {{min(x0, y0), Add::make(max(x0, y0), Sub::make(x1, y0))}, {tmax, zero}, true},
-        {{min(x0, y0), Add::make(min(x0, y0), Sub::make(y1, y0))}, {tmax, zero}, true},
-        {{min(min(max(Mul::make(x0, y0), x0), y0), x0), Add::make(max(min(x0, k0), y0), Sub::make(x1, y0))}, {tmax, zero}, true},
-        {{min(min(max(Mul::make(x0, y0), x0), y0), x0), Add::make(min(Sub::make(x1, x0), y0), min(x0, y0))}, {tmax, zero}, true},
-        {{min(x0, y0), Mul::make(max(x0, y0), Mul::make(y1, x1))}, {tmax, tmax}, true},
-        {{min(x0, y0), max(min(x0, y1), x1)}, {tmax, tmin}, true},
+        {{min(x0, y0), select(x0 < y0, x1, y1)}, {tmax, zero}, true},
     };
 }
 
 void populate_ops_table_double_general_sub(Type t, vector<AssociativePattern> &table) {
     declare_vars(t);
     table = {
-        {{Sub::make(x0, y1), Add::make(x1, y1)}, {zero, zero}, true},
-        {{Sub::make(y0, x1), Add::make(x1, y1)}, {zero, zero}, true},
-        {{Sub::make(Mul::make(x0, y0), Mul::make(x1, y1)), Add::make(Mul::make(x1, y0), Mul::make(x0, y1))}, {one, zero}, true},
-        {{Sub::make(Add::make(x1, y0), max(Sub::make(x1, x0), k0)), Sub::make(Add::make(x1, y1), max(Sub::make(x1, x0), k0))}, {zero, tmax}, true},
-        {{Sub::make(Add::make(x1, y0), min(Sub::make(x1, x0), k0)), Sub::make(Add::make(x1, y1), min(Sub::make(x1, x0), k0))}, {zero, tmin}, true},
-        {{Sub::make(Add::make(x1, y0), max(Sub::make(x1, x0), k0)), Sub::make(y1, Mul::make(max(Mul::make(x0, x1), x0), Sub::make(x0, x1)))}, {zero, tmax}, true},
-        {{Sub::make(Add::make(x1, y0), min(Sub::make(x1, x0), k0)), Sub::make(y1, Mul::make(max(Mul::make(x0, x1), x0), Sub::make(x0, x1)))}, {zero, tmin}, true},
-        {{Sub::make(Add::make(x1, y0), min(Sub::make(x1, x0), k0)), Sub::make(y1, Mul::make(min(Mul::make(x0, x1), x0), Sub::make(x0, x1)))}, {zero, tmin}, true},
-        {{Sub::make(Add::make(x1, y0), min(Sub::make(x1, x0), k0)), Sub::make(max(x1, y1), Mul::make(min(Mul::make(x0, x1), x0), Add::make(x0, x1)))}, {zero, tmin}, true},
+        {{x0 * y0 - x1 * y1, x1 * y0 + x0 * y1}, {one, zero}, true},
     };
 }
 
