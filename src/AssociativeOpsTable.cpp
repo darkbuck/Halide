@@ -37,7 +37,8 @@ enum class RootExpr {
     Select = 5,
     And = 6,
     Or = 7,
-    Unknown = 8, // Not supported IR type
+    Cast = 8,
+    Unknown = 9, // Not supported IR type
 };
 
 enum class ValType {
@@ -137,6 +138,8 @@ static const map<TableKey, size_t> pattern_table_sizes = {
 
     {TableKey(ValType::UInt1, RootExpr::And, 1), 1},
     {TableKey(ValType::UInt1, RootExpr::Or, 1), 1},
+
+    {TableKey(ValType::UInt8, RootExpr::Cast, 1), 1},
 };
 
 const OpsIds single_gen_add[] = {
@@ -298,6 +301,10 @@ const OpsIds single_uint1_or[] = {
     {{"Or(X0, Y0)"}, {Identity::Zero}, true},
 };
 
+const OpsIds single_uint8_cast[] = {
+    {{"Cast(UInt8, Min(Cast(UInt16, Add(X0, Y0)), K0))"}, {Identity::Zero}, true},
+};
+
 static const map<TableKey, OpsIds const *> val_type_to_luts = {
     {TableKey(ValType::All, RootExpr::Add, 1), &single_gen_add[0]},
     {TableKey(ValType::All, RootExpr::Mul, 1), &single_gen_mul[0]},
@@ -314,6 +321,8 @@ static const map<TableKey, OpsIds const *> val_type_to_luts = {
 
     {TableKey(ValType::UInt1, RootExpr::And, 1), &single_uint1_and[0]},
     {TableKey(ValType::UInt1, RootExpr::Or, 1), &single_uint1_or[0]},
+
+    {TableKey(ValType::UInt8, RootExpr::Cast, 1), &single_uint8_cast[0]},
 };
 
 Expr convert_op_halide_expr(const string &nodes, int &cursor, Type t) {
@@ -394,6 +403,56 @@ Expr convert_op_halide_expr(const string &nodes, int &cursor, Type t) {
         return And::make(lhs, rhs);
     }
 
+    op = nodes.substr(cursor, 4);
+    if (op == "Cast") {
+        cursor += 5;
+
+        Type type;
+        string type_5 = nodes.substr(cursor, 5);
+        string type_6 = nodes.substr(cursor, 6);
+        string type_7 = nodes.substr(cursor, 7);
+        if (type_7 == "Float32") {
+            type = Float(32);
+            cursor += 9;
+        } else if (type_7 == "Float64") {
+            type = Float(64);
+            cursor += 9;
+        } else if (type_6 == "UInt16") {
+            type = UInt(16);
+            cursor += 8;
+        } else if (type_6 == "UInt32") {
+            type = UInt(32);
+            cursor += 8;
+        } else if (type_6 == "UInt64") {
+            type = UInt(64);
+            cursor += 8;
+        } else if (type_5 == "UInt1") {
+            type = UInt(1);
+            cursor += 7;
+        } else if (type_5 == "UInt8") {
+            type = UInt(8);
+            cursor += 7;
+        } else if (type_5 == "Int16") {
+            type = Int(16);
+            cursor += 7;
+        } else if (type_5 == "Int32") {
+            type = Int(32);
+            cursor += 7;
+        } else if (type_5 == "Int64") {
+            type = Int(64);
+            cursor += 7;
+        } else if (nodes.substr(cursor, 4) == "Int8") {
+            type = Int(8);
+            cursor += 6;
+        } else {
+            internal_assert(false) << "Unknown type\n";
+        }
+
+        Expr val = convert_op_halide_expr(nodes, cursor, t);
+        cursor += 1;
+        return Cast::make(type, val);
+    }
+
     op = nodes.substr(cursor, 6);
     if (op == "Select") {
         cursor += 7;
@@ -405,7 +464,7 @@ Expr convert_op_halide_expr(const string &nodes, int &cursor, Type t) {
         cursor += 1;
         return Select::make(cond, true_val, false_val);
     }
-    assert(false);
+    internal_assert(false) << "Fail to convert " << nodes.substr(cursor);
     return Expr();
 }
 
@@ -486,46 +545,49 @@ const vector<AssociativePattern> &get_ops_table(const vector<Expr> &exprs) {
         return empty;
     }
     if (exprs.size() > 2) {
-        debug(5) << "Returning empty table\n";
+        debug(0) << "Returning empty table\n";
         return empty;
     }
 
     RootExpr root = RootExpr::Unknown;
     if (exprs[0].as<Halide::Internal::Add>()) {
-        debug(5) << "Returning add root table for type " << exprs[0].type() << "\n";
+        debug(0) << "Returning Add root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Add;
     } else if (exprs[0].as<Halide::Internal::Sub>()) {
-        debug(5) << "Returning mul root table for type " << exprs[0].type() << "\n";
+        debug(0) << "Returning Sub root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Sub;
     } else if (exprs[0].as<Halide::Internal::Mul>()) {
-        debug(5) << "Returning min root table for type " << exprs[0].type() << "\n";
+        debug(0) << "Returning Mul root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Mul;
     } else if (exprs[0].as<Halide::Internal::Min>()) {
-        debug(5) << "Returning min root table\n";
+        debug(0) << "Returning Min root table\n";
         root = RootExpr::Min;
     } else if (exprs[0].as<Halide::Internal::Max>()) {
-        debug(5) << "Returning max root table for type " << exprs[0].type() << "\n";
+        debug(0) << "Returning Max root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Max;
     } else if (exprs[0].as<Halide::Internal::Select>()) {
-        debug(5) << "Returning select root table for type " << exprs[0].type() << "\n";
+        debug(0) << "Returning Select root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Select;
     } else if (exprs[0].as<Halide::Internal::And>()) {
-        debug(5) << "Returning and root table for type " << exprs[0].type() << "\n";
+        debug(0) << "Returning And root table for type " << exprs[0].type() << "\n";
         root = RootExpr::And;
     } else if (exprs[0].as<Halide::Internal::Or>()) {
-        debug(5) << "Returning or root table for type " << exprs[0].type() << "\n";
+        debug(0) << "Returning Or root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Or;
+    } else if (exprs[0].as<Halide::Internal::Cast>()) {
+        debug(0) << "Returning Cast root table for type " << exprs[0].type() << "\n";
+        root = RootExpr::Cast;
     }
 
     if (root != RootExpr::Unknown) {
         const vector<AssociativePattern> &table = get_ops_table_helper(exprs[0].type(), root, exprs.size());
-        debug(5) << "\tTable size: " << table.size() << "\n";
+        debug(0) << "\tTable size: " << table.size() << "\n";
         for (const auto &p : table) {
-            debug(5) << p << "\n";
+            debug(0) << p << "\n";
         }
         return table;
     }
-    debug(5) << "Returning empty table\n";
+    debug(0) << "Returning empty table\n";
     return empty;
 }
 
