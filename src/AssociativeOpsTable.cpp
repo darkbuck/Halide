@@ -221,6 +221,17 @@ void populate_ops_table_single_uint8_cast(Type t, vector<AssociativePattern> &ta
     };
 }
 
+void populate_ops_table_single_uint8_select(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    Expr k0_uint16 = Variable::make(UInt(16), "k0");
+    Expr k0_uint32 = Variable::make(UInt(32), "k0");
+    Expr k0_uint64 = Variable::make(UInt(64), "k0");
+    table = {
+        {select(x0 > 255 - y0, 255, y0), zero, true},   // Saturating add
+        {select(x0 > - y0, 255, y0), zero, true},       // Saturating add
+    };
+}
+
 void populate_ops_table_single_uint16_cast(Type t, vector<AssociativePattern> &table) {
     declare_vars(t);
     Expr k0_uint32 = Variable::make(UInt(32), "k0");
