@@ -621,7 +621,7 @@ void associativity_test() {
                               {Replacement("y", y)},
                               true)
                             );
-        debug(5) << "\t\t\tGET HERE\n";
+
         // f(x) = y || f(x)
         check_associativity("f", {x_idx}, {Or::make(y, f_call_0)},
                             AssociativeOp(

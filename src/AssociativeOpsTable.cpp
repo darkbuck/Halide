@@ -9,41 +9,17 @@ namespace Internal {
 
 namespace {
 
-enum class Identity {
-    Zero,
-    One,
-    NegOne,
-    ValMax,
-    ValMin,
-};
-
-struct OpsIds {
-    vector<string> ops;
-    vector<Identity> identities;
-    bool is_commutative;
-
-    OpsIds() : is_commutative(false) {}
-    OpsIds(const vector<string> &ops, const vector<Identity> &ids, bool is_commutative)
-        : ops(ops), identities(ids), is_commutative(is_commutative) {}
-    size_t size() const { return ops.size(); }
-};
-
 enum class RootExpr {
-    X0 = 0,
-    Y0 = 1,
-    X1 = 2,
-    Y1 = 3,
-    Constant = 4,
-    Add = 5,
-    Mul = 6,
-    Max = 7,
-    Min = 8,
-    Sub = 9,
-    Select = 10,
-    And = 11,
-    Or = 12,
-    Cast = 13,
-    Unknown = 14, // Not supported IR type
+    Add = 0,
+    Mul = 1,
+    Max = 2,
+    Min = 3,
+    Sub = 4,
+    Select = 5,
+    And = 6,
+    Or = 7,
+    Cast = 8,
+    Unknown = 9, // Not supported IR type
 };
 
 enum class ValType {
@@ -127,431 +103,256 @@ struct TableKey {
 
 static map<TableKey, vector<AssociativePattern>> pattern_tables;
 
-static const map<TableKey, size_t> pattern_table_sizes = {
-    {TableKey(ValType::All, RootExpr::Add, 1), 15},
-    {TableKey(ValType::All, RootExpr::Mul, 1), 15},
-    {TableKey(ValType::All, RootExpr::Max, 1), 15},
-    {TableKey(ValType::All, RootExpr::Min, 1), 15},
-    {TableKey(ValType::All, RootExpr::Sub, 1), 10},
-    {TableKey(ValType::All, RootExpr::Select, 1), 0},
-    {TableKey(ValType::All, RootExpr::Add, 2), 14},
-    {TableKey(ValType::All, RootExpr::Mul, 2), 14},
-    {TableKey(ValType::All, RootExpr::Max, 2), 15},
-    {TableKey(ValType::All, RootExpr::Min, 2), 15},
-    {TableKey(ValType::All, RootExpr::Sub, 2), 9},
-    {TableKey(ValType::All, RootExpr::Select, 2), 0},
+#define declare_vars(t)                     \
+    Expr x0 = Variable::make(t, "x0");      \
+    Expr y0 = Variable::make(t, "y0");      \
+    Expr x1 = Variable::make(t, "x1");      \
+    Expr y1 = Variable::make(t, "y1");      \
+    Expr k0 = Variable::make(t, "k0");      \
+    Expr zero = make_const(t, 0);           \
+    Expr one = make_const(t, 1);            \
+    Expr neg_one = make_const(t, -1);       \
+    Expr tmax = t.max();                    \
+    Expr tmin = t.min();                    \
 
-    {TableKey(ValType::UInt1, RootExpr::And, 1), 1},
-    {TableKey(ValType::UInt1, RootExpr::Or, 1), 1},
-
-    {TableKey(ValType::UInt8, RootExpr::Cast, 1), 1},
-};
-
-const OpsIds single_gen_add[] = {
-    {{"Add(X0, Y0)"}, {Identity::Zero}, true},
-    {{"Add(Max(Min(Y0, Constant(All)), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Max(Sub(Constant(All), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Max(Y0, Constant(All)), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Sub(Constant(All), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Max(Min(Min(Y0, Constant(All)), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Max(Min(Mul(X0, Y0), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Max(Min(Sub(X0, Y0), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Max(Min(Sub(Y0, X0), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Max(Max(Y0, Constant(All)), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Max(Mul(X0, Y0), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Max(Sub(X0, Y0), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Max(Sub(Y0, X0), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Sub(Y0, X0), Constant(All)), Max(Y0, X0))"}, {Identity::NegOne}, true},
-    {{"Add(Min(Y0, X0), Max(Sub(Y0, X0), Constant(All)))"}, {Identity::Zero}, true},
-};
-const OpsIds single_gen_mul[] = {
-    {{"Mul(X0, Y0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Mul(X0, Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Sub(X0, Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Sub(Y0, X0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Min(Max(Mul(X0, Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Min(Max(Sub(X0, Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Min(Max(Sub(Y0, X0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Sub(Max(Min(X0, Constant(All)), Y0), Y0), X0)"}, {Identity::NegOne}, true},
-    {{"Mul(Sub(Min(Max(X0, Constant(All)), Y0), Y0), X0)"}, {Identity::NegOne}, true},
-    {{"Mul(Max(Min(Add(Max(X0, Constant(All)), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Add(Min(X0, Constant(All)), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Add(Min(Y0, X0), Constant(All)), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Add(Mul(X0, Constant(All)), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Add(Mul(X0, Y0), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Add(Y0, Mul(X0, Constant(All))), Y0), Y0), X0)"}, {Identity::One}, true},
-};
-const OpsIds single_gen_max[] = {
-    {{"Max(X0, Y0)"}, {Identity::ValMin}, true},
-    {{"Max(Y0, X0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(X0, Constant(All)), Y0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(Y0, X0), Y0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(Y0, X0), Y0)"}, {Identity::Zero}, true},
-    {{"Max(Add(Min(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Max(Min(Add(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Max(Min(Max(Y0, Constant(All)), X0), Y0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(Max(Y0, Constant(All)), Y0), X0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(Max(Y0, X0), Constant(All)), Y0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(Max(Y0, X0), Y0), Y0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(Max(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Max(Min(Min(Y0, Constant(All)), X0), Y0)"}, {Identity::Zero}, true},
-    {{"Max(Min(Mul(X0, Y0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Max(Min(Mul(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-};
-const OpsIds single_gen_min[] = {
-    {{"Min(X0, Y0)"}, {Identity::ValMax}, true},
-    {{"Min(Max(X0, Constant(All)), Y0)"}, {Identity::ValMax}, true},
-    {{"Min(Max(Y0, X0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Y0, X0), Y0)"}, {Identity::ValMax}, true},
-    {{"Min(Add(Max(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Add(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Max(Y0, Constant(All)), X0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Min(Y0, Constant(All)), X0), Y0)"}, {Identity::ValMax}, true},
-    {{"Min(Max(Min(Y0, Constant(All)), Y0), X0)"}, {Identity::ValMax}, true},
-    {{"Min(Max(Min(Y0, X0), Constant(All)), Y0)"}, {Identity::ValMax}, true},
-    {{"Min(Max(Min(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Min(Y0, X0), Y0), Y0)"}, {Identity::ValMax}, true},
-    {{"Min(Max(Mul(X0, Y0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Mul(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Sub(Constant(All), Y0), X0), Y0)"}, {Identity::Zero}, true},
-};
-const OpsIds single_gen_sub[] = {
-    {{"Sub(Add(Max(Y0, X0), Y0), Max(X0, Constant(All)))"}, {Identity::ValMin}, true},
-    {{"Sub(Add(Min(Y0, X0), Y0), Min(X0, Constant(All)))"}, {Identity::ValMax}, true},
-    {{"Sub(Max(Add(Y0, X0), Constant(All)), Max(Y0, X0))"}, {Identity::NegOne}, true},
-    {{"Sub(Max(Y0, X0), Max(Sub(X0, Y0), Constant(All)))"}, {Identity::Zero}, true},
-    {{"Sub(Min(Add(Y0, X0), Constant(All)), Min(Y0, X0))"}, {Identity::One}, true},
-    {{"Sub(Min(Y0, X0), Min(Sub(X0, Y0), Constant(All)))"}, {Identity::Zero}, true},
-    {{"Sub(Add(Max(Min(Min(Sub(Y0, X0), X0), Constant(All)), X0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Sub(Add(Max(Min(X0, Y0), Constant(All)), Max(X0, Y0)), Max(X0, Constant(All)))"}, {Identity::ValMin}, true},
-    {{"Sub(Add(Min(Max(Max(Sub(Y0, X0), X0), Constant(All)), X0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Sub(Add(Min(Max(X0, Y0), Constant(All)), Min(X0, Y0)), Min(X0, Constant(All)))"}, {Identity::ValMax}, true},
-};
-const OpsIds single_gen_select[] = {
-};
-const OpsIds double_gen_add[] = {
-    {{"Add(X0, Y0)", "Add(X0, Y1)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y0)", "Add(X1, Y0)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y1)", "Add(X1, Y1)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X1, Y0)", "Add(X1, Y1)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y0)", "Add(Mul(X0, Constant(All)), Y1)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y0)", "Add(Mul(X0, Y0), Add(Y1, X1))"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y0)", "Max(Min(X0, X1), Max(X1, Y1))"}, {Identity::Zero, Identity::ValMin}, true},
-    {{"Add(X0, Y0)", "Max(Min(X0, Y1), Max(Y1, X1))"}, {Identity::Zero, Identity::ValMin}, true},
-    {{"Add(X0, Y0)", "Min(Max(X0, X1), Min(X1, Y1))"}, {Identity::Zero, Identity::ValMax}, true},
-    {{"Add(X0, Y0)", "Min(Max(X0, Y1), Min(Y1, X1))"}, {Identity::Zero, Identity::ValMax}, true},
-    {{"Add(X0, Y0)", "Sub(X1, Y0)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y0)", "Sub(Y1, X0)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y0)", "Sub(Y1, Mul(X0, Constant(All)))"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y0)", "Sub(Add(Y1, X1), Mul(X0, Y0))"}, {Identity::Zero, Identity::Zero}, true},
-};
-const OpsIds double_gen_mul[] = {
-    {{"Mul(X0, Y0)", "Add(Mul(X0, Y1), X1)"}, {Identity::One, Identity::Zero}, true},
-    {{"Mul(X0, Y0)", "Add(Mul(X1, Y0), Y1)"}, {Identity::One, Identity::Zero}, true},
-    {{"Mul(X0, Y0)", "Add(Mul(X0, Y0), Sub(Y1, Y0))"}, {Identity::One, Identity::Zero}, true},
-    {{"Mul(X0, Y0)", "Add(Mul(X0, Y1), Mul(X1, Y0))"}, {Identity::One, Identity::Zero}, true},
-    {{"Mul(X0, Y0)", "Add(Mul(X1, Y0), Add(Y0, Y1))"}, {Identity::One, Identity::NegOne}, true},
-    {{"Mul(X0, Y0)", "Add(Mul(X1, Y0), Sub(Y1, Y0))"}, {Identity::One, Identity::One}, true},
-    {{"Mul(X0, Y0)", "Mul(X0, Y1)"}, {Identity::One, Identity::Zero}, true},
-    {{"Mul(X0, Y0)", "Mul(X1, Y0)"}, {Identity::One, Identity::Zero}, true},
-    {{"Mul(X1, Y0)", "Mul(X1, Y1)"}, {Identity::Zero, Identity::One}, true},
-    {{"Mul(X0, Y0)", "Max(Min(X0, X1), Max(X1, Y1))"}, {Identity::One, Identity::ValMin}, true},
-    {{"Mul(X0, Y0)", "Max(Min(X0, Y1), Max(Y1, X1))"}, {Identity::One, Identity::ValMin}, true},
-    {{"Mul(X0, Y0)", "Min(Max(X0, X1), Min(X1, Y1))"}, {Identity::One, Identity::ValMax}, true},
-    {{"Mul(X0, Y0)", "Min(Max(X0, Y1), Min(Y1, X1))"}, {Identity::One, Identity::ValMax}, true},
-    {{"Mul(X0, Y0)", "Sub(Add(Y0, Y1), Mul(X0, Y0))"}, {Identity::One, Identity::Zero}, true},
-};
-const OpsIds double_gen_max[] = {
-    {{"Max(X0, Y0)", "Select(LT(Y0, X0), X1, Y1)"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(X0, Y0)", "Add(Max(X0, Y0), Sub(Y1, Y0))"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(X0, Y0)", "Add(Min(X0, Y0), Add(Y1, X1))"}, {Identity::ValMin, Identity::ValMin}, true},
-    {{"Max(X0, Y0)", "Add(Min(X0, Y0), Sub(X1, Y0))"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(Max(Min(Mul(X0, Y0), X0), Y0), X0)", "Add(Max(Sub(X1, X0), Y0), Max(X0, Y0))"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(Max(Min(Mul(X0, Y0), X0), Y0), X0)", "Add(Min(Max(X0, Constant(All)), Y0), Sub(X1, Y0))"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(Min(Min(Mul(X0, Y0), X0), Constant(All)), X0)", "Add(Mul(Max(X0, X1), Y1), Add(X1, Y1))"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Max(Min(Max(X0, Constant(All)), Min(Constant(All), X1)), Y0)", "Mul(Sub(Add(Max(X1, Y1), X1), Min(X0, X1)), Add(X0, X1))"}, {Identity::ValMin, Identity::ValMin}, true},
-    {{"Max(X0, Y0)", "Max(X0, Y1)"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(X0, Y0)", "Max(X1, Y0)"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(X0, Y0)", "Max(Y0, X1)"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(X0, Y1)", "Max(X1, Y1)"}, {Identity::Zero, Identity::ValMin}, true},
-};
-const OpsIds double_gen_min[] = {
-    {{"Min(X0, Y0)", "Select(LT(X0, Y0), X1, Y1)"}, {Identity::ValMax, Identity::Zero}, true},
-    {{"Min(X0, Y0)", "Add(Max(X0, Y0), Add(Y1, X1))"}, {Identity::ValMax, Identity::ValMin}, true},
-    {{"Min(X0, Y0)", "Add(Max(X0, Y0), Sub(X1, Y0))"}, {Identity::ValMax, Identity::Zero}, true},
-    {{"Min(X0, Y0)", "Add(Min(X0, Y0), Sub(Y1, Y0))"}, {Identity::ValMax, Identity::Zero}, true},
-    {{"Min(Min(Max(Mul(X0, Y0), X0), Y0), X0)", "Add(Max(Min(X0, Constant(All)), Y0), Sub(X1, Y0))"}, {Identity::ValMax, Identity::Zero}, true},
-    {{"Min(Min(Max(Mul(X0, Y0), X0), Y0), X0)", "Add(Min(Sub(X1, X0), Y0), Min(X0, Y0))"}, {Identity::ValMax, Identity::Zero}, true},
-    {{"Min(X0, Y0)", "Mul(Max(X0, Y0), Mul(Y1, X1))"}, {Identity::ValMax, Identity::ValMax}, true},
-    {{"Min(X0, Y0)", "Max(Min(X0, Y1), X1)"}, {Identity::ValMax, Identity::ValMin}, true},
-};
-const OpsIds double_gen_sub[] = {
-    {{"Sub(X0, Y1)", "Add(X1, Y1)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Sub(Y0, X1)", "Add(X1, Y1)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Sub(Mul(X0, Y0), Mul(X1, Y1))", "Add(Mul(X1, Y0), Mul(X0, Y1))"}, {Identity::One, Identity::Zero}, true},
-    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), Constant(All)))", "Sub(Add(X1, Y1), Max(Sub(X1, X0), Constant(All)))"}, {Identity::Zero, Identity::ValMax}, true},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), Constant(All)))", "Sub(Add(X1, Y1), Min(Sub(X1, X0), Constant(All)))"}, {Identity::Zero, Identity::ValMin}, true},
-    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), Constant(All)))", "Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))"}, {Identity::Zero, Identity::ValMax}, true},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), Constant(All)))", "Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), Constant(All)))", "Sub(Y1, Mul(Min(Mul(X0, X1), X0), Sub(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), Constant(All)))", "Sub(Max(X1, Y1), Mul(Min(Mul(X0, X1), X0), Add(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
-};
-const OpsIds double_gen_select[] = {
-};
-
-const OpsIds single_uint1_and[] = {
-    {{"And(X0, Y0)"}, {Identity::One}, true},
-};
-const OpsIds single_uint1_or[] = {
-    {{"Or(X0, Y0)"}, {Identity::Zero}, true},
-};
-
-const OpsIds single_uint8_cast[] = {
-    {{"Cast(UInt8, Min(Cast(UInt16, Add(X0, Y0)), Constant(UInt16)))"}, {Identity::Zero}, true},
-};
-
-static const map<TableKey, OpsIds const *> val_type_to_luts = {
-    {TableKey(ValType::All, RootExpr::Add, 1), &single_gen_add[0]},
-    {TableKey(ValType::All, RootExpr::Mul, 1), &single_gen_mul[0]},
-    {TableKey(ValType::All, RootExpr::Max, 1), &single_gen_max[0]},
-    {TableKey(ValType::All, RootExpr::Min, 1), &single_gen_min[0]},
-    {TableKey(ValType::All, RootExpr::Sub, 1), &single_gen_sub[0]},
-    {TableKey(ValType::All, RootExpr::Select, 1), &single_gen_select[0]},
-    {TableKey(ValType::All, RootExpr::Add, 2), &double_gen_add[0]},
-    {TableKey(ValType::All, RootExpr::Mul, 2), &double_gen_mul[0]},
-    {TableKey(ValType::All, RootExpr::Max, 2), &double_gen_max[0]},
-    {TableKey(ValType::All, RootExpr::Min, 2), &double_gen_min[0]},
-    {TableKey(ValType::All, RootExpr::Sub, 2), &double_gen_sub[0]},
-    {TableKey(ValType::All, RootExpr::Select, 2), &double_gen_select[0]},
-
-    {TableKey(ValType::UInt1, RootExpr::And, 1), &single_uint1_and[0]},
-    {TableKey(ValType::UInt1, RootExpr::Or, 1), &single_uint1_or[0]},
-
-    {TableKey(ValType::UInt8, RootExpr::Cast, 1), &single_uint8_cast[0]},
-};
-
-Expr convert_op_halide_expr(const string &nodes, int &cursor, Type t) {
-    string op = nodes.substr(cursor, 2);
-    if (op == "X0") {
-        cursor += 2;
-        return Variable::make(t, "x0");
-    } else if (op == "X1") {
-        cursor += 2;
-        return Variable::make(t, "x1");
-    } else if (op == "Y0") {
-        cursor += 2;
-        return Variable::make(t, "y0");
-    } else if (op == "Y1") {
-        cursor += 2;
-        return Variable::make(t, "y1");
-    } else if (op == "Constant(All)") {
-        cursor += 2;
-        return Variable::make(t, "k0");
-    } else if (op == "LT") {
-        cursor += 3;
-        Expr lhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr rhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return LT::make(lhs, rhs);
-    } else if (op == "Or") {
-        cursor += 3;
-        Expr lhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr rhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return Or::make(lhs, rhs);
-    }
-
-    op = nodes.substr(cursor, 3);
-    if (op == "Add") {
-        cursor += 4;
-        Expr lhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr rhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return Add::make(lhs, rhs);
-    } else if (op == "Sub") {
-        cursor += 4;
-        Expr lhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr rhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return Sub::make(lhs, rhs);
-    } else if (op == "Mul") {
-        cursor += 4;
-        Expr lhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr rhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return Mul::make(lhs, rhs);
-    } else if (op == "Max") {
-        cursor += 4;
-        Expr lhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr rhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return Max::make(lhs, rhs);
-    } else if (op == "Min") {
-        cursor += 4;
-        Expr lhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr rhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return Min::make(lhs, rhs);
-    } else if (op == "And") {
-        cursor += 4;
-        Expr lhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr rhs = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return And::make(lhs, rhs);
-    }
-
-    op = nodes.substr(cursor, 4);
-    if (op == "Cast") {
-        cursor += 5;
-
-        Type type;
-        string type_5 = nodes.substr(cursor, 5);
-        string type_6 = nodes.substr(cursor, 6);
-        string type_7 = nodes.substr(cursor, 7);
-        if (type_7 == "Float32") {
-            type = Float(32);
-            cursor += 9;
-        } else if (type_7 == "Float64") {
-            type = Float(64);
-            cursor += 9;
-        } else if (type_6 == "UInt16") {
-            type = UInt(16);
-            cursor += 8;
-        } else if (type_6 == "UInt32") {
-            type = UInt(32);
-            cursor += 8;
-        } else if (type_6 == "UInt64") {
-            type = UInt(64);
-            cursor += 8;
-        } else if (type_5 == "UInt1") {
-            type = UInt(1);
-            cursor += 7;
-        } else if (type_5 == "UInt8") {
-            type = UInt(8);
-            cursor += 7;
-        } else if (type_5 == "Int16") {
-            type = Int(16);
-            cursor += 7;
-        } else if (type_5 == "Int32") {
-            type = Int(32);
-            cursor += 7;
-        } else if (type_5 == "Int64") {
-            type = Int(64);
-            cursor += 7;
-        } else if (nodes.substr(cursor, 4) == "Int8") {
-            type = Int(8);
-            cursor += 6;
-        } else {
-            internal_assert(false) << "Unknown type\n";
-        }
-
-        Expr val = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return Cast::make(type, val);
-    }
-
-    op = nodes.substr(cursor, 6);
-    if (op == "Select") {
-        cursor += 7;
-        Expr cond = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr true_val = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 2;
-        Expr false_val = convert_op_halide_expr(nodes, cursor, t);
-        cursor += 1;
-        return Select::make(cond, true_val, false_val);
-    }
-
-    op = nodes.substr(cursor, 8);
-    if (op == "Constant") {
-        cursor += 9;
-
-        Type type;
-        string type_5 = nodes.substr(cursor, 5);
-        string type_6 = nodes.substr(cursor, 6);
-        string type_7 = nodes.substr(cursor, 7);
-        if (type_7 == "Float32") {
-            type = Float(32);
-            cursor += 8;
-        } else if (type_7 == "Float64") {
-            type = Float(64);
-            cursor += 8;
-        } else if (type_6 == "UInt16") {
-            type = UInt(16);
-            cursor += 7;
-        } else if (type_6 == "UInt32") {
-            type = UInt(32);
-            cursor += 7;
-        } else if (type_6 == "UInt64") {
-            type = UInt(64);
-            cursor += 7;
-        } else if (type_5 == "UInt1") {
-            type = UInt(1);
-            cursor += 6;
-        } else if (type_5 == "UInt8") {
-            type = UInt(8);
-            cursor += 6;
-        } else if (type_5 == "Int16") {
-            type = Int(16);
-            cursor += 6;
-        } else if (type_5 == "Int32") {
-            type = Int(32);
-            cursor += 6;
-        } else if (type_5 == "Int64") {
-            type = Int(64);
-            cursor += 6;
-        } else if (nodes.substr(cursor, 4) == "Int8") {
-            type = Int(8);
-            cursor += 5;
-        } else if (nodes.substr(cursor, 3) == "All") {
-            type = t;
-            cursor += 4;
-        } else {
-            internal_assert(false) << "Unknown type\n";
-        }
-        return Variable::make(type, "k0");
-    }
-
-    internal_assert(false) << "Fail to convert " << nodes.substr(cursor);
-    return Expr();
+void populate_ops_table_single_general_add(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {x0 + y0, zero, true},
+        {Add::make(max(min(y0, k0), y0), x0), zero, true},
+        {Add::make(max(Sub::make(k0, y0), y0), x0), zero, true},
+        {Add::make(min(max(y0, k0), y0), x0), zero, true},
+        {Add::make(min(Sub::make(k0, y0), y0), x0), zero, true},
+        {Add::make(max(min(min(y0, k0), y0), y0), x0), zero, true},
+        {Add::make(max(min(Mul::make(x0, y0), y0), y0), x0), zero, true},
+        {Add::make(max(min(Sub::make(x0, y0), y0), y0), x0), zero, true},
+        {Add::make(max(min(Sub::make(y0, x0), y0), y0), x0), zero, true},
+        {Add::make(min(max(max(y0, k0), y0), y0), x0), zero, true},
+        {Add::make(min(max(Mul::make(x0, y0), y0), y0), x0), zero, true},
+        {Add::make(min(max(Sub::make(x0, y0), y0), y0), x0), zero, true},
+        {Add::make(min(max(Sub::make(y0, x0), y0), y0), x0), zero, true},
+        {Add::make(min(Sub::make(y0, x0), k0), max(y0, x0)), neg_one, true},
+        {Add::make(min(y0, x0), max(Sub::make(y0, x0), k0)), zero, true},
+    };
 }
 
-Expr convert_identity_to_halide_expr(const Identity &id, Type t) {
-    switch(id) {
-    case Identity::Zero:
-        return make_zero(t);
-    case Identity::One:
-        return make_one(t);
-    case Identity::NegOne:
-        return make_const(t, -1);
-    case Identity::ValMax:
-        return t.max();
-    case Identity::ValMin:
-        return t.min();
-    default:
-        internal_assert(false) << "Invalid Identity\n";
-        return Expr();
-    }
+void populate_ops_table_single_general_mul(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {x0 * y0, one, true},
+        {Mul::make(max(min(Mul::make(x0, y0), y0), y0), x0), one, true},
+        {Mul::make(max(min(Sub::make(x0, y0), y0), y0), x0), one, true},
+        {Mul::make(max(min(Sub::make(y0, x0), y0), y0), x0), one, true},
+        {Mul::make(min(max(Mul::make(x0, y0), y0), y0), x0), one, true},
+        {Mul::make(min(max(Sub::make(x0, y0), y0), y0), x0), one, true},
+        {Mul::make(min(max(Sub::make(y0, x0), y0), y0), x0), one, true},
+        {Mul::make(Sub::make(max(min(x0, k0), y0), y0), x0), neg_one, true},
+        {Mul::make(Sub::make(min(max(x0, k0), y0), y0), x0), neg_one, true},
+        {Mul::make(max(min(Add::make(max(x0, k0), y0), y0), y0), x0), one, true},
+        {Mul::make(max(min(Add::make(min(x0, k0), y0), y0), y0), x0), one, true},
+        {Mul::make(max(min(Add::make(min(y0, x0), k0), y0), y0), x0), one, true},
+        {Mul::make(max(min(Add::make(Mul::make(x0, k0), y0), y0), y0), x0), one, true},
+        {Mul::make(max(min(Add::make(Mul::make(x0, y0), y0), y0), y0), x0), one, true},
+        {Mul::make(max(min(Add::make(y0, Mul::make(x0, k0)), y0), y0), x0), one, true},
+    };
 }
 
-AssociativePattern convert_pattern_to_halide_expr(const OpsIds &ops_ids, Type t) {
-    AssociativePattern pattern(ops_ids.size());
-    for (size_t i = 0; i < ops_ids.size(); ++i) {
-        int cursor = 0;
-        pattern.ops[i] = convert_op_halide_expr(ops_ids.ops[i], cursor, t);
-        pattern.identities[i] = convert_identity_to_halide_expr(ops_ids.identities[i], t);
-    }
-    pattern.is_commutative = ops_ids.is_commutative;
-    return pattern;
+void populate_ops_table_single_general_max(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {max(x0, y0), tmin, true},
+        {max(min(x0, k0), y0), tmin, true},
+        {max(min(y0, x0), y0), tmin, true},
+        {max(min(y0, x0), y0), zero, true},
+        {max(min(y0, x0) + y0, y0), zero, true},
+        {max(min(Add::make(y0, x0), y0), y0), zero, true},
+        {max(min(max(y0, k0), x0), y0), tmin, true},
+        {max(min(max(y0, k0), y0), x0), tmin, true},
+        {max(min(max(y0, x0), k0), y0), tmin, true},
+        {max(min(max(y0, x0), y0), y0), tmin, true},
+        {max(min(max(y0, x0), y0), y0), zero, true},
+        {max(min(min(y0, k0), x0), y0), zero, true},
+        {max(min(x0 * y0, y0), y0), zero, true},
+    };
 }
+
+void populate_ops_table_single_general_min(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {min(x0, y0), tmax, true},
+        {min(max(x0, k0), y0), tmax, true},
+        {min(max(y0, x0), y0), zero, true},
+        {min(max(y0, x0), y0), tmax, true},
+        {min(Add::make(max(y0, x0), y0), y0), zero, true},
+        {min(max(Add::make(y0, x0), y0), y0), zero, true},
+        {min(max(max(y0, k0), x0), y0), zero, true},
+        {min(max(min(y0, k0), x0), y0), tmax, true},
+        {min(max(min(y0, k0), y0), x0), tmax, true},
+        {min(max(min(y0, x0), k0), y0), tmax, true},
+        {min(max(min(y0, x0), y0), y0), zero, true},
+        {min(max(min(y0, x0), y0), y0), tmax, true},
+        {min(max(Mul::make(x0, y0), y0), y0), zero, true},
+        {min(max(Mul::make(y0, x0), y0), y0), zero, true},
+        {min(max(Sub::make(k0, y0), x0), y0), zero, true},
+    };
+}
+
+void populate_ops_table_single_general_sub(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {Sub::make(Add::make(max(y0, x0), y0), max(x0, k0)), tmin, true},
+        {Sub::make(Add::make(min(y0, x0), y0), min(x0, k0)), tmax, true},
+        {Sub::make(max(Add::make(y0, x0), k0), max(y0, x0)), neg_one, true},
+        {Sub::make(max(y0, x0), max(Sub::make(x0, y0), k0)), zero, true},
+        {Sub::make(min(Add::make(y0, x0), k0), min(y0, x0)), one, true},
+        {Sub::make(min(y0, x0), min(Sub::make(x0, y0), k0)), zero, true},
+        {Sub::make(Add::make(max(min(min(Sub::make(y0, x0), x0), k0), x0), y0), x0), zero, true},
+        {Sub::make(Add::make(max(min(x0, y0), k0), max(x0, y0)), max(x0, k0)), tmin, true},
+        {Sub::make(Add::make(min(max(max(Sub::make(y0, x0), x0), k0), x0), y0), x0), zero, true},
+        {Sub::make(Add::make(min(max(x0, y0), k0), min(x0, y0)), min(x0, k0)), tmax, true},
+    };
+}
+
+void populate_ops_table_single_general_select(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+    };
+}
+
+void populate_ops_table_double_general_add(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {{Add::make(x0, y0), Add::make(x0, y1)}, {zero, zero}, true},
+        {{Add::make(x0, y0), Add::make(x1, y0)}, {zero, zero}, true},
+        {{Add::make(x0, y1), Add::make(x1, y1)}, {zero, zero}, true},
+        {{Add::make(x1, y0), Add::make(x1, y1)}, {zero, zero}, true},
+        {{Add::make(x0, y0), Add::make(Mul::make(x0, k0), y1)}, {zero, zero}, true},
+        {{Add::make(x0, y0), Add::make(Mul::make(x0, y0), Add::make(y1, x1))}, {zero, zero}, true},
+        {{Add::make(x0, y0), max(min(x0, x1), max(x1, y1))}, {zero, tmin}, true},
+        {{Add::make(x0, y0), max(min(x0, y1), max(y1, x1))}, {zero, tmin}, true},
+        {{Add::make(x0, y0), min(max(x0, x1), min(x1, y1))}, {zero, tmax}, true},
+        {{Add::make(x0, y0), min(max(x0, y1), min(y1, x1))}, {zero, tmax}, true},
+        {{Add::make(x0, y0), Sub::make(x1, y0)}, {zero, zero}, true},
+        {{Add::make(x0, y0), Sub::make(y1, x0)}, {zero, zero}, true},
+        {{Add::make(x0, y0), Sub::make(y1, Mul::make(x0, k0))}, {zero, zero}, true},
+        {{Add::make(x0, y0), Sub::make(Add::make(y1, x1), Mul::make(x0, y0))}, {zero, zero}, true},
+    };
+}
+
+void populate_ops_table_double_general_mul(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {{Mul::make(x0, y0), Add::make(Mul::make(x0, y1), x1)}, {one, zero}, true},
+        {{Mul::make(x0, y0), Add::make(Mul::make(x1, y0), y1)}, {one, zero}, true},
+        {{Mul::make(x0, y0), Add::make(Mul::make(x0, y0), Sub::make(y1, y0))}, {one, zero}, true},
+        {{Mul::make(x0, y0), Add::make(Mul::make(x0, y1), Mul::make(x1, y0))}, {one, zero}, true},
+        {{Mul::make(x0, y0), Add::make(Mul::make(x1, y0), Add::make(y0, y1))}, {one, neg_one}, true},
+        {{Mul::make(x0, y0), Add::make(Mul::make(x1, y0), Sub::make(y1, y0))}, {one, one}, true},
+        {{Mul::make(x0, y0), Mul::make(x0, y1)}, {one, zero}, true},
+        {{Mul::make(x0, y0), Mul::make(x1, y0)}, {one, zero}, true},
+        {{Mul::make(x1, y0), Mul::make(x1, y1)}, {zero, one}, true},
+        {{Mul::make(x0, y0), max(min(x0, x1), max(x1, y1))}, {one, tmin}, true},
+        {{Mul::make(x0, y0), max(min(x0, y1), max(y1, x1))}, {one, tmin}, true},
+        {{Mul::make(x0, y0), min(max(x0, x1), min(x1, y1))}, {one, tmax}, true},
+        {{Mul::make(x0, y0), min(max(x0, y1), min(y1, x1))}, {one, tmax}, true},
+        {{Mul::make(x0, y0), Sub::make(Add::make(y0, y1), Mul::make(x0, y0))}, {one, zero}, true},
+    };
+}
+
+void populate_ops_table_double_general_max(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {{max(x0, y0), select(LT::make(y0, x0), x1, y1)}, {tmin, zero}, true},
+        {{max(x0, y0), Add::make(max(x0, y0), Sub::make(y1, y0))}, {tmin, zero}, true},
+        {{max(x0, y0), Add::make(min(x0, y0), Add::make(y1, x1))}, {tmin, tmin}, true},
+        {{max(x0, y0), Add::make(min(x0, y0), Sub::make(x1, y0))}, {tmin, zero}, true},
+        {{max(max(min(Mul::make(x0, y0), x0), y0), x0), Add::make(max(Sub::make(x1, x0), y0), max(x0, y0))}, {tmin, zero}, true},
+        {{max(max(min(Mul::make(x0, y0), x0), y0), x0), Add::make(min(max(x0, k0), y0), Sub::make(x1, y0))}, {tmin, zero}, true},
+        {{max(min(min(Mul::make(x0, y0), x0), k0), x0), Add::make(Mul::make(max(x0, x1), y1), Add::make(x1, y1))}, {zero, zero}, true},
+        {{max(min(max(x0, k0), min(k0, x1)), y0), Mul::make(Sub::make(Add::make(max(x1, y1), x1), min(x0, x1)), Add::make(x0, x1))}, {tmin, tmin}, true},
+        {{max(x0, y0), max(x0, y1)}, {tmin, zero}, true},
+        {{max(x0, y0), max(x1, y0)}, {tmin, zero}, true},
+        {{max(x0, y0), max(y0, x1)}, {tmin, zero}, true},
+        {{max(x0, y1), max(x1, y1)}, {zero, tmin}, true},
+    };
+}
+
+void populate_ops_table_double_general_min(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {{min(x0, y0), select(LT::make(x0, y0), x1, y1)}, {tmax, zero}, true},
+        {{min(x0, y0), Add::make(max(x0, y0), Add::make(y1, x1))}, {tmax, tmin}, true},
+        {{min(x0, y0), Add::make(max(x0, y0), Sub::make(x1, y0))}, {tmax, zero}, true},
+        {{min(x0, y0), Add::make(min(x0, y0), Sub::make(y1, y0))}, {tmax, zero}, true},
+        {{min(min(max(Mul::make(x0, y0), x0), y0), x0), Add::make(max(min(x0, k0), y0), Sub::make(x1, y0))}, {tmax, zero}, true},
+        {{min(min(max(Mul::make(x0, y0), x0), y0), x0), Add::make(min(Sub::make(x1, x0), y0), min(x0, y0))}, {tmax, zero}, true},
+        {{min(x0, y0), Mul::make(max(x0, y0), Mul::make(y1, x1))}, {tmax, tmax}, true},
+        {{min(x0, y0), max(min(x0, y1), x1)}, {tmax, tmin}, true},
+    };
+}
+
+void populate_ops_table_double_general_sub(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {{Sub::make(x0, y1), Add::make(x1, y1)}, {zero, zero}, true},
+        {{Sub::make(y0, x1), Add::make(x1, y1)}, {zero, zero}, true},
+        {{Sub::make(Mul::make(x0, y0), Mul::make(x1, y1)), Add::make(Mul::make(x1, y0), Mul::make(x0, y1))}, {one, zero}, true},
+        {{Sub::make(Add::make(x1, y0), max(Sub::make(x1, x0), k0)), Sub::make(Add::make(x1, y1), max(Sub::make(x1, x0), k0))}, {zero, tmax}, true},
+        {{Sub::make(Add::make(x1, y0), min(Sub::make(x1, x0), k0)), Sub::make(Add::make(x1, y1), min(Sub::make(x1, x0), k0))}, {zero, tmin}, true},
+        {{Sub::make(Add::make(x1, y0), max(Sub::make(x1, x0), k0)), Sub::make(y1, Mul::make(max(Mul::make(x0, x1), x0), Sub::make(x0, x1)))}, {zero, tmax}, true},
+        {{Sub::make(Add::make(x1, y0), min(Sub::make(x1, x0), k0)), Sub::make(y1, Mul::make(max(Mul::make(x0, x1), x0), Sub::make(x0, x1)))}, {zero, tmin}, true},
+        {{Sub::make(Add::make(x1, y0), min(Sub::make(x1, x0), k0)), Sub::make(y1, Mul::make(min(Mul::make(x0, x1), x0), Sub::make(x0, x1)))}, {zero, tmin}, true},
+        {{Sub::make(Add::make(x1, y0), min(Sub::make(x1, x0), k0)), Sub::make(max(x1, y1), Mul::make(min(Mul::make(x0, x1), x0), Add::make(x0, x1)))}, {zero, tmin}, true},
+    };
+}
+
+void populate_ops_table_double_general_select(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+    };
+}
+
+void populate_ops_table_single_uint1_and(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {x0 && y0, one, true},
+    };
+}
+
+void populate_ops_table_single_uint1_or(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    table = {
+        {x0 || y0, zero, true},
+    };
+}
+
+void populate_ops_table_single_uint8_cast(Type t, vector<AssociativePattern> &table) {
+    declare_vars(t);
+    Expr k0_uint16 = Variable::make(UInt(16), "k0");
+    table = {
+        {cast<uint8_t>(min(cast<uint16_t>(x0 + y0), k0_uint16)), zero, true},
+    };
+}
+
+static const map<TableKey, void(*)(Type, vector<AssociativePattern> &)> val_type_to_populate_luts_fn = {
+    {TableKey(ValType::All, RootExpr::Add, 1), &populate_ops_table_single_general_add},
+    {TableKey(ValType::All, RootExpr::Mul, 1), &populate_ops_table_single_general_mul},
+    {TableKey(ValType::All, RootExpr::Max, 1), &populate_ops_table_single_general_max},
+    {TableKey(ValType::All, RootExpr::Min, 1), &populate_ops_table_single_general_min},
+    {TableKey(ValType::All, RootExpr::Sub, 1), &populate_ops_table_single_general_sub},
+    {TableKey(ValType::All, RootExpr::Select, 1), &populate_ops_table_single_general_select},
+    {TableKey(ValType::All, RootExpr::Add, 2), &populate_ops_table_double_general_add},
+    {TableKey(ValType::All, RootExpr::Mul, 2), &populate_ops_table_double_general_mul},
+    {TableKey(ValType::All, RootExpr::Max, 2), &populate_ops_table_double_general_max},
+    {TableKey(ValType::All, RootExpr::Min, 2), &populate_ops_table_double_general_min},
+    {TableKey(ValType::All, RootExpr::Sub, 2), &populate_ops_table_double_general_sub},
+    {TableKey(ValType::All, RootExpr::Select, 2), &populate_ops_table_double_general_select},
+
+    {TableKey(ValType::UInt1, RootExpr::And, 1), &populate_ops_table_single_uint1_and},
+    {TableKey(ValType::UInt1, RootExpr::Or, 1), &populate_ops_table_single_uint1_or},
+
+    {TableKey(ValType::UInt8, RootExpr::Cast, 1), &populate_ops_table_single_uint8_cast},
+};
 
 const vector<AssociativePattern> &get_ops_table_helper(Type t, RootExpr root, size_t dim) {
     TableKey gen_key(ValType::All, root, dim);
@@ -561,28 +362,18 @@ const vector<AssociativePattern> &get_ops_table_helper(Type t, RootExpr root, si
     if (table_it == pattern_tables.end()) { // Populate the table if we haven't done so previously
         vector<AssociativePattern> &table = pattern_tables[key];
 
-        const auto &gen_size_it = pattern_table_sizes.find(gen_key);
-        const auto &size_it = pattern_table_sizes.find(key);
-        size_t gen_size = (gen_size_it != pattern_table_sizes.end()) ? gen_size_it->second : 0;
-        size_t size = (size_it != pattern_table_sizes.end()) ? size_it->second : 0;
-        table.reserve(gen_size + size);
+        // Populate the general associative op LUT
+        const auto &gen_iter = val_type_to_populate_luts_fn.find(gen_key);
+        if (gen_iter != val_type_to_populate_luts_fn.end()) {
+            gen_iter->second(t, table);
+        }
 
-        if (gen_size > 0) {
-            // Add the general associative ops LUT
-            OpsIds const *gen_lut_ptr = val_type_to_luts.find(gen_key)->second;
-            internal_assert(gen_lut_ptr != nullptr);
-            for (size_t i = 0; i < gen_size; ++i) {
-                table.push_back(convert_pattern_to_halide_expr(gen_lut_ptr[i], t));
-            }
+        // Populate the type-specific associative op LUT
+        const auto &iter = val_type_to_populate_luts_fn.find(key);
+        if (iter != val_type_to_populate_luts_fn.end()) {
+            iter->second(t, table);
         }
-        if (size > 0) {
-            // Add the type-specific associative ops LUT
-            OpsIds const *lut_ptr = val_type_to_luts.find(key)->second;
-            internal_assert(lut_ptr != nullptr);
-            for (size_t i = 0; i < size; ++i) {
-                table.push_back(convert_pattern_to_halide_expr(lut_ptr[i], t));
-            }
-        }
+
         return table;
     }
     return table_it->second;
