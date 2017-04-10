@@ -594,6 +594,15 @@ void associativity_test() {
                               {Replacement("y", y)},
                               true)
                             );
+
+        // f(x) = uint8(uint16(x + y), uint16(255))
+        check_associativity("f", {x_idx}, {Cast::make(UInt(8), min(Cast::make(UInt(16), y + f_call_0), Cast::make(UInt(16), make_const(t, 255))))},
+                            AssociativeOp(
+                              AssociativePattern(Cast::make(UInt(8), min(Cast::make(UInt(16), x + y), make_const(t, 255))), make_const(t, 0), true),
+                              {Replacement("x", f_call_0)},
+                              {Replacement("y", y)},
+                              true)
+                            );
     }
 
     {
