@@ -62,14 +62,14 @@ class ConvertSelfRef : public IRMutator {
             internal_assert(args.size() == op->args.size())
                 << "Self-reference should have the same number of args as the original\n";
             if (is_conditional && (op->value_index == value_index)) {
-                debug(0) << "Self-reference of " << op->name
+                debug(5) << "Self-reference of " << op->name
                          << " inside a conditional. Operation is not associative\n";
                 is_solvable = false;
                 return;
             }
             for (size_t i = 0; i < op->args.size(); i++) {
                 if (!equal(op->args[i], args[i])) {
-                    debug(0) << "Self-reference of " << op->name
+                    debug(5) << "Self-reference of " << op->name
                              << " with different args from the LHS. Operation is not associative\n";
                     is_solvable = false;
                     return;
@@ -77,7 +77,7 @@ class ConvertSelfRef : public IRMutator {
             }
             // Substitute the call
             internal_assert(op->value_index < (int)op_x_names.size());
-            debug(0) << "   Substituting Call " << op->name << " at value index "
+            debug(5) << "   Substituting Call " << op->name << " at value index "
                      << op->value_index << " with " << op_x_names[op->value_index] << "\n";
             expr = Variable::make(op->type, op_x_names[op->value_index]);
 
@@ -123,9 +123,9 @@ bool associative_op_pattern_match(Expr e,
                                   map<string, Expr> &match) {
 
     map<string, Expr> result;
-    debug(0) << "Compare pattern: " << op << ", with expr: " << e << ", match? " << expr_match(op, e, result) << "\n";
+    debug(5) << "Compare pattern: " << op << ", with expr: " << e << ", match? " << expr_match(op, e, result) << "\n";
     if (expr_match(op, e, result)) {
-        debug(0) << "Found associative ops for " << e << " -> " << op
+        debug(5) << "Found associative ops for " << e << " -> " << op
                  << ", y_part: " << result["y0"] << "\n";
 
         for (size_t i = 0; i < x_names.size(); ++i) {
@@ -133,7 +133,7 @@ bool associative_op_pattern_match(Expr e,
             if (iter != result.end()) {
                 const Variable *xvar = iter->second.as<Variable>();
                 if ((xvar == nullptr) || (xvar->name != x_names[i])) {
-                    debug(0) << "...Skipping match since the x_part is different than expected. "
+                    debug(5) << "...Skipping match since the x_part is different than expected. "
                              << "Expect: " << x_names[i] << "; get: " << iter->second << "\n";
                     return false;
                 }
@@ -144,7 +144,7 @@ bool associative_op_pattern_match(Expr e,
             if (iter != result.end()) {
                 // Make sure that y_part should not depend on x vars
                 if (expr_uses_vars(iter->second, x_scope)) {
-                    debug(0) << "...Skipping match since the y_part depends on x vars\n";
+                    debug(5) << "...Skipping match since the y_part depends on x vars\n";
                     return false;
                 }
             }
@@ -154,7 +154,7 @@ bool associative_op_pattern_match(Expr e,
             if (iter != result.end()) {
                 // Make sure that k_part is constant
                 if (!is_const(iter->second)) {
-                    debug(0) << "...Skipping match since the k_part is not constant\n";
+                    debug(5) << "...Skipping match since the k_part is not constant\n";
                     return false;
                 }
             }
@@ -164,7 +164,7 @@ bool associative_op_pattern_match(Expr e,
         for (const auto &iter : result) {
             const auto &match_iter = match.find(iter.first);
             if (match_iter == match.end()) {
-                debug(0) << "Adding result: " << iter.first << " -> " << iter.second << "\n";
+                debug(5) << "Adding result: " << iter.first << " -> " << iter.second << "\n";
                 match.emplace(iter.first, iter.second);
             } else {
                 if (!equal(iter.first, match_iter->first) || !equal(iter.second, match_iter->second)) {
@@ -218,7 +218,7 @@ bool find_match(const vector<AssociativePattern> &table, const vector<string> &o
                 break;
             }
             Expr y_part = y_iter->second;
-            debug(0) << "Pattern at index " << index << ":\n  " << op_x_names[index]
+            debug(5) << "Pattern at index " << index << ":\n  " << op_x_names[index]
                      << " -> " << x_parts[index] << "\n  " << op_y_names[index]
                      << " -> " << y_part << "\n";
 
@@ -273,7 +273,7 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
 
     // TODO(psuriana): determine commutativity
     bool is_associative = false;
-    debug(0) << "Look-up associativity table for: " << e << "\n";
+    debug(5) << "Look-up associativity table for: " << e << "\n";
     AssociativeOp tmp(1);
     is_associative = find_match(get_ops_table({e}), {op_x}, {op_y}, {x_part}, {e}, tmp);
     if (is_associative) {
@@ -285,7 +285,7 @@ bool extract_associative_op_single_element(int index, const vector<string> &op_x
         assoc_op.xs[index] = tmp.xs[0];
         assoc_op.ys[index] = tmp.ys[0];
     }
-    debug(0) << e << " -> is associative? " << is_associative
+    debug(5) << e << " -> is associative? " << is_associative
              << ", is commutative? " << assoc_op.pattern.is_commutative << "\n";
     return is_associative;
 }
@@ -404,7 +404,7 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
     add_transitive_dependencies(dependencies);
 
     if (all_independent || (exprs.size() == 1)) {
-        debug(0) << "All tuple elements are independent. Try proving associativity of "
+        debug(5) << "All tuple elements are independent. Try proving associativity of "
                  << "each element separately.\n";
         // Since there is no x-cross-dependencies, check associativity of each tuple
         // element separately.
@@ -418,19 +418,19 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
             }
         }
     } else {
-        debug(0) << "There is cross-dependencies. Need to prove associativity in bulk.\n";
+        debug(5) << "There is cross-dependencies. Need to prove associativity in bulk.\n";
 
         // Decompose the tuple into subgraphs and solve for each separately
         vector<set<int>> subgraphs = compute_subgraphs(dependencies);
         internal_assert(subgraphs.size() == exprs.size());
         for (size_t i = 0; i < subgraphs.size(); ++i) {
             if (subgraphs[i].empty()) {
-                debug(0) << "Empty subgraph\n";
+                debug(5) << "Empty subgraph\n";
                 continue;
             }
             if (subgraphs[i].size() > 2) {
                 // TODO(psuriana): currently only support max of 2 tuple elements
-                debug(0) << "Subgraph size is bigger than 2\n";
+                debug(5) << "Subgraph size is bigger than 2\n";
                 return AssociativeOp();
             }
 
@@ -449,11 +449,11 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
 
             if (!find_match(get_ops_table(sub_exprs), sub_op_x_names, sub_op_y_names,
                             sub_x_parts, sub_exprs, sub_assoc_op)) {
-                debug(0) << "Cannot find matching associative ops\n";
+                debug(5) << "Cannot find matching associative ops\n";
                 return AssociativeOp();
             }
 
-            debug(0) << "...Proving associativity of subgraph " << i << "\n";
+            debug(5) << "...Proving associativity of subgraph " << i << "\n";
             const set<int> &indices = subgraphs[i];
             for (auto iter = indices.begin(); iter != indices.end(); ++iter) {
                 int index = *iter;
@@ -464,19 +464,19 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
                 if (assoc_op.pattern.ops[index].defined()) {
                     if (!equal(assoc_op.pattern.ops[index], sub_assoc_op.pattern.ops[j]) ||
                         !equal(assoc_op.pattern.identities[index], sub_assoc_op.pattern.identities[j])) {
-                        debug(0) << "Conflicting associative ops/identities from different subgraphs\n";
+                        debug(5) << "Conflicting associative ops/identities from different subgraphs\n";
                         return AssociativeOp();
                     }
                 }
                 if (assoc_op.xs[index].expr.defined()) {
                     if (assoc_op.xs[index] != sub_assoc_op.xs[j]) {
-                        debug(0) << "Conflicting associative x-replacements from different subgraphs\n";
+                        debug(5) << "Conflicting associative x-replacements from different subgraphs\n";
                         return AssociativeOp();
                     }
                 }
                 if (assoc_op.ys[index].expr.defined()) {
                     if (assoc_op.ys[index] != sub_assoc_op.ys[j]) {
-                        debug(0) << "Conflicting associative y-replacements from different subgraphs\n";
+                        debug(5) << "Conflicting associative y-replacements from different subgraphs\n";
                         return AssociativeOp();
                     }
                 }
@@ -490,7 +490,7 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
             }
         }
     }
-    debug(0) << "Found associative ops:\n" << assoc_op << "\n";
+    debug(5) << "Found associative ops:\n" << assoc_op << "\n";
     return assoc_op;
 }
 
@@ -564,11 +564,11 @@ void check_associativity(const string &f, vector<Expr> args, vector<Expr> exprs,
                 << "  Expect bin op: " << expected_op << "\n"
                 << "  instead of " << result.pattern.ops[i] << "\n";
 
-            debug(0) << "\nExpected op: " << expected_op << "\n";
-            debug(0) << "Operator: " << result.pattern.ops[i] << "\n";
-            debug(0) << "   identity: " << result.pattern.identities[i] << "\n";
-            debug(0) << "   x: " << result.xs[i].var << " -> " << result.xs[i].expr << "\n";
-            debug(0) << "   y: " << result.ys[i].var << " -> " << result.ys[i].expr << "\n";
+            debug(5) << "\nExpected op: " << expected_op << "\n";
+            debug(5) << "Operator: " << result.pattern.ops[i] << "\n";
+            debug(5) << "   identity: " << result.pattern.identities[i] << "\n";
+            debug(5) << "   x: " << result.xs[i].var << " -> " << result.xs[i].expr << "\n";
+            debug(5) << "   y: " << result.ys[i].var << " -> " << result.ys[i].expr << "\n";
         }
     }
 }
@@ -594,15 +594,6 @@ void associativity_test() {
                               {Replacement("y", y)},
                               true)
                             );
-
-        // f(x) = y || f(x)
-        check_associativity("f", {x_idx}, {Or::make(y, f_call_0)},
-                            AssociativeOp(
-                              AssociativePattern(Or::make(x, y), const_false(), true),
-                              {Replacement("x", f_call_0)},
-                              {Replacement("y", y)},
-                              true)
-                            );
     }
 
     {
@@ -621,7 +612,7 @@ void associativity_test() {
                               {Replacement("y", y)},
                               true)
                             );
-
+        debug(5) << "\t\t\tGET HERE\n";
         // f(x) = y || f(x)
         check_associativity("f", {x_idx}, {Or::make(y, f_call_0)},
                             AssociativeOp(

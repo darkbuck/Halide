@@ -29,16 +29,21 @@ struct OpsIds {
 };
 
 enum class RootExpr {
-    Add = 0,
-    Mul = 1,
-    Max = 2,
-    Min = 3,
-    Sub = 4,
-    Select = 5,
-    And = 6,
-    Or = 7,
-    Cast = 8,
-    Unknown = 9, // Not supported IR type
+    X0 = 0,
+    Y0 = 1,
+    X1 = 2,
+    Y1 = 3,
+    Constant = 4,
+    Add = 5,
+    Mul = 6,
+    Max = 7,
+    Min = 8,
+    Sub = 9,
+    Select = 10,
+    And = 11,
+    Or = 12,
+    Cast = 13,
+    Unknown = 14, // Not supported IR type
 };
 
 enum class ValType {
@@ -144,20 +149,20 @@ static const map<TableKey, size_t> pattern_table_sizes = {
 
 const OpsIds single_gen_add[] = {
     {{"Add(X0, Y0)"}, {Identity::Zero}, true},
-    {{"Add(Max(Min(Y0, K0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Max(Sub(K0, Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Max(Y0, K0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Sub(K0, Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Max(Min(Min(Y0, K0), Y0), Y0), X0)"}, {Identity::Zero}, true},
+    {{"Add(Max(Min(Y0, Constant(All)), Y0), X0)"}, {Identity::Zero}, true},
+    {{"Add(Max(Sub(Constant(All), Y0), Y0), X0)"}, {Identity::Zero}, true},
+    {{"Add(Min(Max(Y0, Constant(All)), Y0), X0)"}, {Identity::Zero}, true},
+    {{"Add(Min(Sub(Constant(All), Y0), Y0), X0)"}, {Identity::Zero}, true},
+    {{"Add(Max(Min(Min(Y0, Constant(All)), Y0), Y0), X0)"}, {Identity::Zero}, true},
     {{"Add(Max(Min(Mul(X0, Y0), Y0), Y0), X0)"}, {Identity::Zero}, true},
     {{"Add(Max(Min(Sub(X0, Y0), Y0), Y0), X0)"}, {Identity::Zero}, true},
     {{"Add(Max(Min(Sub(Y0, X0), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Max(Max(Y0, K0), Y0), Y0), X0)"}, {Identity::Zero}, true},
+    {{"Add(Min(Max(Max(Y0, Constant(All)), Y0), Y0), X0)"}, {Identity::Zero}, true},
     {{"Add(Min(Max(Mul(X0, Y0), Y0), Y0), X0)"}, {Identity::Zero}, true},
     {{"Add(Min(Max(Sub(X0, Y0), Y0), Y0), X0)"}, {Identity::Zero}, true},
     {{"Add(Min(Max(Sub(Y0, X0), Y0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Add(Min(Sub(Y0, X0), K0), Max(Y0, X0))"}, {Identity::NegOne}, true},
-    {{"Add(Min(Y0, X0), Max(Sub(Y0, X0), K0))"}, {Identity::Zero}, true},
+    {{"Add(Min(Sub(Y0, X0), Constant(All)), Max(Y0, X0))"}, {Identity::NegOne}, true},
+    {{"Add(Min(Y0, X0), Max(Sub(Y0, X0), Constant(All)))"}, {Identity::Zero}, true},
 };
 const OpsIds single_gen_mul[] = {
     {{"Mul(X0, Y0)"}, {Identity::One}, true},
@@ -167,60 +172,60 @@ const OpsIds single_gen_mul[] = {
     {{"Mul(Min(Max(Mul(X0, Y0), Y0), Y0), X0)"}, {Identity::One}, true},
     {{"Mul(Min(Max(Sub(X0, Y0), Y0), Y0), X0)"}, {Identity::One}, true},
     {{"Mul(Min(Max(Sub(Y0, X0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Sub(Max(Min(X0, K0), Y0), Y0), X0)"}, {Identity::NegOne}, true},
-    {{"Mul(Sub(Min(Max(X0, K0), Y0), Y0), X0)"}, {Identity::NegOne}, true},
-    {{"Mul(Max(Min(Add(Max(X0, K0), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Add(Min(X0, K0), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Add(Min(Y0, X0), K0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Add(Mul(X0, K0), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
+    {{"Mul(Sub(Max(Min(X0, Constant(All)), Y0), Y0), X0)"}, {Identity::NegOne}, true},
+    {{"Mul(Sub(Min(Max(X0, Constant(All)), Y0), Y0), X0)"}, {Identity::NegOne}, true},
+    {{"Mul(Max(Min(Add(Max(X0, Constant(All)), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
+    {{"Mul(Max(Min(Add(Min(X0, Constant(All)), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
+    {{"Mul(Max(Min(Add(Min(Y0, X0), Constant(All)), Y0), Y0), X0)"}, {Identity::One}, true},
+    {{"Mul(Max(Min(Add(Mul(X0, Constant(All)), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
     {{"Mul(Max(Min(Add(Mul(X0, Y0), Y0), Y0), Y0), X0)"}, {Identity::One}, true},
-    {{"Mul(Max(Min(Add(Y0, Mul(X0, K0)), Y0), Y0), X0)"}, {Identity::One}, true},
+    {{"Mul(Max(Min(Add(Y0, Mul(X0, Constant(All))), Y0), Y0), X0)"}, {Identity::One}, true},
 };
 const OpsIds single_gen_max[] = {
     {{"Max(X0, Y0)"}, {Identity::ValMin}, true},
     {{"Max(Y0, X0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(X0, K0), Y0)"}, {Identity::ValMin}, true},
+    {{"Max(Min(X0, Constant(All)), Y0)"}, {Identity::ValMin}, true},
     {{"Max(Min(Y0, X0), Y0)"}, {Identity::ValMin}, true},
     {{"Max(Min(Y0, X0), Y0)"}, {Identity::Zero}, true},
     {{"Max(Add(Min(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
     {{"Max(Min(Add(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Max(Min(Max(Y0, K0), X0), Y0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(Max(Y0, K0), Y0), X0)"}, {Identity::ValMin}, true},
-    {{"Max(Min(Max(Y0, X0), K0), Y0)"}, {Identity::ValMin}, true},
+    {{"Max(Min(Max(Y0, Constant(All)), X0), Y0)"}, {Identity::ValMin}, true},
+    {{"Max(Min(Max(Y0, Constant(All)), Y0), X0)"}, {Identity::ValMin}, true},
+    {{"Max(Min(Max(Y0, X0), Constant(All)), Y0)"}, {Identity::ValMin}, true},
     {{"Max(Min(Max(Y0, X0), Y0), Y0)"}, {Identity::ValMin}, true},
     {{"Max(Min(Max(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Max(Min(Min(Y0, K0), X0), Y0)"}, {Identity::Zero}, true},
+    {{"Max(Min(Min(Y0, Constant(All)), X0), Y0)"}, {Identity::Zero}, true},
     {{"Max(Min(Mul(X0, Y0), Y0), Y0)"}, {Identity::Zero}, true},
     {{"Max(Min(Mul(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
 };
 const OpsIds single_gen_min[] = {
     {{"Min(X0, Y0)"}, {Identity::ValMax}, true},
-    {{"Min(Max(X0, K0), Y0)"}, {Identity::ValMax}, true},
+    {{"Min(Max(X0, Constant(All)), Y0)"}, {Identity::ValMax}, true},
     {{"Min(Max(Y0, X0), Y0)"}, {Identity::Zero}, true},
     {{"Min(Max(Y0, X0), Y0)"}, {Identity::ValMax}, true},
     {{"Min(Add(Max(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
     {{"Min(Max(Add(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Max(Y0, K0), X0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Min(Y0, K0), X0), Y0)"}, {Identity::ValMax}, true},
-    {{"Min(Max(Min(Y0, K0), Y0), X0)"}, {Identity::ValMax}, true},
-    {{"Min(Max(Min(Y0, X0), K0), Y0)"}, {Identity::ValMax}, true},
+    {{"Min(Max(Max(Y0, Constant(All)), X0), Y0)"}, {Identity::Zero}, true},
+    {{"Min(Max(Min(Y0, Constant(All)), X0), Y0)"}, {Identity::ValMax}, true},
+    {{"Min(Max(Min(Y0, Constant(All)), Y0), X0)"}, {Identity::ValMax}, true},
+    {{"Min(Max(Min(Y0, X0), Constant(All)), Y0)"}, {Identity::ValMax}, true},
     {{"Min(Max(Min(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
     {{"Min(Max(Min(Y0, X0), Y0), Y0)"}, {Identity::ValMax}, true},
     {{"Min(Max(Mul(X0, Y0), Y0), Y0)"}, {Identity::Zero}, true},
     {{"Min(Max(Mul(Y0, X0), Y0), Y0)"}, {Identity::Zero}, true},
-    {{"Min(Max(Sub(K0, Y0), X0), Y0)"}, {Identity::Zero}, true},
+    {{"Min(Max(Sub(Constant(All), Y0), X0), Y0)"}, {Identity::Zero}, true},
 };
 const OpsIds single_gen_sub[] = {
-    {{"Sub(Add(Max(Y0, X0), Y0), Max(X0, K0))"}, {Identity::ValMin}, true},
-    {{"Sub(Add(Min(Y0, X0), Y0), Min(X0, K0))"}, {Identity::ValMax}, true},
-    {{"Sub(Max(Add(Y0, X0), K0), Max(Y0, X0))"}, {Identity::NegOne}, true},
-    {{"Sub(Max(Y0, X0), Max(Sub(X0, Y0), K0))"}, {Identity::Zero}, true},
-    {{"Sub(Min(Add(Y0, X0), K0), Min(Y0, X0))"}, {Identity::One}, true},
-    {{"Sub(Min(Y0, X0), Min(Sub(X0, Y0), K0))"}, {Identity::Zero}, true},
-    {{"Sub(Add(Max(Min(Min(Sub(Y0, X0), X0), K0), X0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Sub(Add(Max(Min(X0, Y0), K0), Max(X0, Y0)), Max(X0, K0))"}, {Identity::ValMin}, true},
-    {{"Sub(Add(Min(Max(Max(Sub(Y0, X0), X0), K0), X0), Y0), X0)"}, {Identity::Zero}, true},
-    {{"Sub(Add(Min(Max(X0, Y0), K0), Min(X0, Y0)), Min(X0, K0))"}, {Identity::ValMax}, true},
+    {{"Sub(Add(Max(Y0, X0), Y0), Max(X0, Constant(All)))"}, {Identity::ValMin}, true},
+    {{"Sub(Add(Min(Y0, X0), Y0), Min(X0, Constant(All)))"}, {Identity::ValMax}, true},
+    {{"Sub(Max(Add(Y0, X0), Constant(All)), Max(Y0, X0))"}, {Identity::NegOne}, true},
+    {{"Sub(Max(Y0, X0), Max(Sub(X0, Y0), Constant(All)))"}, {Identity::Zero}, true},
+    {{"Sub(Min(Add(Y0, X0), Constant(All)), Min(Y0, X0))"}, {Identity::One}, true},
+    {{"Sub(Min(Y0, X0), Min(Sub(X0, Y0), Constant(All)))"}, {Identity::Zero}, true},
+    {{"Sub(Add(Max(Min(Min(Sub(Y0, X0), X0), Constant(All)), X0), Y0), X0)"}, {Identity::Zero}, true},
+    {{"Sub(Add(Max(Min(X0, Y0), Constant(All)), Max(X0, Y0)), Max(X0, Constant(All)))"}, {Identity::ValMin}, true},
+    {{"Sub(Add(Min(Max(Max(Sub(Y0, X0), X0), Constant(All)), X0), Y0), X0)"}, {Identity::Zero}, true},
+    {{"Sub(Add(Min(Max(X0, Y0), Constant(All)), Min(X0, Y0)), Min(X0, Constant(All)))"}, {Identity::ValMax}, true},
 };
 const OpsIds single_gen_select[] = {
 };
@@ -229,7 +234,7 @@ const OpsIds double_gen_add[] = {
     {{"Add(X0, Y0)", "Add(X1, Y0)"}, {Identity::Zero, Identity::Zero}, true},
     {{"Add(X0, Y1)", "Add(X1, Y1)"}, {Identity::Zero, Identity::Zero}, true},
     {{"Add(X1, Y0)", "Add(X1, Y1)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y0)", "Add(Mul(X0, K0), Y1)"}, {Identity::Zero, Identity::Zero}, true},
+    {{"Add(X0, Y0)", "Add(Mul(X0, Constant(All)), Y1)"}, {Identity::Zero, Identity::Zero}, true},
     {{"Add(X0, Y0)", "Add(Mul(X0, Y0), Add(Y1, X1))"}, {Identity::Zero, Identity::Zero}, true},
     {{"Add(X0, Y0)", "Max(Min(X0, X1), Max(X1, Y1))"}, {Identity::Zero, Identity::ValMin}, true},
     {{"Add(X0, Y0)", "Max(Min(X0, Y1), Max(Y1, X1))"}, {Identity::Zero, Identity::ValMin}, true},
@@ -237,7 +242,7 @@ const OpsIds double_gen_add[] = {
     {{"Add(X0, Y0)", "Min(Max(X0, Y1), Min(Y1, X1))"}, {Identity::Zero, Identity::ValMax}, true},
     {{"Add(X0, Y0)", "Sub(X1, Y0)"}, {Identity::Zero, Identity::Zero}, true},
     {{"Add(X0, Y0)", "Sub(Y1, X0)"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Add(X0, Y0)", "Sub(Y1, Mul(X0, K0))"}, {Identity::Zero, Identity::Zero}, true},
+    {{"Add(X0, Y0)", "Sub(Y1, Mul(X0, Constant(All)))"}, {Identity::Zero, Identity::Zero}, true},
     {{"Add(X0, Y0)", "Sub(Add(Y1, X1), Mul(X0, Y0))"}, {Identity::Zero, Identity::Zero}, true},
 };
 const OpsIds double_gen_mul[] = {
@@ -262,9 +267,9 @@ const OpsIds double_gen_max[] = {
     {{"Max(X0, Y0)", "Add(Min(X0, Y0), Add(Y1, X1))"}, {Identity::ValMin, Identity::ValMin}, true},
     {{"Max(X0, Y0)", "Add(Min(X0, Y0), Sub(X1, Y0))"}, {Identity::ValMin, Identity::Zero}, true},
     {{"Max(Max(Min(Mul(X0, Y0), X0), Y0), X0)", "Add(Max(Sub(X1, X0), Y0), Max(X0, Y0))"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(Max(Min(Mul(X0, Y0), X0), Y0), X0)", "Add(Min(Max(X0, K0), Y0), Sub(X1, Y0))"}, {Identity::ValMin, Identity::Zero}, true},
-    {{"Max(Min(Min(Mul(X0, Y0), X0), K0), X0)", "Add(Mul(Max(X0, X1), Y1), Add(X1, Y1))"}, {Identity::Zero, Identity::Zero}, true},
-    {{"Max(Min(Max(X0, K0), Min(K0, X1)), Y0)", "Mul(Sub(Add(Max(X1, Y1), X1), Min(X0, X1)), Add(X0, X1))"}, {Identity::ValMin, Identity::ValMin}, true},
+    {{"Max(Max(Min(Mul(X0, Y0), X0), Y0), X0)", "Add(Min(Max(X0, Constant(All)), Y0), Sub(X1, Y0))"}, {Identity::ValMin, Identity::Zero}, true},
+    {{"Max(Min(Min(Mul(X0, Y0), X0), Constant(All)), X0)", "Add(Mul(Max(X0, X1), Y1), Add(X1, Y1))"}, {Identity::Zero, Identity::Zero}, true},
+    {{"Max(Min(Max(X0, Constant(All)), Min(Constant(All), X1)), Y0)", "Mul(Sub(Add(Max(X1, Y1), X1), Min(X0, X1)), Add(X0, X1))"}, {Identity::ValMin, Identity::ValMin}, true},
     {{"Max(X0, Y0)", "Max(X0, Y1)"}, {Identity::ValMin, Identity::Zero}, true},
     {{"Max(X0, Y0)", "Max(X1, Y0)"}, {Identity::ValMin, Identity::Zero}, true},
     {{"Max(X0, Y0)", "Max(Y0, X1)"}, {Identity::ValMin, Identity::Zero}, true},
@@ -275,7 +280,7 @@ const OpsIds double_gen_min[] = {
     {{"Min(X0, Y0)", "Add(Max(X0, Y0), Add(Y1, X1))"}, {Identity::ValMax, Identity::ValMin}, true},
     {{"Min(X0, Y0)", "Add(Max(X0, Y0), Sub(X1, Y0))"}, {Identity::ValMax, Identity::Zero}, true},
     {{"Min(X0, Y0)", "Add(Min(X0, Y0), Sub(Y1, Y0))"}, {Identity::ValMax, Identity::Zero}, true},
-    {{"Min(Min(Max(Mul(X0, Y0), X0), Y0), X0)", "Add(Max(Min(X0, K0), Y0), Sub(X1, Y0))"}, {Identity::ValMax, Identity::Zero}, true},
+    {{"Min(Min(Max(Mul(X0, Y0), X0), Y0), X0)", "Add(Max(Min(X0, Constant(All)), Y0), Sub(X1, Y0))"}, {Identity::ValMax, Identity::Zero}, true},
     {{"Min(Min(Max(Mul(X0, Y0), X0), Y0), X0)", "Add(Min(Sub(X1, X0), Y0), Min(X0, Y0))"}, {Identity::ValMax, Identity::Zero}, true},
     {{"Min(X0, Y0)", "Mul(Max(X0, Y0), Mul(Y1, X1))"}, {Identity::ValMax, Identity::ValMax}, true},
     {{"Min(X0, Y0)", "Max(Min(X0, Y1), X1)"}, {Identity::ValMax, Identity::ValMin}, true},
@@ -284,12 +289,12 @@ const OpsIds double_gen_sub[] = {
     {{"Sub(X0, Y1)", "Add(X1, Y1)"}, {Identity::Zero, Identity::Zero}, true},
     {{"Sub(Y0, X1)", "Add(X1, Y1)"}, {Identity::Zero, Identity::Zero}, true},
     {{"Sub(Mul(X0, Y0), Mul(X1, Y1))", "Add(Mul(X1, Y0), Mul(X0, Y1))"}, {Identity::One, Identity::Zero}, true},
-    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), K0))", "Sub(Add(X1, Y1), Max(Sub(X1, X0), K0))"}, {Identity::Zero, Identity::ValMax}, true},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", "Sub(Add(X1, Y1), Min(Sub(X1, X0), K0))"}, {Identity::Zero, Identity::ValMin}, true},
-    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), K0))", "Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))"}, {Identity::Zero, Identity::ValMax}, true},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", "Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", "Sub(Y1, Mul(Min(Mul(X0, X1), X0), Sub(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
-    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), K0))", "Sub(Max(X1, Y1), Mul(Min(Mul(X0, X1), X0), Add(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
+    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), Constant(All)))", "Sub(Add(X1, Y1), Max(Sub(X1, X0), Constant(All)))"}, {Identity::Zero, Identity::ValMax}, true},
+    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), Constant(All)))", "Sub(Add(X1, Y1), Min(Sub(X1, X0), Constant(All)))"}, {Identity::Zero, Identity::ValMin}, true},
+    {{"Sub(Add(X1, Y0), Max(Sub(X1, X0), Constant(All)))", "Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))"}, {Identity::Zero, Identity::ValMax}, true},
+    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), Constant(All)))", "Sub(Y1, Mul(Max(Mul(X0, X1), X0), Sub(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
+    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), Constant(All)))", "Sub(Y1, Mul(Min(Mul(X0, X1), X0), Sub(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
+    {{"Sub(Add(X1, Y0), Min(Sub(X1, X0), Constant(All)))", "Sub(Max(X1, Y1), Mul(Min(Mul(X0, X1), X0), Add(X0, X1)))"}, {Identity::Zero, Identity::ValMin}, true},
 };
 const OpsIds double_gen_select[] = {
 };
@@ -302,7 +307,7 @@ const OpsIds single_uint1_or[] = {
 };
 
 const OpsIds single_uint8_cast[] = {
-    {{"Cast(UInt8, Min(Cast(UInt16, Add(X0, Y0)), K0))"}, {Identity::Zero}, true},
+    {{"Cast(UInt8, Min(Cast(UInt16, Add(X0, Y0)), Constant(UInt16)))"}, {Identity::Zero}, true},
 };
 
 static const map<TableKey, OpsIds const *> val_type_to_luts = {
@@ -339,7 +344,7 @@ Expr convert_op_halide_expr(const string &nodes, int &cursor, Type t) {
     } else if (op == "Y1") {
         cursor += 2;
         return Variable::make(t, "y1");
-    } else if (op == "K0") {
+    } else if (op == "Constant(All)") {
         cursor += 2;
         return Variable::make(t, "k0");
     } else if (op == "LT") {
@@ -464,6 +469,57 @@ Expr convert_op_halide_expr(const string &nodes, int &cursor, Type t) {
         cursor += 1;
         return Select::make(cond, true_val, false_val);
     }
+
+    op = nodes.substr(cursor, 8);
+    if (op == "Constant") {
+        cursor += 9;
+
+        Type type;
+        string type_5 = nodes.substr(cursor, 5);
+        string type_6 = nodes.substr(cursor, 6);
+        string type_7 = nodes.substr(cursor, 7);
+        if (type_7 == "Float32") {
+            type = Float(32);
+            cursor += 8;
+        } else if (type_7 == "Float64") {
+            type = Float(64);
+            cursor += 8;
+        } else if (type_6 == "UInt16") {
+            type = UInt(16);
+            cursor += 7;
+        } else if (type_6 == "UInt32") {
+            type = UInt(32);
+            cursor += 7;
+        } else if (type_6 == "UInt64") {
+            type = UInt(64);
+            cursor += 7;
+        } else if (type_5 == "UInt1") {
+            type = UInt(1);
+            cursor += 6;
+        } else if (type_5 == "UInt8") {
+            type = UInt(8);
+            cursor += 6;
+        } else if (type_5 == "Int16") {
+            type = Int(16);
+            cursor += 6;
+        } else if (type_5 == "Int32") {
+            type = Int(32);
+            cursor += 6;
+        } else if (type_5 == "Int64") {
+            type = Int(64);
+            cursor += 6;
+        } else if (nodes.substr(cursor, 4) == "Int8") {
+            type = Int(8);
+            cursor += 5;
+        } else if (nodes.substr(cursor, 3) == "All") {
+            type = t;
+            cursor += 4;
+        } else {
+            internal_assert(false) << "Unknown type\n";
+        }
+        return Variable::make(type, "k0");
+    }
+
     internal_assert(false) << "Fail to convert " << nodes.substr(cursor);
     return Expr();
 }
@@ -545,49 +601,49 @@ const vector<AssociativePattern> &get_ops_table(const vector<Expr> &exprs) {
         return empty;
     }
     if (exprs.size() > 2) {
-        debug(0) << "Returning empty table\n";
+        debug(5) << "Returning empty table\n";
         return empty;
     }
 
     RootExpr root = RootExpr::Unknown;
     if (exprs[0].as<Halide::Internal::Add>()) {
-        debug(0) << "Returning Add root table for type " << exprs[0].type() << "\n";
+        debug(5) << "Returning Add root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Add;
     } else if (exprs[0].as<Halide::Internal::Sub>()) {
-        debug(0) << "Returning Sub root table for type " << exprs[0].type() << "\n";
+        debug(5) << "Returning Sub root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Sub;
     } else if (exprs[0].as<Halide::Internal::Mul>()) {
-        debug(0) << "Returning Mul root table for type " << exprs[0].type() << "\n";
+        debug(5) << "Returning Mul root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Mul;
     } else if (exprs[0].as<Halide::Internal::Min>()) {
-        debug(0) << "Returning Min root table\n";
+        debug(5) << "Returning Min root table\n";
         root = RootExpr::Min;
     } else if (exprs[0].as<Halide::Internal::Max>()) {
-        debug(0) << "Returning Max root table for type " << exprs[0].type() << "\n";
+        debug(5) << "Returning Max root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Max;
     } else if (exprs[0].as<Halide::Internal::Select>()) {
-        debug(0) << "Returning Select root table for type " << exprs[0].type() << "\n";
+        debug(5) << "Returning Select root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Select;
     } else if (exprs[0].as<Halide::Internal::And>()) {
-        debug(0) << "Returning And root table for type " << exprs[0].type() << "\n";
+        debug(5) << "Returning And root table for type " << exprs[0].type() << "\n";
         root = RootExpr::And;
     } else if (exprs[0].as<Halide::Internal::Or>()) {
-        debug(0) << "Returning Or root table for type " << exprs[0].type() << "\n";
+        debug(5) << "Returning Or root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Or;
     } else if (exprs[0].as<Halide::Internal::Cast>()) {
-        debug(0) << "Returning Cast root table for type " << exprs[0].type() << "\n";
+        debug(5) << "Returning Cast root table for type " << exprs[0].type() << "\n";
         root = RootExpr::Cast;
     }
 
     if (root != RootExpr::Unknown) {
         const vector<AssociativePattern> &table = get_ops_table_helper(exprs[0].type(), root, exprs.size());
-        debug(0) << "\tTable size: " << table.size() << "\n";
+        debug(5) << "\tTable size: " << table.size() << "\n";
         for (const auto &p : table) {
-            debug(0) << p << "\n";
+            debug(5) << p << "\n";
         }
         return table;
     }
-    debug(0) << "Returning empty table\n";
+    debug(5) << "Returning empty table\n";
     return empty;
 }
 
