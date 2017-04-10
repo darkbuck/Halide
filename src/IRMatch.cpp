@@ -114,9 +114,8 @@ public:
         if (!result) {
             return;
         }
-        debug(0) << "****VISIT VAR: " << Expr(op) << "\n";
+
         if (!types_match(op->type, expr.type())) {
-            debug(0) << "...type does not match, op type: " << op->type << ", expr type: " << expr.type() << "\n";
             result = false;
         } else if (matches) {
             if (op->name == "*") {
