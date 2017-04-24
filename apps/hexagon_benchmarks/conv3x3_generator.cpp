@@ -13,14 +13,9 @@ public:
 
     void generate() {
         bounded_input(x, y) = BoundaryConditions::repeat_edge(input)(x, y);
-
-        Expr sum = cast(accumulator_type, 0);
-        for (int i = -1; i <= 1; i++) {
-            for (int j = -1; j <= 1; j++) {
-                sum += cast<int16_t>(bounded_input(x+j, y+i)) * cast<int16_t>(mask(j+1, i+1));
-            }
-        }
-        output(x, y) = cast<uint8_t>(clamp(sum >> 4, 0, 255));
+        my_sum(x, y) = my_sum(x, y) +
+            (cast<int16_t>(bounded_input(x+r.x, y+r.y)) * cast<int16_t>(mask(1+r.x, 1+r.y)));
+        output(x, y) = cast<uint8_t>(clamp(my_sum(x, y) >> 4, 0, 255));
     }
 
     void schedule() {
@@ -36,25 +31,37 @@ public:
             const int vector_size = get_target().has_feature(Target::HVX_128) ? 128 : 64;
             Expr input_stride = input.dim(1).stride();
             input.dim(1).set_stride((input_stride/vector_size) * vector_size);
-
+            input.set_host_alignment(vector_size);
+            output.set_host_alignment(vector_size);
             Expr output_stride = output.dim(1).stride();
             output.dim(1).set_stride((output_stride/vector_size) * vector_size);
-            bounded_input.compute_root();
+            bounded_input
+                .compute_at(Func(output), y)
+                .align_storage(x, 128)
+                .vectorize(x, vector_size, TailStrategy::RoundUp);
+            my_sum
+                .update(0)
+                .unroll(r.y)
+                .unroll(r.x);
             output
                 .hexagon()
                 .tile(x, y, xi, yi, vector_size, 4, TailStrategy::RoundUp)
                 .vectorize(xi)
-                .unroll(yi);
+                .unroll(yi)
+                .prefetch(input, y, 2);
         } else {
             const int vector_size = natural_vector_size<uint8_t>();
             output
                 .vectorize(x, vector_size)
                 .parallel(y, 16);
         }
+        Func(output).print_loop_nest();
     }
 private:
     Var x{"x"}, y{"y"};
     Func bounded_input{"input_bounded"};
+    Halide::RDom r{-1, 3, -1, 3};
+    Func my_sum{"my_sum"};
 };
 
 HALIDE_REGISTER_GENERATOR(Conv3x3, "conv3x3");
