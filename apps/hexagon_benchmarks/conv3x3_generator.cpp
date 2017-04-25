@@ -13,6 +13,7 @@ public:
 
     void generate() {
         bounded_input(x, y) = BoundaryConditions::repeat_edge(input)(x, y);
+        my_sum(x, y) = cast(Int(16), 0);
         my_sum(x, y) = my_sum(x, y) +
             (cast<int16_t>(bounded_input(x+r.x, y+r.y)) * cast<int16_t>(mask(1+r.x, 1+r.y)));
         output(x, y) = cast<uint8_t>(clamp(my_sum(x, y) >> 4, 0, 255));
