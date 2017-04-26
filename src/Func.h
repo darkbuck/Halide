@@ -1889,6 +1889,11 @@ public:
      * outside the outermost loop. */
     EXPORT Func &store_root();
 
+    /** Specifies that a Func should use the same storage as another
+     * Func or ImageParam. The realizations of the target Func must
+     * contain the realization of this Func. TODO: more docs. */
+    EXPORT Func &store_with(const Func &target);
+
     /** Aggressively inline all uses of this function. This is the
      * default schedule, so you're unlikely to need to call this. For
      * a Func with an update definition, that means it gets computed

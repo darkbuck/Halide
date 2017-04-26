@@ -347,6 +347,13 @@ public:
     LoopLevel &compute_level();
     // @}
 
+    /** If non-empty, this Func doesn't get its own storage. Instead
+     * of shared storage with some containing Func or ImageParam. */
+    // @{
+    const std::string &store_with() const;
+    std::string &store_with();
+    // @}
+
     /** Are race conditions permitted? */
     // @{
     bool allow_race_conditions() const;

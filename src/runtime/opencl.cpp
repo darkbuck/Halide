@@ -777,7 +777,7 @@ WEAK int do_multidimensional_copy(void *user_context, const ClContext &ctx,
             return (int)err;
         }
     }
-#ifdef ENABLE_OPENCL_11
+#ifdef ENABLE_OPENCL_11asd
     else if (d == 2) {
         // OpenCL 1.1 supports stride-aware memory transfers up to 3D, so we
         // can deal with the 2 innermost strides with OpenCL.
@@ -818,6 +818,7 @@ WEAK int do_multidimensional_copy(void *user_context, const ClContext &ctx,
 #endif
     else {
         for (int i = 0; i < (int)c.extent[d-1]; i++) {
+            debug(user_context) << "Loop " << d << ", " << i << ", " << off << ", " << c.stride_bytes[d-1] << "\n";
             int err = do_multidimensional_copy(user_context, ctx, c, off, d-1, d_to_h);
             off += c.stride_bytes[d-1];
             if (err) {

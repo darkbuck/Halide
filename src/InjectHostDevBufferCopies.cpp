@@ -552,12 +552,14 @@ class InjectBufferCopies : public IRMutator {
                                   buf_info.devices_touched.count(DeviceAPI::Host)));
 
         // If this buffer is only ever touched on gpu, nuke the host-side allocation.
-        if (!buf_info.host_touched) {
+        if (!buf_info.host_touched &&
+            !op->new_expr.defined()) {
             debug(4) << "Eliding host alloc for " << op->name << "\n";
             stmt = Allocate::make(op->name, op->type, op->extents, const_false(), op->body);
         } else if (on_single_device &&
                    buf_info.dev_touched &&
-                   buf_info.device_first_touched != DeviceAPI::None) {
+                   buf_info.device_first_touched != DeviceAPI::None &&
+                   !op->new_expr.defined()) {
             debug(4) << "Making combined host/device alloc for " << op->name << "\n";
             Stmt inner_body = op->body;
             std::vector<const LetStmt *> body_lets;

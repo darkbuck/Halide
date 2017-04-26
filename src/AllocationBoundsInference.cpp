@@ -24,26 +24,40 @@ class AllocationInference : public IRMutator {
     const FuncValueBounds &func_bounds;
     set<string> touched_by_extern;
 
+    Box box_touched_with_externs(Stmt body, Function f) {
+        Scope<Interval> empty_scope;
+        Box b = box_touched(body, f.name(), empty_scope, func_bounds);
+        if (touched_by_extern.count(f.name())) {
+            // The region touched is at least the region required at this
+            // loop level of the first stage (this is important for inputs
+            // and outputs to extern stages).
+            Box required(f.dimensions());
+            for (size_t i = 0; i < required.size(); i++) {
+                string prefix = f.name() + ".s0." + f.args()[i];
+                required[i] = Interval(Variable::make(Int(32), prefix + ".min"),
+                                       Variable::make(Int(32), prefix + ".max"));
+            }
+            merge_boxes(b, required);
+        }
+        return b;
+    }
+
     void visit(const Realize *op) {
         map<string, Function>::const_iterator iter = env.find(op->name);
         internal_assert(iter != env.end());
         Function f = iter->second;
         const vector<string> f_args = f.args();
 
-        Scope<Interval> empty_scope;
-        Box b = box_touched(op->body, op->name, empty_scope, func_bounds);
-        if (touched_by_extern.count(f.name())) {
-            // The region touched is at least the region required at this
-            // loop level of the first stage (this is important for inputs
-            // and outputs to extern stages).
-            Box required(op->bounds.size());
-            for (size_t i = 0; i < required.size(); i++) {
-                string prefix = op->name + ".s0." + f_args[i];
-                required[i] = Interval(Variable::make(Int(32), prefix + ".min"),
-                                       Variable::make(Int(32), prefix + ".max"));
-            }
+        Box b = box_touched_with_externs(op->body, f);
 
-            merge_boxes(b, required);
+        // If other Funcs are store_with this Func, we need to expand
+        // the region allocated to include those too.
+        for (const auto &p : env) {
+            Function child(p.second);
+            if (child.schedule().store_with() == f.name()) {
+                Box child_box = box_touched_with_externs(op->body, child);
+                merge_boxes(b, child_box);
+            }
         }
 
         Stmt new_body = mutate(op->body);
@@ -141,6 +155,7 @@ public:
         }
     }
 };
+
 
 Stmt allocation_bounds_inference(Stmt s,
                                  const map<string, Function> &env,

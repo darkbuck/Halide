@@ -1132,7 +1132,7 @@ Stage Stage::specialize(Expr condition) {
     }
 
     // Can't add any more specializations after specialize_fail().
-    user_assert(specializations.empty() || specializations.back().failure_message.empty()) 
+    user_assert(specializations.empty() || specializations.back().failure_message.empty())
         << "Cannot add new specializations after specialize_fail().";
     const Specialization &s = definition.add_specialization(condition);
 
@@ -1142,7 +1142,7 @@ Stage Stage::specialize(Expr condition) {
 void Stage::specialize_fail(const std::string &message) {
     user_assert(!message.empty()) << "Argument passed to specialize_fail() must not be empty.\n";
     const vector<Specialization> &specializations = definition.specializations();
-    user_assert(specializations.empty() || specializations.back().failure_message.empty()) 
+    user_assert(specializations.empty() || specializations.back().failure_message.empty())
         << "Only one specialize_fail() may be defined per Stage.";
     (void) definition.add_specialization(const_true());
     Specialization &s = definition.specializations().back();
@@ -2334,6 +2334,12 @@ Func &Func::store_at(Func f, Var var) {
 
 Func &Func::store_root() {
     return store_at(LoopLevel::root());
+}
+
+Func &Func::store_with(const Func &target) {
+    invalidate_cache();
+    func.schedule().store_with() = target.name();
+    return *this;
 }
 
 Func &Func::compute_inline() {

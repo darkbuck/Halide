@@ -109,11 +109,13 @@ private:
 
         realizations.pop(op->name);
 
+        auto iter = env.find(op->name);
+        internal_assert(iter != env.end()) << "Realize node refers to function not in environment.\n";
+        Function f = iter->second.first;
+        const int tuple_idx = iter->second.second;
+
         vector<int> storage_permutation;
         {
-            auto iter = env.find(op->name);
-            internal_assert(iter != env.end()) << "Realize node refers to function not in environment.\n";
-            Function f = iter->second.first;
             const vector<StorageDim> &storage_dims = f.schedule().storage_dims();
             const vector<string> &args = f.args();
             for (size_t i = 0; i < storage_dims.size(); i++) {
@@ -151,33 +153,80 @@ private:
             stride_var[i] = Variable::make(Int(32), stride_name[i]);
         }
 
-        // Create a buffer_t object for this allocation.
-        BufferBuilder builder;
-        builder.host = Variable::make(Handle(), op->name);
-        builder.type = op->types[0];
-        builder.dimensions = dims;
-        for (int i = 0; i < dims; i++) {
-            builder.mins.push_back(min_var[i]);
-            builder.extents.push_back(extent_var[i]);
-            builder.strides.push_back(stride_var[i]);
-        }
-        stmt = LetStmt::make(op->name + ".buffer", builder.build(), stmt);
+        string parent = f.schedule().store_with();
 
-        // Make the allocation node
-        stmt = Allocate::make(op->name, op->types[0], extents, condition, stmt);
+        if (parent.empty()) {
+            // This is an independent realization (the common case)
 
-        // Compute the strides
-        for (int i = (int)op->bounds.size()-1; i > 0; i--) {
-            int prev_j = storage_permutation[i-1];
-            int j = storage_permutation[i];
-            Expr stride = stride_var[prev_j] * extent_var[prev_j];
-            stmt = LetStmt::make(stride_name[j], stride, stmt);
-        }
+            // Create a buffer_t object for this allocation.
+            BufferBuilder builder;
+            builder.host = Variable::make(Handle(), op->name);
+            builder.type = op->types[0];
+            builder.dimensions = dims;
+            for (int i = 0; i < dims; i++) {
+                builder.mins.push_back(min_var[i]);
+                builder.extents.push_back(extent_var[i]);
+                builder.strides.push_back(stride_var[i]);
+            }
+            stmt = LetStmt::make(op->name + ".buffer", builder.build(), stmt);
 
-        // Innermost stride is one
-        if (dims > 0) {
-            int innermost = storage_permutation.empty() ? 0 : storage_permutation[0];
-            stmt = LetStmt::make(stride_name[innermost], 1, stmt);
+            // Make the allocation node
+            stmt = Allocate::make(op->name, op->types[0], extents, condition, stmt);
+
+            // Compute the strides
+            for (int i = (int)op->bounds.size()-1; i > 0; i--) {
+                int prev_j = storage_permutation[i-1];
+                int j = storage_permutation[i];
+                Expr stride = stride_var[prev_j] * extent_var[prev_j];
+                stmt = LetStmt::make(stride_name[j], stride, stmt);
+            }
+
+            // Innermost stride is one
+            if (dims > 0) {
+                int innermost = storage_permutation.empty() ? 0 : storage_permutation[0];
+                stmt = LetStmt::make(stride_name[innermost], 1, stmt);
+            }
+
+        } else {
+            // This is an alias of another containing realization (due to use of Func::store_with)
+
+            // Add the tuple component suffix to the parent name
+            if (f.outputs() > 1) {
+                parent += '.' + std::to_string(tuple_idx);
+            }
+
+            // Make the allocation node
+            Expr buf = Variable::make(type_of<struct halide_buffer_t *>(), op->name + ".buffer");
+            Expr host = Call::make(Handle(), Call::buffer_get_host, {buf}, Call::Extern);
+            stmt = Allocate::make(op->name, op->types[0], extents, condition, stmt, host, "halide_device_host_nop_free");
+            // TODO: where does the device allocation get freed
+
+            // Create a buffer_t object for this allocation using crop_buffer
+            Expr src_buffer = Variable::make(type_of<struct halide_buffer_t *>(), parent + ".buffer");
+
+            Expr alloca_size = Call::make(Int(32), Call::size_of_halide_buffer_t, {}, Call::Intrinsic);
+            Expr output_buffer_t = Call::make(type_of<struct halide_buffer_t *>(), Call::alloca,
+                                              {alloca_size}, Call::Intrinsic);
+
+            vector<Expr> args(5);
+            args[0] = output_buffer_t;
+            args[1] = Call::make(type_of<struct halide_dimension_t *>(), Call::alloca,
+                                 {(int)sizeof(halide_dimension_t) * f.dimensions()}, Call::Intrinsic);
+            args[2] = src_buffer;
+            args[3] = Call::make(type_of<int *>(), Call::make_struct, min_var, Call::Intrinsic);
+            args[4] = Call::make(type_of<int *>(), Call::make_struct, extent_var, Call::Intrinsic);
+
+            output_buffer_t = Call::make(type_of<struct halide_buffer_t *>(), Call::buffer_crop, args, Call::Extern);
+            stmt = LetStmt::make(op->name + ".buffer", output_buffer_t, stmt);
+
+            // Use the parent strides (We could also get the strides
+            // from the buffer, but that would result in less constant
+            // propagation)
+            for (size_t i = op->bounds.size(); i > 0; i--) {
+                Expr parent_stride =
+                    Variable::make(Int(32), parent + ".stride." + std::to_string(i-1));
+                stmt = LetStmt::make(stride_name[i-1], parent_stride, stmt);
+            }
         }
 
         // Assign the mins and extents stored

@@ -37,7 +37,7 @@ EXPORT void destroy<LoopLevelContents>(const LoopLevelContents *p) {
 
 }  // namespace Internal
 
-LoopLevel::LoopLevel(const std::string &func_name, const std::string &var_name, bool is_rvar) 
+LoopLevel::LoopLevel(const std::string &func_name, const std::string &var_name, bool is_rvar)
     : contents(new Internal::LoopLevelContents(func_name, var_name, is_rvar)) {}
 
 LoopLevel::LoopLevel(Internal::Function f, VarOrRVar v) : LoopLevel(f.name(), v.name(), v.is_rvar) {}
@@ -107,7 +107,7 @@ bool LoopLevel::match(const LoopLevel &other) const {
 
 bool LoopLevel::operator==(const LoopLevel &other) const {
     return defined() == other.defined() &&
-           contents->func_name == other.contents->func_name && 
+           contents->func_name == other.contents->func_name &&
            contents->var_name == other.contents->var_name;
 }
 
@@ -125,6 +125,7 @@ struct ScheduleContents {
     mutable RefCount ref_count;
 
     LoopLevel store_level, compute_level;
+    std::string store_with;
     std::vector<ReductionVariable> rvars;
     std::vector<Split> splits;
     std::vector<Dim> dims;
@@ -136,8 +137,12 @@ struct ScheduleContents {
     bool touched;
     bool allow_race_conditions;
 
-    ScheduleContents() : store_level(LoopLevel::inlined()), compute_level(LoopLevel::inlined()), 
-    memoized(false), touched(false), allow_race_conditions(false) {};
+    ScheduleContents() :
+        store_level(LoopLevel::inlined()),
+        compute_level(LoopLevel::inlined()),
+        memoized(false),
+        touched(false),
+        allow_race_conditions(false) {};
 
     // Pass an IRMutator through to all Exprs referenced in the ScheduleContents
     void mutate(IRMutator *mutator) {
@@ -196,6 +201,7 @@ Schedule Schedule::deep_copy(
     Schedule copy;
     copy.contents->store_level = contents->store_level;
     copy.contents->compute_level = contents->compute_level;
+    copy.contents->store_with = contents->store_with;
     copy.contents->rvars = contents->rvars;
     copy.contents->splits = contents->splits;
     copy.contents->dims = contents->dims;
@@ -321,6 +327,14 @@ const LoopLevel &Schedule::store_level() const {
 
 const LoopLevel &Schedule::compute_level() const {
     return contents->compute_level;
+}
+
+const std::string &Schedule::store_with() const {
+    return contents->store_with;
+}
+
+std::string &Schedule::store_with() {
+    return contents->store_with;
 }
 
 bool &Schedule::allow_race_conditions() {
