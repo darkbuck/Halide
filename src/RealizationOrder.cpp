@@ -107,7 +107,7 @@ void collect_fused_pairs(const string &fn, size_t stage,
                          const map<string, map<string, Function>> &indirect_calls,
                          const vector<FusedPair> &pairs,
                          vector<FusedPair> &func_fused_pairs,
-                         map<string, set<string>> &graph,
+                         vector<pair<string, vector<string>>> &graph,
                          map<string, set<string>> &fuse_adjacency_list) {
     for (const auto &p : pairs) {
         internal_assert((p.func_1 == fn) && (p.stage_1 == stage));
@@ -157,18 +157,23 @@ void collect_fused_pairs(const string &fn, size_t stage,
         fuse_adjacency_list[p.func_2].insert(p.func_1);
 
         func_fused_pairs.push_back(p);
-        graph[p.func_1].insert(p.func_2);
+
+        auto iter = std::find_if(graph.begin(), graph.end(),
+            [&p](const pair<string, vector<string>> &s) { return (s.first == p.func_1); });
+        internal_assert(iter != graph.end());
+        iter->second.push_back(p.func_2);
     }
 }
 
 void realization_order_dfs(string current,
-                           const map<string, set<string>> &graph,
+                           const vector<pair<string, vector<string>>> &graph,
                            set<string> &visited,
                            set<string> &result_set,
                            vector<string> &order) {
     visited.insert(current);
 
-    map<string, set<string>>::const_iterator iter = graph.find(current);
+    const auto iter = std::find_if(graph.begin(), graph.end(),
+        [&current](const pair<string, vector<string>> &p) { return (p.first == current); });
     internal_assert(iter != graph.end());
 
     for (const string &fn : iter->second) {
@@ -233,7 +238,7 @@ pair<vector<string>, vector<vector<string>>> realization_order(
 
     // Make a DAG representing the pipeline. Each function maps to the
     // set describing its inputs.
-    map<string, set<string>> graph;
+    vector<pair<string, vector<string>>> graph;
 
     // Make a directed and non-directed graph representing the compute_with
     // dependencies between functions. Each function maps to the list of Functions
@@ -242,10 +247,13 @@ pair<vector<string>, vector<vector<string>>> realization_order(
     map<string, set<string>> fuse_adjacency_list;
 
     for (const pair<string, Function> &caller : env) {
-        set<string> &s = graph[caller.first];
+        vector<string> s;
         for (const pair<string, Function> &callee : find_direct_calls(caller.second)) {
-            s.insert(callee.first);
+            if (std::find(s.begin(), s.end(), callee.first) == s.end()) {
+                s.push_back(callee.first);
+            }
         }
+        graph.push_back({caller.first, s});
 
         // Find all compute_with (fused) pairs. We have to look at the update
         // definitions as well since compute_with is defined per definition (stage).
