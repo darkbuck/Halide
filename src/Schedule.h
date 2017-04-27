@@ -13,11 +13,14 @@
 namespace Halide {
 
 class Func;
+template <typename T> class ScheduleParam;
 struct VarOrRVar;
 
 namespace Internal {
 class Function;
 struct FunctionContents;
+struct LoopLevelContents;
+class ScheduleParamBase;
 }  // namespace Internal
 
 /** Different ways to handle a tail case in a split when the
@@ -113,18 +116,18 @@ enum class PrefetchBoundStrategy {
  * stage (initial definition or updates).
  */
 class LoopLevel {
-    // Note: func_name is "" for inline or root.
-    std::string func_name;
-    // If set to -1, this loop level does not refer to a particular stage of the
-    // function. 0 refers to initial stage, 1 refers to the 1st update stage, etc.
-    int stage_index;
-    // TODO: these two fields should really be VarOrRVar,
-    // but cyclical include dependencies make this challenging.
-    std::string var_name;
-    bool is_rvar;
+    template <typename T> friend class ScheduleParam;
+    friend class ::Halide::Internal::ScheduleParamBase;
 
-    EXPORT LoopLevel(const std::string &func_name, const std::string &var_name,
-                     bool is_rvar, int stage);
+    Internal::IntrusivePtr<Internal::LoopLevelContents> contents;
+
+    explicit LoopLevel(Internal::IntrusivePtr<Internal::LoopLevelContents> c) : contents(c) {}
+    EXPORT LoopLevel(const std::string &func_name, const std::string &var_name, bool is_rvar, int stage);
+
+    /** Mutate our contents to match the contents of 'other'. This is a potentially
+     * dangerous operation to do if you aren't careful, and exists solely to make
+     * ScheduleParam<LoopLevel> easy to implement; hence its private status. */
+    EXPORT void copy_from(const LoopLevel &other);
 
 public:
     /** Return the function stage associated with this loop level.
@@ -137,16 +140,22 @@ public:
     EXPORT LoopLevel(Func f, VarOrRVar v, int stage = -1);
     // @}
 
-    /** Construct an empty LoopLevel, which is interpreted as
-     * 'inline'. This is a special LoopLevel value that implies
-     * that a function should be inlined away */
-    LoopLevel() : func_name(""), stage_index(-1), var_name(""), is_rvar(false) {}
+    /** Construct an undefined LoopLevel. Calling any method on an undefined
+     * LoopLevel (other than defined() or operator==) will assert. */
+    LoopLevel() = default;
+
+    /** Return true iff the LoopLevel is defined. */
+    EXPORT bool defined() const;
 
     /** Return the Func name. Asserts if the LoopLevel is_root() or is_inline(). */
     EXPORT std::string func() const;
 
     /** Return the VarOrRVar. Asserts if the LoopLevel is_root() or is_inline(). */
     EXPORT VarOrRVar var() const;
+
+    /** inlined is a special LoopLevel value that implies
+     * that a function should be inlined away. */
+    EXPORT static LoopLevel inlined();
 
     /** Test if a loop level corresponds to inlining the function */
     EXPORT bool is_inline() const;
@@ -179,6 +188,10 @@ public:
 struct FuseLoopLevel {
     LoopLevel level;
     std::map<std::string, AlignStrategy> align;
+
+    FuseLoopLevel() : level(LoopLevel::inlined()) {}
+    FuseLoopLevel(const LoopLevel &level, const std::map<std::string, AlignStrategy> &align)
+        : level(level), align(align) {}
 };
 
 namespace Internal {

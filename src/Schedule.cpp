@@ -7,31 +7,84 @@
 
 namespace Halide {
 
-LoopLevel::LoopLevel(const std::string &func_name,
-                     const std::string &var_name,
-                     bool is_rvar,
-                     int stage)
-    : func_name(func_name), stage_index(stage), var_name(var_name), is_rvar(is_rvar) {}
+namespace Internal {
+
+struct LoopLevelContents {
+    mutable RefCount ref_count;
+
+    // Note: func_name is "" for inline or root.
+    std::string func_name;
+    // If set to -1, this loop level does not refer to a particular stage of the
+    // function. 0 refers to initial stage, 1 refers to the 1st update stage, etc.
+    int stage;
+    // TODO: these two fields should really be VarOrRVar,
+    // but cyclical include dependencies make this challenging.
+    std::string var_name;
+    bool is_rvar;
+
+    LoopLevelContents(const std::string &func_name,
+                      const std::string &var_name,
+                      bool is_rvar,
+                      int stage)
+    : func_name(func_name), stage(stage), var_name(var_name), is_rvar(is_rvar) {}
+};
+
+template<>
+EXPORT RefCount &ref_count<LoopLevelContents>(const LoopLevelContents *p) {
+    return p->ref_count;
+}
+
+template<>
+EXPORT void destroy<LoopLevelContents>(const LoopLevelContents *p) {
+    delete p;
+}
+
+}  // namespace Internal
+
+LoopLevel::LoopLevel(const std::string &func_name, const std::string &var_name, bool is_rvar, int stage)
+    : contents(new Internal::LoopLevelContents(func_name, var_name, is_rvar, stage)) {}
+
 LoopLevel::LoopLevel(Internal::Function f, VarOrRVar v, int stage) : LoopLevel(f.name(), v.name(), v.is_rvar, stage) {}
+
 LoopLevel::LoopLevel(Func f, VarOrRVar v, int stage) : LoopLevel(f.function().name(), v.name(), v.is_rvar, stage) {}
 
+void LoopLevel::copy_from(const LoopLevel &other) {
+    internal_assert(defined());
+    contents->func_name = other.contents->func_name;
+    contents->stage = other.contents->stage;
+    contents->var_name = other.contents->var_name;
+    contents->is_rvar = other.contents->is_rvar;
+}
+
+bool LoopLevel::defined() const {
+    return contents.defined();
+}
+
 std::string LoopLevel::func() const {
-    internal_assert(!is_inline() && !is_root());
-    return func_name;
+    internal_assert(defined());
+    return contents->func_name;
 }
 
 int LoopLevel::stage() const {
-    internal_assert(stage_index >= 0);
-    return stage_index;
+    internal_assert(defined());
+    internal_assert(contents->stage >= 0);
+    return contents->stage;
 }
 
 VarOrRVar LoopLevel::var() const {
+    internal_assert(defined());
     internal_assert(!is_inline() && !is_root());
-    return VarOrRVar(var_name, is_rvar);
+    return VarOrRVar(contents->var_name, contents->is_rvar);
+}
+
+/*static*/
+LoopLevel LoopLevel::inlined() {
+    return LoopLevel("", "", false, -1);
 }
 
 bool LoopLevel::is_inline() const {
-    return var_name.empty();
+    internal_assert(defined());
+    return contents->var_name.empty();
 }
 
 /*static*/
@@ -40,40 +93,44 @@ LoopLevel LoopLevel::root() {
 }
 
 bool LoopLevel::is_root() const {
-    return var_name == "__root";
+    internal_assert(defined());
+    return contents->var_name == "__root";
 }
 
 std::string LoopLevel::to_string() const {
-    if (stage_index == -1) {
-        return func_name + "." + var_name;
+    internal_assert(defined());
+    if (contents->stage == -1) {
+        return contents->func_name + "." + contents->var_name;
     } else {
-        return func_name + ".s" + std::to_string(stage_index) + "." + var_name;
+        return contents->func_name + ".s" + std::to_string(contents->stage) + "." + contents->var_name;
     }
 }
 
 bool LoopLevel::match(const std::string &loop) const {
-    if (stage_index == -1) {
-        return Internal::starts_with(loop, func_name + ".") &&
-               Internal::ends_with(loop, "." + var_name);
+    internal_assert(defined());
+    if (contents->stage == -1) {
+        return Internal::starts_with(loop, contents->func_name + ".") &&
+               Internal::ends_with(loop, "." + contents->var_name);
     } else {
-        return Internal::starts_with(loop, func_name + ".s" + std::to_string(stage_index)) &&
-               Internal::ends_with(loop, "." + var_name);
+        return Internal::starts_with(loop, contents->func_name + ".s" + std::to_string(contents->stage)) &&
+               Internal::ends_with(loop, "." + contents->var_name);
     }
 }
 
 bool LoopLevel::match(const LoopLevel &other) const {
-    return (func_name == other.func_name &&
-            (var_name == other.var_name ||
-             Internal::ends_with(var_name, "." + other.var_name) ||
-             Internal::ends_with(other.var_name, "." + var_name)) &&
-            (stage_index == other.stage_index));
+    internal_assert(defined());
+    return (contents->func_name == other.contents->func_name &&
+            (contents->var_name == other.contents->var_name ||
+             Internal::ends_with(contents->var_name, "." + other.contents->var_name) ||
+             Internal::ends_with(other.contents->var_name, "." + contents->var_name)) &&
+            (contents->stage == other.contents->stage));
 }
 
 bool LoopLevel::operator==(const LoopLevel &other) const {
-    // Must compare by name, not by pointer, since in() can make copies
-    // that we need to consider equivalent
-    return (func_name == other.func_name) && (stage_index == other.stage_index) &&
-           (var_name == other.var_name);
+    return (defined() == other.defined()) &&
+           (contents->func_name == other.contents->func_name) &&
+           (contents->stage == other.contents->stage) &&
+           (contents->var_name == other.contents->var_name);
 }
 
 namespace Internal {
@@ -103,7 +160,8 @@ struct ScheduleContents {
     bool touched;
     bool allow_race_conditions;
 
-    ScheduleContents() : memoized(false), touched(false), allow_race_conditions(false) {};
+    ScheduleContents() : store_level(LoopLevel::inlined()), compute_level(LoopLevel::inlined()),
+    fuse_level(FuseLoopLevel()), memoized(false), touched(false), allow_race_conditions(false) {};
 
     // Pass an IRMutator through to all Exprs referenced in the ScheduleContents
     void mutate(IRMutator *mutator) {

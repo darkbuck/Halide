@@ -98,7 +98,7 @@ public:
 
     /** Calling rfactor() on an associative update definition a Func will split
      * the update into an intermediate which computes the partial results and
-     * replace the current update definition with a new definition which merges
+     * replaces the current update definition with a new definition which merges
      * the partial results. If called on a init/pure definition, this will
      * throw an error. rfactor() will automatically infer the associative reduction
      * operator and identity of the operator. If it can't prove the operation
@@ -113,8 +113,8 @@ public:
      * 'preserved') are made pure in the intermediate Func. The intermediate Func's
      * update definition inherits all scheduling directives (e.g. split,fuse, etc.)
      * applied to the original Func's update definition. The loop order of the
-     * intermediate Func's update definition is the same as the original, albeit
-     * the lifted RVars are replaced by the new pure Vars. The loop order of the
+     * intermediate Func's update definition is the same as the original, although
+     * the RVars in 'preserved' are replaced by the new pure Vars. The loop order of the
      * intermediate Func's init definition from innermost to outermost is the args'
      * order of the original Func's init definition followed by the new pure Vars.
      *
@@ -302,6 +302,7 @@ public:
 
     EXPORT Stage &rename(VarOrRVar old_name, VarOrRVar new_name);
     EXPORT Stage specialize(Expr condition);
+    EXPORT void specialize_fail(const std::string &message);
 
     EXPORT Stage &gpu_threads(VarOrRVar thread_x, DeviceAPI device_api = DeviceAPI::Default_GPU);
     EXPORT Stage &gpu_threads(VarOrRVar thread_x, VarOrRVar thread_y, DeviceAPI device_api = DeviceAPI::Default_GPU);
@@ -367,16 +368,16 @@ public:
     // If we mark these as deprecated, some build environments will complain
     // about the internal-only calls. Since these are rarely used outside
     // Func itself, we'll just comment them as deprecated for now.
-    // HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.") 
+    // HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.")
     EXPORT Stage &gpu_tile(VarOrRVar x, Expr x_size,
                            TailStrategy tail = TailStrategy::Auto,
                            DeviceAPI device_api = DeviceAPI::Default_GPU);
-    // HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.") 
+    // HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.")
     EXPORT Stage &gpu_tile(VarOrRVar x, VarOrRVar y,
                            Expr x_size, Expr y_size,
                            TailStrategy tail = TailStrategy::Auto,
                            DeviceAPI device_api = DeviceAPI::Default_GPU);
-    // HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.") 
+    // HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.")
     EXPORT Stage &gpu_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
                            Expr x_size, Expr y_size, Expr z_size,
                            TailStrategy tail = TailStrategy::Auto,
@@ -1487,6 +1488,48 @@ public:
      */
     EXPORT Stage specialize(Expr condition);
 
+    /** Add a specialization to a Func that always terminates execution
+     * with a call to halide_error(). By itself, this is of limited use,
+     * but can be useful to terminate chains of specialize() calls where
+     * no "default" case is expected (thus avoiding unnecessary code generation).
+     *
+     * For instance, say we want to optimize a pipeline to process images
+     * in planar and interleaved format; we might typically do something like:
+     \code
+     ImageParam im(UInt(8), 3);
+     Func f = do_something_with(im);
+     f.specialize(im.dim(0).stride() == 1).vectorize(x, 8);  // planar
+     f.specialize(im.dim(2).stride() == 1).reorder(c, x, y).vectorize(c);  // interleaved
+     \endcode
+     * This code will vectorize along rows for the planar case, and across pixel
+     * components for the interleaved case... but there is an implicit "else"
+     * for the unhandled cases, which generates unoptimized code. If we never
+     * anticipate passing any other sort of images to this, we code streamline
+     * our code by adding specialize_fail():
+     \code
+     ImageParam im(UInt(8), 3);
+     Func f = do_something(im);
+     f.specialize(im.dim(0).stride() == 1).vectorize(x, 8);  // planar
+     f.specialize(im.dim(2).stride() == 1).reorder(c, x, y).vectorize(c);  // interleaved
+     f.specialize_fail("Unhandled image format");
+     \endcode
+     * Conceptually, this produces codes like:
+     \code
+     if (im.dim(0).stride() == 1) {
+        do_something_planar();
+     } else if (im.dim(2).stride() == 1) {
+        do_something_interleaved();
+     } else {
+        halide_error("Unhandled image format");
+     }
+     \endcode
+     *
+     * Note that calling specialize_fail() terminates the specialization chain
+     * for a given Func; you cannot create new specializations for the Func
+     * afterwards (though you can retrieve handles to previous specializations).
+     */
+    EXPORT void specialize_fail(const std::string &message);
+
     /** Tell Halide that the following dimensions correspond to GPU
      * thread indices. This is useful if you compute a producer
      * function within the block indices of a consumer function, and
@@ -1573,15 +1616,15 @@ public:
                           TailStrategy tail = TailStrategy::Auto,
                           DeviceAPI device_api = DeviceAPI::Default_GPU);
 
-    HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.") 
+    HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.")
     EXPORT Func &gpu_tile(VarOrRVar x, Expr x_size,
                           TailStrategy tail = TailStrategy::Auto,
                           DeviceAPI device_api = DeviceAPI::Default_GPU);
-    HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.") 
+    HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.")
     EXPORT Func &gpu_tile(VarOrRVar x, VarOrRVar y, Expr x_size, Expr y_size,
                           TailStrategy tail = TailStrategy::Auto,
                           DeviceAPI device_api = DeviceAPI::Default_GPU);
-    HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.") 
+    HALIDE_ATTRIBUTE_DEPRECATED("This form of gpu_tile() is deprecated.")
     EXPORT Func &gpu_tile(VarOrRVar x, VarOrRVar y, VarOrRVar z,
                           Expr x_size, Expr y_size, Expr z_size,
                           TailStrategy tail = TailStrategy::Auto,

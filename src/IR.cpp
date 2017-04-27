@@ -530,12 +530,17 @@ Expr Call::make(Function func, const std::vector<Expr> &args, int idx) {
         << "Value index out of range in call to halide function\n";
     internal_assert(func.has_pure_definition() || func.has_extern_definition())
         << "Call to undefined halide function\n";
-    return make(func.output_types()[(size_t)idx], func.name(), args, Halide, func.get_contents(), idx, Buffer<>(), Parameter());
+    return make(func.output_types()[(size_t)idx], func.name(), args, Halide,
+                func.get_contents(), idx, Buffer<>(), Parameter());
 }
 
 Expr Call::make(Type type, const std::string &name, const std::vector<Expr> &args, CallType call_type,
                 IntrusivePtr<FunctionContents> func, int value_index,
                 Buffer<> image, Parameter param) {
+    if (name == Call::prefetch && call_type == Call::Intrinsic) {
+        internal_assert(args.size() % 2 == 0)
+            << "Number of args to a prefetch call should be even: {base, offset, extent0, min0, ...}\n";
+    }
     for (size_t i = 0; i < args.size(); i++) {
         internal_assert(args[i].defined()) << "Call of undefined\n";
     }
@@ -787,7 +792,6 @@ Call::ConstString Call::popcount = "popcount";
 Call::ConstString Call::count_leading_zeros = "count_leading_zeros";
 Call::ConstString Call::count_trailing_zeros = "count_trailing_zeros";
 Call::ConstString Call::undef = "undef";
-Call::ConstString Call::address_of = "address_of";
 Call::ConstString Call::return_second = "return_second";
 Call::ConstString Call::if_then_else = "if_then_else";
 Call::ConstString Call::glsl_texture_load = "glsl_texture_load";
@@ -799,7 +803,6 @@ Call::ConstString Call::make_struct = "make_struct";
 Call::ConstString Call::stringify = "stringify";
 Call::ConstString Call::memoize_expr = "memoize_expr";
 Call::ConstString Call::alloca = "alloca";
-Call::ConstString Call::copy_memory = "copy_memory";
 Call::ConstString Call::likely = "likely";
 Call::ConstString Call::likely_if_innermost = "likely_if_innermost";
 Call::ConstString Call::register_destructor = "register_destructor";
@@ -813,8 +816,11 @@ Call::ConstString Call::bool_to_mask = "bool_to_mask";
 Call::ConstString Call::cast_mask = "cast_mask";
 Call::ConstString Call::select_mask = "select_mask";
 Call::ConstString Call::extract_mask_element = "extract_mask_element";
+Call::ConstString Call::size_of_halide_buffer_t = "size_of_halide_buffer_t";
 
 Call::ConstString Call::buffer_get_min = "_halide_buffer_get_min";
+Call::ConstString Call::buffer_get_extent = "_halide_buffer_get_extent";
+Call::ConstString Call::buffer_get_stride = "_halide_buffer_get_stride";
 Call::ConstString Call::buffer_get_max = "_halide_buffer_get_max";
 Call::ConstString Call::buffer_get_host = "_halide_buffer_get_host";
 Call::ConstString Call::buffer_get_device = "_halide_buffer_get_device";
@@ -822,6 +828,9 @@ Call::ConstString Call::buffer_get_device_interface = "_halide_buffer_get_device
 Call::ConstString Call::buffer_get_shape = "_halide_buffer_get_shape";
 Call::ConstString Call::buffer_get_host_dirty = "_halide_buffer_get_host_dirty";
 Call::ConstString Call::buffer_get_device_dirty = "_halide_buffer_get_device_dirty";
+Call::ConstString Call::buffer_get_type_code = "_halide_buffer_get_type_code";
+Call::ConstString Call::buffer_get_type_bits = "_halide_buffer_get_type_bits";
+Call::ConstString Call::buffer_get_type_lanes = "_halide_buffer_get_type_lanes";
 Call::ConstString Call::buffer_set_host_dirty = "_halide_buffer_set_host_dirty";
 Call::ConstString Call::buffer_set_device_dirty = "_halide_buffer_set_device_dirty";
 Call::ConstString Call::buffer_is_bounds_query = "_halide_buffer_is_bounds_query";

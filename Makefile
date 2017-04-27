@@ -268,6 +268,7 @@ SOURCE_FILES = \
   AlignLoads.cpp \
   AllocationBoundsInference.cpp \
   ApplySplit.cpp \
+  AssociativeOpsTable.cpp \
   Associativity.cpp \
   BoundaryConditions.cpp \
   Bounds.cpp \
@@ -294,6 +295,7 @@ SOURCE_FILES = \
   CSE.cpp \
   CanonicalizeGPUVars.cpp \
   Debug.cpp \
+  DebugArguments.cpp \
   DebugToFile.cpp \
   DeepCopy.cpp \
   Definition.cpp \
@@ -301,6 +303,7 @@ SOURCE_FILES = \
   DeviceArgument.cpp \
   DeviceInterface.cpp \
   EarlyFree.cpp \
+  Elf.cpp \
   EliminateBoolVectors.cpp \
   Error.cpp \
   FastIntegerDivide.cpp \
@@ -314,13 +317,14 @@ SOURCE_FILES = \
   HexagonOffload.cpp \
   HexagonOptimize.cpp \
   ImageParam.cpp \
-  Interval.cpp \
+  InferArguments.cpp \
   InjectHostDevBufferCopies.cpp \
   InjectImageIntrinsics.cpp \
   InjectOpenGLIntrinsics.cpp \
   Inline.cpp \
   InlineReductions.cpp \
   IntegerDivisionTable.cpp \
+  Interval.cpp \
   Introspection.cpp \
   IR.cpp \
   IREquality.cpp \
@@ -359,6 +363,7 @@ SOURCE_FILES = \
   RemoveUndef.cpp \
   Schedule.cpp \
   ScheduleFunctions.cpp \
+  ScheduleParam.cpp \
   SelectGPUAPI.cpp \
   Simplify.cpp \
   SimplifySpecializations.cpp \
@@ -377,6 +382,7 @@ SOURCE_FILES = \
   Type.cpp \
   UnifyDuplicateLets.cpp \
   UniquifyVariableNames.cpp \
+  UnpackBuffers.cpp \
   UnrollLoops.cpp \
   Util.cpp \
   Var.cpp \
@@ -393,6 +399,7 @@ HEADER_FILES = \
   AllocationBoundsInference.h \
   ApplySplit.h \
   Argument.h \
+  AssociativeOpsTable.h \
   Associativity.h \
   BoundaryConditions.h \
   Bounds.h \
@@ -418,6 +425,7 @@ HEADER_FILES = \
   CSE.h \
   CanonicalizeGPUVars.h \
   Debug.h \
+  DebugArguments.h \
   DebugToFile.h \
   DeepCopy.h \
   Definition.h \
@@ -425,6 +433,7 @@ HEADER_FILES = \
   DeviceArgument.h \
   DeviceInterface.h \
   EarlyFree.h \
+  Elf.h \
   EliminateBoolVectors.h \
   Error.h \
   Expr.h \
@@ -443,13 +452,14 @@ HEADER_FILES = \
   runtime/HalideRuntime.h \
   runtime/HalideBuffer.h \
   ImageParam.h \
-  Interval.h \
+  InferArguments.h \
   InjectHostDevBufferCopies.h \
   InjectImageIntrinsics.h \
   InjectOpenGLIntrinsics.h \
   Inline.h \
   InlineReductions.h \
   IntegerDivisionTable.h \
+  Interval.h \
   Introspection.h \
   IntrusivePtr.h \
   IREquality.h \
@@ -492,6 +502,7 @@ HEADER_FILES = \
   RemoveUndef.h \
   Schedule.h \
   ScheduleFunctions.h \
+  ScheduleParam.h \
   Scope.h \
   SelectGPUAPI.h \
   Simplify.h \
@@ -512,6 +523,7 @@ HEADER_FILES = \
   Type.h \
   UnifyDuplicateLets.h \
   UniquifyVariableNames.h \
+  UnpackBuffers.h \
   UnrollLoops.h \
   Util.h \
   Var.h \
@@ -740,17 +752,17 @@ $(BUILD_DIR)/initmod.%.bc: $(BUILD_DIR)/initmod.%.ll $(BUILD_DIR)/llvm_ok
 	$(LLVM_AS) $(BUILD_DIR)/initmod.$*.ll -o $(BUILD_DIR)/initmod.$*.bc
 
 $(BUILD_DIR)/initmod.%.cpp: $(BIN_DIR)/binary2cpp $(BUILD_DIR)/initmod.%.bc
-	./$(BIN_DIR)/binary2cpp initmod_$* < $(BUILD_DIR)/initmod.$*.bc > $@
+	./$(BIN_DIR)/binary2cpp halide_internal_initmod_$* < $(BUILD_DIR)/initmod.$*.bc > $@
 
 $(BUILD_DIR)/initmod.%_h.cpp: $(BIN_DIR)/binary2cpp $(SRC_DIR)/runtime/%.h
-	./$(BIN_DIR)/binary2cpp runtime_header_$*_h < $(SRC_DIR)/runtime/$*.h > $@
+	./$(BIN_DIR)/binary2cpp halide_internal_runtime_header_$*_h < $(SRC_DIR)/runtime/$*.h > $@
 
 # Any c in the runtime that must be inlined needs to be copy-pasted into the output for the C backend.
 $(BUILD_DIR)/initmod.inlined_c.cpp: $(BIN_DIR)/binary2cpp $(SRC_DIR)/runtime/buffer_t.cpp
-	./$(BIN_DIR)/binary2cpp initmod_inlined_c < $(SRC_DIR)/runtime/buffer_t.cpp > $@
+	./$(BIN_DIR)/binary2cpp halide_internal_initmod_inlined_c < $(SRC_DIR)/runtime/buffer_t.cpp > $@
 
 $(BUILD_DIR)/initmod_ptx.%_ll.cpp: $(BIN_DIR)/binary2cpp $(SRC_DIR)/runtime/nvidia_libdevice_bitcode/libdevice.%.bc
-	./$(BIN_DIR)/binary2cpp initmod_ptx_$(basename $*)_ll < $(SRC_DIR)/runtime/nvidia_libdevice_bitcode/libdevice.$*.bc > $@
+	./$(BIN_DIR)/binary2cpp halide_internal_initmod_ptx_$(basename $*)_ll < $(SRC_DIR)/runtime/nvidia_libdevice_bitcode/libdevice.$*.bc > $@
 
 $(BIN_DIR)/binary2cpp: $(ROOT_DIR)/tools/binary2cpp.cpp
 	@-mkdir -p $(BIN_DIR)
@@ -878,7 +890,7 @@ $(BIN_DIR)/correctness_halide_buffer: $(ROOT_DIR)/test/correctness/halide_buffer
 $(BIN_DIR)/correctness_image_io: $(ROOT_DIR)/test/correctness/image_io.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(RUNTIME_EXPORTED_INCLUDES)
 	$(CXX) $(TEST_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) -I$(ROOT_DIR) $(OPTIMIZE) $< -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
 
-$(BIN_DIR)/performance_%: $(ROOT_DIR)/test/performance/%.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(ROOT_DIR)/apps/support/benchmark.h
+$(BIN_DIR)/performance_%: $(ROOT_DIR)/test/performance/%.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
 	$(CXX) $(TEST_CXX_FLAGS) $(OPTIMIZE) $< -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) -o $@
 
 # Error tests that link against libHalide
@@ -903,6 +915,22 @@ $(BUILD_DIR)/%_generator.o: $(ROOT_DIR)/test/generator/%_generator.cpp $(INCLUDE
 	$(CXX) $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -I$(CURDIR)/$(FILTERS_DIR) -c $< -o $@
 
 $(BIN_DIR)/%.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/%_generator.o
+	@mkdir -p $(BIN_DIR)
+	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
+
+# It is not always possible to cross compile between 32-bit and 64-bit via the clang build as part of llvm
+# These next two rules can fail the compilationa nd produce zero length bitcode blobs.
+# If the zero length blob is actually used, the test will fail anyway, but usually only the bitness
+# of the target is used.
+$(BUILD_DIR)/external_code_extern_bitcode_32.cpp : $(ROOT_DIR)/test/generator/external_code_extern.cpp
+	$(CLANG) $(CXX_WARNING_FLAGS) -O3 -c -m32 -target $(RUNTIME_TRIPLE_32) -emit-llvm $< -o $(BUILD_DIR)/external_code_extern_32.bc || echo -n > $(BUILD_DIR)/external_code_extern_32.bc
+	./$(BIN_DIR)/binary2cpp halide_internal_external_code_extern_32 < $(BUILD_DIR)/external_code_extern_32.bc > $@
+
+$(BUILD_DIR)/external_code_extern_bitcode_64.cpp : $(ROOT_DIR)/test/generator/external_code_extern.cpp
+	$(CLANG) $(CXX_WARNING_FLAGS) -O3 -c -m64 -target $(RUNTIME_TRIPLE_64) -emit-llvm $< -o $(BUILD_DIR)/external_code_extern_64.bc || echo -n > $(BUILD_DIR)/external_code_extern_64.bc
+	./$(BIN_DIR)/binary2cpp halide_internal_external_code_extern_64 < $(BUILD_DIR)/external_code_extern_64.bc > $@
+
+$(BIN_DIR)/external_code.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/external_code_generator.o $(BUILD_DIR)/external_code_extern_bitcode_32.cpp $(BUILD_DIR)/external_code_extern_bitcode_64.cpp
 	@mkdir -p $(BIN_DIR)
 	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
 
@@ -1015,9 +1043,9 @@ $(FILTERS_DIR)/matlab.a: $(BIN_DIR)/matlab.generator
 # (1) Ensuring the extra _generator.cpp is built into the .generator.
 # (2) Ensuring the extra .a is linked into the final output.
 
-# TODO(srj): we really want to say "anything that depends on tiled_blur.a also depends on tiled_blur_blur.a";
+# TODO(srj): we really want to say "anything that depends on tiled_blur.a also depends on blur2x2.a";
 # is there a way to specify that in Make?
-$(BIN_DIR)/$(TARGET)/generator_aot_tiled_blur: $(FILTERS_DIR)/tiled_blur_blur.a
+$(BIN_DIR)/$(TARGET)/generator_aot_tiled_blur: $(FILTERS_DIR)/blur2x2.a
 $(BIN_DIR)/$(TARGET)/generator_aot_cxx_mangling: $(FILTERS_DIR)/cxx_mangling_gpu.a
 $(BIN_DIR)/$(TARGET)/generator_aot_cxx_mangling_define_extern: $(FILTERS_DIR)/cxx_mangling.a
 
@@ -1027,12 +1055,16 @@ $(BIN_DIR)/stubuser.generator: $(BUILD_DIR)/stubtest_generator.o
 # stubtest has input and output funcs with undefined types and array sizes; this is fine for stub
 # usage (the types can be inferred), but for AOT compilation, we must make the types
 # concrete via generator args.
+#
+# Also note that setting 'vectorize=true' is redundant (that's the default), but verifies
+# that setting ScheduleParam via generator_args works properly.
 STUBTEST_GENERATOR_ARGS=\
     untyped_buffer_input.type=uint8 untyped_buffer_input.dim=3 \
 	simple_input.type=float32 \
 	array_input.type=float32 array_input.size=2 \
 	int_arg.size=2 \
-	tuple_output.type=float32,float32
+	tuple_output.type=float32,float32 \
+	vectorize=true
 
 $(FILTERS_DIR)/stubtest.a: $(BIN_DIR)/stubtest.generator
 	@mkdir -p $(FILTERS_DIR)

@@ -595,12 +595,12 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     // Check whether the operator is associative and determine the operator and
     // its identity for each value in the definition if it is a Tuple
-    ProveAssociativityResult prover_result = prove_associativity(func_name, args, values);
-    vector<AssociativeOp> &ops = prover_result.ops;
-    user_assert(prover_result.is_associative)
+    const auto &prover_result = prove_associativity(func_name, args, values);
+
+    user_assert(prover_result.associative())
         << "Failed to call rfactor() on " << name()
         << " since it can't prove associativity of the operator\n";
-    internal_assert(ops.size() == values.size());
+    internal_assert(prover_result.size() == values.size());
 
     vector<Split> &splits = definition.schedule().splits();
     vector<ReductionVariable> &rvars = definition.schedule().rvars();
@@ -639,7 +639,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     // If the operator is associative but non-commutative, rfactor() on inner
     // dimensions (excluding the outer dimensions) is not valid.
-    if (!prover_result.is_commutative) {
+    if (!prover_result.commutative()) {
         int last_rvar = -1;
         for (int i = dims.size() - 1; i >= 0; --i) {
             if ((last_rvar != -1) && is_rfactored[i]) {
@@ -742,7 +742,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     vector<Expr> init_vals(values.size());
     for (size_t i = 0; i < init_vals.size(); ++i) {
-        init_vals[i] = ops[i].identity;
+        init_vals[i] = prover_result.pattern.identities[i];
     }
 
     Func intm(func_name + "_intm");
@@ -855,28 +855,34 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     // the intermediate Func.
     vector<Expr> f_values(values.size());
     if (values.size() > 1) {
+        // There might be cross-dependencies between tuple elements, so we need
+        // to collect all substitutions first.
+        map<string, Expr> replacement;
         for (size_t i = 0; i < f_values.size(); ++i) {
-            Expr prev_val = Call::make(intm.output_types()[i], func_name,
-                                       f_store_args, Call::CallType::Halide,
-                                       nullptr, i);
-            const AssociativeOp &op = ops[i];
-            Expr val = substitute(op.y.first, intm(f_load_args)[i], op.op);
-            if (!op.x.first.empty()) {
-                val = substitute(op.x.first, prev_val, val);
+            internal_assert(!prover_result.ys[i].var.empty());
+            replacement.emplace(prover_result.ys[i].var, intm(f_load_args)[i]);
+
+            if (!prover_result.xs[i].var.empty()) {
+                Expr prev_val = Call::make(intm.output_types()[i], func_name,
+                                           f_store_args, Call::CallType::Halide,
+                                           nullptr, i);
+                replacement.emplace(prover_result.xs[i].var, prev_val);
             } else {
                 user_warning << "Update definition of " << name() << " at index " << i
                              << " doesn't depend on the previous value. This isn't a"
                              << " reduction operation\n";
             }
-            f_values[i] = val;
+        }
+        for (size_t i = 0; i < f_values.size(); ++i) {
+            f_values[i] = substitute(replacement, prover_result.pattern.ops[i]);
         }
     } else {
         Expr prev_val = Call::make(intm.output_types()[0], func_name,
                                    f_store_args, Call::CallType::Halide);
-        const AssociativeOp &op = ops[0];
-        Expr val = substitute(op.y.first, intm(f_load_args), op.op);
-        if (!op.x.first.empty()) {
-            val = substitute(op.x.first, prev_val, val);
+        internal_assert(!prover_result.ys[0].var.empty());
+        Expr val = substitute(prover_result.ys[0].var, intm(f_load_args), prover_result.pattern.ops[0]);
+        if (!prover_result.xs[0].var.empty()) {
+            val = substitute(prover_result.xs[0].var, prev_val, val);
         } else {
             user_warning << "Update definition of " << name()
                          << " doesn't depend on the previous value. This isn't a"
@@ -1120,9 +1126,23 @@ Stage Stage::specialize(Expr condition) {
             return Stage(func, specializations[i].definition, stage, dim_vars);
         }
     }
+
+    // Can't add any more specializations after specialize_fail().
+    user_assert(specializations.empty() || specializations.back().failure_message.empty())
+        << "Cannot add new specializations after specialize_fail().";
     const Specialization &s = definition.add_specialization(condition);
 
     return Stage(func, s.definition, stage, dim_vars);
+}
+
+void Stage::specialize_fail(const std::string &message) {
+    user_assert(!message.empty()) << "Argument passed to specialize_fail() must not be empty.\n";
+    const vector<Specialization> &specializations = definition.specializations();
+    user_assert(specializations.empty() || specializations.back().failure_message.empty())
+        << "Only one specialize_fail() may be defined per Stage.";
+    (void) definition.add_specialization(const_true());
+    Specialization &s = definition.specializations().back();
+    s.failure_message = message;
 }
 
 Stage &Stage::purify(VarOrRVar old_var, VarOrRVar new_var) {
@@ -1907,6 +1927,11 @@ Stage Func::specialize(Expr c) {
     return Stage(func, func.definition(), 0, args()).specialize(c);
 }
 
+void Func::specialize_fail(const std::string &message) {
+    invalidate_cache();
+    (void) Stage(func, func.definition(), 0, args()).specialize_fail(message);
+}
+
 Func &Func::serial(VarOrRVar var) {
     invalidate_cache();
     Stage(func, func.definition(), 0, args()).serial(var);
@@ -2365,7 +2390,7 @@ Func &Func::store_root() {
 }
 
 Func &Func::compute_inline() {
-    return compute_at(LoopLevel());
+    return compute_at(LoopLevel::inlined());
 }
 
 Func &Func::trace_loads() {

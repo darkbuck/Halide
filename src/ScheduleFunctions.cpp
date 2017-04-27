@@ -13,6 +13,7 @@
 #include "Func.h"
 #include "IREquality.h"
 #include "ApplySplit.h"
+#include "IREquality.h"
 
 #include <algorithm>
 
@@ -133,11 +134,22 @@ Stmt build_provide_loop_nest_helper(string func_name,
         nest.push_back(c);
     }
 
-    // Strip off the lets into the containers vector.
-    while (const LetStmt *let = stmt.as<LetStmt>()) {
-        Container c = {Container::Let, 0, let->name, let->value};
-        nest.push_back(c);
-        stmt = let->body;
+    vector<Container> pred_container;
+    // Strip off the lets/ifs into the containers vector.
+    while (true) {
+        const LetStmt *let = stmt.as<LetStmt>();
+        const IfThenElse *if_else = stmt.as<IfThenElse>();
+        if (let) {
+            Container c = {Container::Let, 0, let->name, let->value};
+            nest.push_back(c);
+            stmt = let->body;
+        } else if (if_else && !if_else->else_case.defined()) {
+            Container c = {Container::If, 0, "", if_else->condition};
+            pred_container.push_back(c);
+            stmt = if_else->then_case;
+        } else {
+            break;
+        }
     }
 
     // Add appropriate predicates on the fused loop vars to ensure we don't
@@ -161,12 +173,14 @@ Stmt build_provide_loop_nest_helper(string func_name,
     }
 
     // Put all the reduction domain predicates into the containers vector.
-    int n_predicates = predicates.size();
     for (Expr pred : predicates) {
         pred = qualify(prefix, pred);
         Container c = {Container::If, 0, "", likely(pred)};
-        nest.push_back(c);
+        pred_container.push_back(c);
     }
+    int n_predicates = pred_container.size();
+
+    nest.insert(nest.end(), pred_container.begin(), pred_container.end());
 
     // Resort the containers vector so that lets are as far outwards
     // as possible. Use reverse insertion sort. Start at the first letstmt.
@@ -227,12 +241,20 @@ Stmt build_provide_loop_nest_helper(string func_name,
             }
         }
     }
+
+    // Sort the ifs so they are as far outwards as possible.
+    // BoxesTouched trims the domain of a variable within a scope of if-then-else
+    // based on the likely condition. However, it doesn't do it transitively; it
+    // doesn't trim the domains of other variables that directly/indirectly
+    // depend on the original variable in the likely condition outside the scope
+    // of the if-then-else. That's why it's necessary to move the ifs as far
+    // outwards as possible, so that those variables can have tighter bounds.
     for (int i = (int)nest.size() - n_predicates; i < (int)nest.size(); i++) {
         // Only push up IfThenElse.
         internal_assert(nest[i].value.defined());
         internal_assert(nest[i].type == Container::If);
 
-        // Cannot lift out the predicate guard if it contains call to non-pure function
+        // Cannot lift out the 'if' if it contains call to non-pure function
         if (contains_impure_call(nest[i].value)) {
             continue;
         }
@@ -348,12 +370,23 @@ Stmt build_provide_loop_nest(string func_name,
     // Make any specialized copies
     const vector<Specialization> &specializations = def.specializations();
     for (size_t i = specializations.size(); i > 0; i--) {
-        Expr c = specializations[i-1].condition;
-        const Definition &s_def = specializations[i-1].definition;
-
-        Stmt then_case =
-            build_provide_loop_nest(func_name, prefix, start_fuse, dims, s_def, is_update);
-
+        const Specialization &s = specializations[i-1];
+        Expr c = s.condition;
+        const Definition &s_def = s.definition;
+        Stmt then_case;
+        if (s.failure_message.empty()) {
+            then_case = build_provide_loop_nest(func_name, prefix, start_fuse, dims, s_def, is_update);
+        } else {
+            internal_assert(equal(c, const_true()));
+            // specialize_fail() should only be possible on the final specialization
+            internal_assert(i == specializations.size());
+            Expr specialize_fail_error =
+                Internal::Call::make(Int(32),
+                                     "halide_error_specialize_fail",
+                                     {StringImm::make(s.failure_message)},
+                                     Internal::Call::Extern);
+            then_case = AssertStmt::make(const_false(), specialize_fail_error);
+        }
         stmt = IfThenElse::make(c, then_case, stmt);
     }
 
@@ -382,7 +415,7 @@ Stmt build_produce(Function f, const Target &target) {
         // Iterate through all of the input args to the extern
         // function building a suitable argument list for the
         // extern function call.
-        vector<Expr> buffers_to_annotate;
+        vector<pair<Expr, int>> buffers_to_annotate;
         vector<Expr> buffers_contents_to_annotate;
         for (const ExternFuncArgument &arg : args) {
             if (arg.is_expr()) {
@@ -397,7 +430,7 @@ Stmt build_produce(Function f, const Target &target) {
                     buf_name += ".buffer";
                     Expr buffer = Variable::make(type_of<struct halide_buffer_t *>(), buf_name);
                     extern_call_args.push_back(buffer);
-                    buffers_to_annotate.push_back(buffer);
+                    buffers_to_annotate.push_back({buffer, input.dimensions()});
                     buffers_contents_to_annotate.push_back(buffer);
                 }
             } else if (arg.is_buffer()) {
@@ -406,7 +439,7 @@ Stmt build_produce(Function f, const Target &target) {
                 p.set_buffer(b);
                 Expr buf = Variable::make(type_of<struct halide_buffer_t *>(), b.name() + ".buffer", p);
                 extern_call_args.push_back(buf);
-                buffers_to_annotate.push_back(buf);
+                buffers_to_annotate.push_back({buf, b.dimensions()});
                 buffers_contents_to_annotate.push_back(buf);
             } else if (arg.is_image_param()) {
                 Parameter p = arg.image_param;
@@ -438,7 +471,7 @@ Stmt build_produce(Function f, const Target &target) {
                 extern_call_args.push_back(buffer);
                 // Since this is a temporary, internal-only buffer, make sure it's marked.
                 // (but not the contents! callee is expected to fill that in.)
-                buffers_to_annotate.push_back(buffer);
+                buffers_to_annotate.push_back({buffer, f.dimensions()});
             }
         } else {
             // Store level doesn't match compute level. Make an output
@@ -457,8 +490,9 @@ Stmt build_produce(Function f, const Target &target) {
                 src_buf_name += ".buffer";
                 Expr src_buffer = Variable::make(type_of<struct halide_buffer_t *>(), src_buf_name);
 
+                Expr alloca_size = Call::make(Int(32), Call::size_of_halide_buffer_t, {}, Call::Intrinsic);
                 Expr output_buffer_t = Call::make(type_of<struct halide_buffer_t *>(), Call::alloca,
-                                                  {(int)sizeof(halide_buffer_t)}, Call::Intrinsic);
+                                                  {alloca_size}, Call::Intrinsic);
 
                 vector<Expr> args(5);
                 args[0] = output_buffer_t;
@@ -484,7 +518,7 @@ Stmt build_produce(Function f, const Target &target) {
                 extern_call_args.push_back(Variable::make(type_of<struct halide_buffer_t *>(), buf_name));
                 // Since this is a temporary, internal-only buffer, make sure it's marked.
                 // (but not the contents! callee is expected to fill that in.)
-                buffers_to_annotate.push_back(extern_call_args.back());
+                buffers_to_annotate.push_back({extern_call_args.back(), f.dimensions()});
                 lets.push_back({ buf_name, output_buffer_t });
             }
         }
@@ -492,11 +526,21 @@ Stmt build_produce(Function f, const Target &target) {
         Stmt annotate;
         if (target.has_feature(Target::MSAN)) {
             // Mark the buffers as initialized before calling out.
-            for (const auto &buffer: buffers_to_annotate) {
+            for (const auto &p: buffers_to_annotate) {
+                Expr buffer = p.first;
+                int dimensions = p.second;
                 // Return type is really 'void', but no way to represent that in our IR.
                 // Precedent (from halide_print, etc) is to use Int(32) and ignore the result.
-                Expr sizeof_buffer_t((uint64_t) sizeof(halide_buffer_t));
-                Stmt mark_buffer = Evaluate::make(Call::make(Int(32), "halide_msan_annotate_memory_is_initialized", {buffer, sizeof_buffer_t}, Call::Extern));
+                Expr sizeof_buffer_t = cast<uint64_t>(Call::make(Int(32), Call::size_of_halide_buffer_t, {}, Call::Intrinsic));
+                Stmt mark_buffer =
+                    Evaluate::make(Call::make(Int(32), "halide_msan_annotate_memory_is_initialized",
+                                              {buffer, sizeof_buffer_t}, Call::Extern));
+                Expr shape = Call::make(type_of<halide_dimension_t *>(), Call::buffer_get_shape, {buffer}, Call::Extern);
+                Expr shape_size = Expr((uint64_t)(sizeof(halide_dimension_t) * dimensions));
+                Stmt mark_shape =
+                    Evaluate::make(Call::make(Int(32), "halide_msan_annotate_memory_is_initialized",
+                                              {shape, shape_size}, Call::Extern));
+                mark_buffer = Block::make(mark_buffer, mark_shape);
                 if (annotate.defined()) {
                     annotate = Block::make(annotate, mark_buffer);
                 } else {
@@ -2119,15 +2163,16 @@ Stmt schedule_functions(const vector<Function> &outputs,
 
     for (size_t i = fused_groups.size(); i > 0; --i) {
         const vector<string> &group = fused_groups[i-1];
-        vector<Function> funcs(group.size());
-        vector<bool> is_output_list(group.size(), false);
-        for (size_t j = group.size(); j > 0; --j) {
-            funcs[j-1] = env.find(group[j-1])->second;
+        vector<Function> funcs;
+        vector<bool> is_output_list;
+        for (const string &name: group) {
+            Function f = env.find(name)->second;
+            bool is_output = false;
 
             for (Function o : outputs) {
-                is_output_list[j-1] = is_output_list[j-1] | o.same_as(funcs[j-1]);
+                is_output = is_output | o.same_as(f);
             }
-            bool necessary = validate_schedule(funcs[j-1], s, target, is_output_list[j-1], env);
+            bool necessary = validate_schedule(f, s, target, is_output, env);
             if (!necessary) {
                 // The way in which the function was referred to in the
                 // function DAG must not actually result in a use in the
@@ -2137,9 +2182,13 @@ Stmt schedule_functions(const vector<Function> &outputs,
                 // definition.
                 continue;
             }
-            any_memoized = any_memoized || funcs[j-1].schedule().memoized();
+            any_memoized = any_memoized || f.schedule().memoized();
+            funcs.push_back(f);
+            is_output_list.push_back(is_output);
         }
-        internal_assert(!group.empty());
+        if (funcs.empty()) {
+            continue;
+        }
 
         int relevant_fused_pair = 0;
         for (const auto &pair : funcs[0].definition().schedule().fused_pairs()) {
@@ -2148,7 +2197,7 @@ Stmt schedule_functions(const vector<Function> &outputs,
             }
             relevant_fused_pair += 1;
         }
-        if ((group.size() == 1) && (relevant_fused_pair == 0)) {
+        if ((funcs.size() == 1) && (relevant_fused_pair == 0)) {
             // There is only one function in the group and there is
             // no loop fusion among its definition
             if (funcs[0].can_be_inlined() &&

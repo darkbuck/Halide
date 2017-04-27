@@ -202,8 +202,10 @@
 #include <vector>
 
 #include "Func.h"
+#include "ExternalCode.h"
 #include "Introspection.h"
 #include "ObjectInstanceRegistry.h"
+#include "ScheduleParam.h"
 #include "Target.h"
 
 namespace Halide {
@@ -274,7 +276,6 @@ inline std::string halide_type_to_enum_string(const Type &t) {
     return enum_to_string(get_halide_type_enum_map(), t);
 }
 
-EXPORT extern Halide::LoopLevel get_halide_undefined_looplevel();
 EXPORT extern const std::map<std::string, Halide::LoopLevel> &get_halide_looplevel_enum_map();
 inline std::string halide_looplevel_to_enum_string(const LoopLevel &loop_level){
     return enum_to_string(get_halide_looplevel_enum_map(), loop_level);
@@ -350,7 +351,6 @@ public:
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(uint64_t)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(float)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(double)
-    HALIDE_GENERATOR_PARAM_TYPED_SETTER(LoopLevel)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Target)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Type)
 
@@ -390,14 +390,6 @@ protected:
         return get_default_value();
     }
 
-    virtual bool is_schedule_param() const {
-        return false;
-    }
-
-    virtual bool is_looplevel_param() const {
-        return false;
-    }
-
     virtual bool is_synthetic_param() const {
         return false;
     }
@@ -419,6 +411,8 @@ private:
 template<typename T>
 class GeneratorParamImpl : public GeneratorParamBase {
 public:
+    using type = T;
+
     GeneratorParamImpl(const std::string &name, const T &value) : GeneratorParamBase(name), value_(value) {}
 
     T value() const { check_value_readable(); return value_; }
@@ -441,35 +435,30 @@ public:
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(uint64_t)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(float)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(double)
-    HALIDE_GENERATOR_PARAM_TYPED_SETTER(LoopLevel)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Target)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Type)
 
 #undef HALIDE_GENERATOR_PARAM_TYPED_SETTER
 
 protected:
-    bool is_looplevel_param() const override {
-        return std::is_same<T, LoopLevel>::value;
-    }
-
     virtual void set_impl(const T &new_value) { check_value_writable(); value_ = new_value; }
 
 private:
     T value_;
 
     template <typename T2, typename std::enable_if<std::is_convertible<T2, T>::value>::type * = nullptr>
-    HALIDE_ALWAYS_INLINE void typed_setter_impl(const T2 &t2, const char * msg) {
+    HALIDE_ALWAYS_INLINE void typed_setter_impl(const T2 &value, const char * msg) {
         // Arithmetic types must roundtrip losslessly.
         if (!std::is_same<T, T2>::value &&
             std::is_arithmetic<T>::value &&
             std::is_arithmetic<T2>::value) {
-            const T t = t2;
-            const T2 t2a = t;
-            if (t2a != t2) {
+            const T t = Convert<T2, T>::value(value);
+            const T2 t2 = Convert<T, T2>::value(t);
+            if (t2 != value) {
                 fail_wrong_type(msg);
             }
         }
-        value_ = t2;
+        value_ = Convert<T2, T>::value(value);
     }
 
     template <typename T2, typename std::enable_if<!std::is_convertible<T2, T>::value>::type * = nullptr>
@@ -690,46 +679,10 @@ public:
 };
 
 template<typename T>
-class GeneratorParam_LoopLevel : public GeneratorParam_Enum<T> {
-public:
-    GeneratorParam_LoopLevel(const std::string &name, const std::string &def)
-        : GeneratorParam_Enum<T>(name, enum_from_string(get_halide_looplevel_enum_map(), def), get_halide_looplevel_enum_map()), def(def) {}
-
-    std::string call_to_string(const std::string &v) const override {
-        std::ostringstream oss;
-        oss << "Halide::Internal::halide_looplevel_to_enum_string(" << v << ")";
-        return oss.str();
-    }
-    std::string get_c_type() const override {
-        return "LoopLevel";
-    }
-
-    std::string get_default_value() const override {
-        if (def == "undefined") return "Halide::Internal::get_halide_undefined_looplevel()";
-        if (def == "root") return "LoopLevel::root()";
-        if (def == "inline") return "LoopLevel()";
-        user_error << "LoopLevel value " << def << " not found.\n";
-        return "";
-    }
-
-    std::string get_type_decls() const override {
-        return "";
-    }
-
-    bool defined() const {
-        return this->value() != get_halide_undefined_looplevel();
-    }
-
-private:
-    const std::string def;
-};
-
-template<typename T>
 using GeneratorParamImplBase =
     typename select_type<
         cond<std::is_same<T, Target>::value,    GeneratorParam_Target<T>>,
         cond<std::is_same<T, Type>::value,      GeneratorParam_Type<T>>,
-        cond<std::is_same<T, LoopLevel>::value, GeneratorParam_LoopLevel<T>>,
         cond<std::is_same<T, bool>::value,      GeneratorParam_Bool<T>>,
         cond<std::is_arithmetic<T>::value,      GeneratorParam_Arithmetic<T>>,
         cond<std::is_enum<T>::value,            GeneratorParam_Enum<T>>
@@ -781,29 +734,6 @@ public:
         : Internal::GeneratorParamImplBase<T>(name, value) {}
 };
 
-/** ScheduleParam is similar to a GeneratorParam, with two important differences:
- *
- * (1) ScheduleParams are intended for use only within a Generator's schedule()
- * method (if any); if a Generator has no schedule() method, it should also have no
- * ScheduleParams
- *
- * (2) ScheduleParam can represent a LoopLevel, while GeneratorParam cannot.
- */
-template <typename T>
-class ScheduleParam : public GeneratorParam<T> {
-public:
-    ScheduleParam(const std::string &name, const T &value)
-        : GeneratorParam<T>(name, value) {}
-
-    ScheduleParam(const std::string &name, const T &value, const T &min, const T &max)
-        : GeneratorParam<T>(name, value, min, max) {}
-
-    ScheduleParam(const std::string &name, const std::string &value)
-        : GeneratorParam<T>(name, value) {}
-
-protected:
-    bool is_schedule_param() const override { return true; }
-};
 
 /** Addition between GeneratorParam<T> and any type that supports operator+ with T.
  * Returns type of underlying operator+. */
@@ -1710,6 +1640,7 @@ public:
     HALIDE_OUTPUT_FORWARD(serial)
     HALIDE_OUTPUT_FORWARD(shader)
     HALIDE_OUTPUT_FORWARD(specialize)
+    HALIDE_OUTPUT_FORWARD(specialize_fail)
     HALIDE_OUTPUT_FORWARD(split)
     HALIDE_OUTPUT_FORWARD(store_at)
     HALIDE_OUTPUT_FORWARD(store_root)
@@ -2186,6 +2117,26 @@ class GeneratorContext {
 public:
     virtual ~GeneratorContext() {};
     virtual Target get_target() const = 0;
+
+    using ExternsMap = std::map<std::string, ExternalCode>;
+
+    /** Generators can register ExternalCode objects onto
+     * themselves. The Generator infrastructure will arrange to have
+     * this ExternalCode appended to the Module that is finally
+     * compiled using the Generator. This allows encapsulating
+     * functionality that depends on external libraries or handwritten
+     * code for various targets. The name argument should match the
+     * name of the ExternalCode block and is used to ensure the same
+     * code block is not duplicated in the output. Halide does not do
+     * anything other than to compare names for equality. To guarantee
+     * uniqueness in public code, we suggest using a Java style
+     * inverted domain name followed by organization specific
+     * naming. E.g.:
+     *     com.yoyodyne.overthruster.0719acd19b66df2a9d8d628a8fefba911a0ab2b7
+     *
+     * See test/generator/external_code_generator.cpp for example use. */
+    virtual std::shared_ptr<ExternsMap> get_externs_map() const = 0;
+
 protected:
     friend class Internal::GeneratorBase;
     virtual std::shared_ptr<Internal::ValueTracker> get_value_tracker() const = 0;
@@ -2209,12 +2160,17 @@ class JITGeneratorContext : public GeneratorContext {
 public:
     explicit JITGeneratorContext(const Target &t)
         : target(t)
+        , externs_map(std::make_shared<ExternsMap>())
         , value_tracker(std::make_shared<Internal::ValueTracker>()) {}
     Target get_target() const override { return target; }
+    // Note that JITGeneratorContext is always "top-level", so it will never take
+    // an ExternsMap from a parent (since it has no parents).
+    std::shared_ptr<ExternsMap> get_externs_map() const override { return externs_map; }
 protected:
     std::shared_ptr<Internal::ValueTracker> get_value_tracker() const override { return value_tracker; }
 private:
     const Target target;
+    const std::shared_ptr<ExternsMap> externs_map;
     const std::shared_ptr<Internal::ValueTracker> value_tracker;
 };
 
@@ -2288,7 +2244,7 @@ public:
     Target get_target() const override { return target; }
 
     EXPORT void set_generator_param(const std::string &name, const std::string &value);
-    EXPORT void set_generator_param_values(const std::map<std::string, std::string> &params);
+    EXPORT void set_generator_and_schedule_param_values(const std::map<std::string, std::string> &params);
 
     template<typename T>
     GeneratorBase &set_generator_param(const std::string &name, const T &value) {
@@ -2301,9 +2257,6 @@ public:
         find_schedule_param_by_name(name).set(value);
         return *this;
     }
-
-    EXPORT void set_schedule_param_values(const std::map<std::string, std::string> &params,
-                                          const std::map<std::string, LoopLevel> &looplevel_params);
 
     /** Given a data type, return an estimate of the "natural" vector size
      * for that data type when compiling for the current target. */
@@ -2347,7 +2300,7 @@ public:
 
     Realization realize(std::vector<int32_t> sizes) {
         check_scheduled("realize");
-        return produce_pipeline().realize(sizes, get_target());
+        return get_pipeline().realize(sizes, get_target());
     }
 
     // Only enable if none of the args are Realization; otherwise we can incorrectly
@@ -2355,13 +2308,24 @@ public:
     template <typename... Args, typename std::enable_if<NoRealizations<Args...>::value>::type * = nullptr>
     Realization realize(Args&&... args) {
         check_scheduled("realize");
-        return produce_pipeline().realize(std::forward<Args>(args)..., get_target());
+        return get_pipeline().realize(std::forward<Args>(args)..., get_target());
     }
 
     void realize(Realization r) {
         check_scheduled("realize");
-        produce_pipeline().realize(r, get_target());
+        get_pipeline().realize(r, get_target());
     }
+
+    // Return the Pipeline that has been built by the generate() method.
+    // This method can only be used from a Generator that has a generate()
+    // method (vs a build() method), and currently can only be called from
+    // the schedule() method. (This may be relaxed in the future to allow
+    // calling from generate() as long as all Outputs have been defined.)
+    EXPORT Pipeline get_pipeline();
+
+    // Return a map in which to register external code this Generator requires
+    // at link time.
+    EXPORT std::shared_ptr<ExternsMap> get_externs_map() const override;
 
 protected:
     EXPORT GeneratorBase(size_t size, const void *introspection_helper);
@@ -2381,13 +2345,15 @@ protected:
     EXPORT void post_generate();
     EXPORT void pre_schedule();
     EXPORT void post_schedule();
-    EXPORT Pipeline produce_pipeline();
 
     template<typename T>
     using Input = GeneratorInput<T>;
 
     template<typename T>
     using Output = GeneratorOutput<T>;
+
+    template<typename T>
+    using ScheduleParam = ScheduleParam<T>;
 
     // A Generator's creation and usage must go in a certain phase to ensure correctness;
     // the state machine here is advanced and checked at various points to ensure
@@ -2425,18 +2391,24 @@ private:
     struct ParamInfo {
         EXPORT ParamInfo(GeneratorBase *generator, const size_t size);
 
-        // Ordered-list  of non-null ptrs to GeneratorParam<> fields.
+        // Ordered-list of non-null ptrs to GeneratorParam<> fields.
         std::vector<Internal::GeneratorParamBase *> generator_params;
 
-        // Ordered-list  of non-null ptrs to Input<>/Output<> fields; empty if old-style Generator.
+        // Ordered-list of non-null ptrs to ScheduleParam<> fields.
+        std::vector<Internal::ScheduleParamBase *> schedule_params;
+
+        // Ordered-list of non-null ptrs to Input<>/Output<> fields; empty if old-style Generator.
         std::vector<Internal::GeneratorInputBase *> filter_inputs;
         std::vector<Internal::GeneratorOutputBase *> filter_outputs;
 
         // Ordered-list of non-null ptrs to Param<> or ImageParam<> fields; empty if new-style Generator.
         std::vector<Internal::Parameter *> filter_params;
 
-        // Convenience structure to look up GP/SP by name.
-        std::map<std::string, Internal::GeneratorParamBase *> params_by_name;
+        // Convenience structure to look up GP by name.
+        std::map<std::string, Internal::GeneratorParamBase *> generator_params_by_name;
+
+        // Convenience structure to look up SP by name.
+        std::map<std::string, Internal::ScheduleParamBase *> schedule_params_by_name;
 
     private:
         // list of synthetic GP's that we dynamically created; this list only exists to simplify
@@ -2451,23 +2423,18 @@ private:
     std::unique_ptr<ParamInfo> param_info_ptr;
 
     std::shared_ptr<Internal::ValueTracker> value_tracker;
+
+    mutable std::shared_ptr<ExternsMap> externs_map;
+
     bool inputs_set{false};
     std::string generator_name;
+    Pipeline pipeline;
 
     // Return our ParamInfo (lazy-initing as needed).
     EXPORT ParamInfo &param_info();
 
-    EXPORT Internal::GeneratorParamBase &find_param_by_name(const std::string &name);
-    Internal::GeneratorParamBase &find_generator_param_by_name(const std::string &name) {
-        auto &p = find_param_by_name(name);
-        internal_assert(!p.is_schedule_param());
-        return p;
-    }
-    Internal::GeneratorParamBase &find_schedule_param_by_name(const std::string &name) {
-        auto &p = find_param_by_name(name);
-        internal_assert(p.is_schedule_param());
-        return p;
-    }
+    EXPORT Internal::GeneratorParamBase &find_generator_param_by_name(const std::string &name);
+    EXPORT Internal::ScheduleParamBase &find_schedule_param_by_name(const std::string &name);
 
     EXPORT void check_scheduled(const char* m) const;
 
@@ -2657,7 +2624,7 @@ public:
         auto g = create_func(context);
         internal_assert(g.get() != nullptr);
         g->set_generator_name(generator_name);
-        g->set_generator_param_values(params);
+        g->set_generator_and_schedule_param_values(params);
         return g;
     }
 private:
@@ -2742,7 +2709,7 @@ private:
     Pipeline build_pipeline_impl() {
         ((T *)this)->call_generate_impl();
         ((T *)this)->call_schedule_impl();
-        return produce_pipeline();
+        return get_pipeline();
     }
 
     // Implementations for call_generate_impl(), specialized on whether we
@@ -2835,9 +2802,16 @@ public:
 
     Target get_target() const { return generator->get_target(); }
 
-    // schedule method
-    EXPORT void schedule(const std::map<std::string, std::string> &schedule_params,
-                         const std::map<std::string, LoopLevel> &schedule_params_looplevels);
+   template<typename T>
+   GeneratorStub &set_schedule_param(const std::string &name, const T &value) {
+       generator->set_schedule_param(name, value);
+       return *this;
+   }
+
+   GeneratorStub &schedule() {
+       generator->call_schedule();
+       return *this;
+   }
 
     // Overloads for first output
     operator Func() const {
@@ -2878,6 +2852,10 @@ protected:
                   GeneratorFactory generator_factory,
                   const std::map<std::string, std::string> &generator_params,
                   const std::vector<std::vector<Internal::StubInput>> &inputs);
+
+    ScheduleParamBase &get_schedule_param(const std::string &n) const {
+        return generator->find_schedule_param_by_name(n);
+    }
 
     // Output(s)
     // TODO: identify vars used
@@ -2938,7 +2916,9 @@ private:
         return generator->get_first_output();
     }
     explicit GeneratorStub(const GeneratorStub &) = delete;
-    void operator=(const GeneratorStub &) = delete;
+    GeneratorStub &operator=(const GeneratorStub &) = delete;
+    explicit GeneratorStub(const GeneratorStub &&) = delete;
+    GeneratorStub &operator=(const GeneratorStub &&) = delete;
 };
 
 }  // namespace Internal
