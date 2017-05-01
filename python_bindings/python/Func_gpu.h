@@ -138,8 +138,8 @@ FuncOrStage &func_gpu_tile9(FuncOrStage &that, hh::VarOrRVar x, hh::VarOrRVar y,
 }
 template <typename FuncOrStage>
 FuncOrStage &func_gpu_tile10(FuncOrStage &that, hh::VarOrRVar x, hh::VarOrRVar y, hh::VarOrRVar z,
-                            int x_size, int y_size, int z_size,
-                            hh::DeviceAPI device_api) {
+                             int x_size, int y_size, int z_size,
+                             hh::DeviceAPI device_api) {
     return that.gpu_tile(x, y, z, x_size, y_size, z_size, hh::TailStrategy::Auto, device_api);
 }
 

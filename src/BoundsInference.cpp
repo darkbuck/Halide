@@ -8,6 +8,7 @@
 #include "IREquality.h"
 
 #include <algorithm>
+#include <iterator>
 
 namespace Halide {
 namespace Internal {
