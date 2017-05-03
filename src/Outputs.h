@@ -50,6 +50,15 @@ struct Outputs {
      * output is desired. */
     std::string static_library_name;
 
+    /** The name of the emitted JNI glue C source file. Empty if no JNI
+     * glue output is desired. */
+    std::string jni_glue_name;
+
+    /** The name of the emitted Java interface source file. This is used
+     * together with the compiled JNI glue and the compiled Halide
+     * .o file. Empty if no Java interface output is desired. */
+    std::string java_glue_name;
+
     /** Make a new Outputs struct that emits everything this one does
      * and also an object file with the given name. */
     Outputs object(const std::string &object_name) const {
@@ -119,6 +128,22 @@ struct Outputs {
     Outputs static_library(const std::string &static_library_name) const {
         Outputs updated = *this;
         updated.static_library_name = static_library_name;
+        return updated;
+    }
+
+    /** Make a new Outputs struct that emits everything this one does
+     * and also a JNI glue C source file with the given name. */
+    Outputs jni_glue(const std::string &jni_glue_name) const {
+        Outputs updated = *this;
+        updated.jni_glue_name = jni_glue_name;
+        return updated;
+    }
+
+    /** Make a new Outputs struct that emits everything this one does
+     * and also a Java interface source file with the given name. */
+    Outputs java_glue(const std::string &java_glue_name) const {
+        Outputs updated = *this;
+        updated.java_glue_name = java_glue_name;
         return updated;
     }
 };

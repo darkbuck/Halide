@@ -8,6 +8,7 @@
 #include "CodeGen_Internal.h"
 #include "Debug.h"
 #include "HexagonOffload.h"
+#include "JavaGlueGen.h"
 #include "LLVM_Headers.h"
 #include "LLVM_Output.h"
 #include "LLVM_Runtime_Linker.h"
@@ -319,39 +320,61 @@ void Module::compile(const Outputs &output_files) const {
             create_static_library(temp_dir.files(), base_target, output_files.static_library_name);
         }
         if (!output_files.assembly_name.empty()) {
-            debug(1) << "Module.compile(): assembly_name " << output_files.assembly_name << "\n";
-            auto out = make_raw_fd_ostream(output_files.assembly_name);
-            compile_llvm_module_to_assembly(*llvm_module, *out);
+          debug(1) << "Module.compile(): assembly_name " << output_files.assembly_name << "\n";
+          auto out = make_raw_fd_ostream(output_files.assembly_name);
+          compile_llvm_module_to_assembly(*llvm_module, *out);
         }
         if (!output_files.bitcode_name.empty()) {
-            debug(1) << "Module.compile(): bitcode_name " << output_files.bitcode_name << "\n";
-            auto out = make_raw_fd_ostream(output_files.bitcode_name);
-            compile_llvm_module_to_llvm_bitcode(*llvm_module, *out);
+          debug(1) << "Module.compile(): bitcode_name " << output_files.bitcode_name << "\n";
+          auto out = make_raw_fd_ostream(output_files.bitcode_name);
+          compile_llvm_module_to_llvm_bitcode(*llvm_module, *out);
         }
         if (!output_files.llvm_assembly_name.empty()) {
-            debug(1) << "Module.compile(): llvm_assembly_name " << output_files.llvm_assembly_name << "\n";
-            auto out = make_raw_fd_ostream(output_files.llvm_assembly_name);
-            compile_llvm_module_to_llvm_assembly(*llvm_module, *out);
+          debug(1) << "Module.compile(): llvm_assembly_name " << output_files.llvm_assembly_name << "\n";
+          auto out = make_raw_fd_ostream(output_files.llvm_assembly_name);
+          compile_llvm_module_to_llvm_assembly(*llvm_module, *out);
         }
     }
     if (!output_files.c_header_name.empty()) {
-        debug(1) << "Module.compile(): c_header_name " << output_files.c_header_name << "\n";
-        std::ofstream file(output_files.c_header_name);
-        Internal::CodeGen_C cg(file,
-                               target(),
-                               target().has_feature(Target::CPlusPlusMangling) ?
-                               Internal::CodeGen_C::CPlusPlusHeader : Internal::CodeGen_C::CHeader,
-                               output_files.c_header_name);
-        cg.compile(*this);
+      debug(1) << "Module.compile(): c_header_name " << output_files.c_header_name << "\n";
+      std::ofstream file(output_files.c_header_name);
+      Internal::CodeGen_C cg(file,
+                             target(),
+                             target().has_feature(Target::CPlusPlusMangling) ?
+                             Internal::CodeGen_C::CPlusPlusHeader : Internal::CodeGen_C::CHeader,
+                             output_files.c_header_name);
+      cg.compile(*this);
     }
     if (!output_files.c_source_name.empty()) {
-        debug(1) << "Module.compile(): c_source_name " << output_files.c_source_name << "\n";
-        std::ofstream file(output_files.c_source_name);
-        Internal::CodeGen_C cg(file,
-                               target(),
-                               target().has_feature(Target::CPlusPlusMangling) ?
-                               Internal::CodeGen_C::CPlusPlusImplementation : Internal::CodeGen_C::CImplementation);
-        cg.compile(*this);
+      debug(1) << "Module.compile(): c_source_name " << output_files.c_source_name << "\n";
+      std::ofstream file(output_files.c_source_name);
+      Internal::CodeGen_C cg(file,
+                             target(),
+                             target().has_feature(Target::CPlusPlusMangling) ?
+                             Internal::CodeGen_C::CPlusPlusImplementation : Internal::CodeGen_C::CImplementation);
+      cg.compile(*this);
+    }
+    if (!output_files.jni_glue_name.empty()) {
+        debug(1) << "Module.compile(): jni_glue_name " << output_files.jni_glue_name << "\n";
+        user_assert(target().has_feature(Target::CPlusPlusMangling)) << "Generating JNI glue requires C++ name mangling as Java package names mirror C++ namespace names.\n";
+
+        // TODO: This should probbly just be a user_error if output_files.c_header_name
+        // is not also filled in, but that seems like a strange API. Figure out the
+        // right design.
+        std::string c_header_name = output_files.c_header_name;
+        if (c_header_name.empty()) {
+            c_header_name = name() + ".h";
+        }
+        std::ofstream file(output_files.jni_glue_name);
+        Internal::JNIGlueGen jni_glue_gen(file, c_header_name);
+        jni_glue_gen.compile(*this);
+    }
+    if (!output_files.java_glue_name.empty()) {
+        debug(1) << "Module.compile(): java_glue_name " << output_files.java_glue_name << "\n";
+        user_assert(target().has_feature(Target::CPlusPlusMangling)) << "Generating A Java interface file requires C++ name mangling as Java package names mirror C++ namespace names.\n";
+        std::ofstream file(output_files.java_glue_name);
+        Internal::JavaGlueGen java_glue_gen(file);
+        java_glue_gen.compile(*this);
     }
     if (!output_files.stmt_name.empty()) {
         debug(1) << "Module.compile(): stmt_name " << output_files.stmt_name << "\n";

@@ -213,6 +213,14 @@ void Pipeline::compile_to_c(const string &filename,
     m.compile(Outputs().c_source(output_name(filename, m, ".c")));
 }
 
+void Pipeline::compile_to_jni(const string &filename_prefix,
+                              const vector<Argument> &args,
+                              const string &fn_name,
+                              const Target &target) {
+    Module m = compile_to_module(args, fn_name, target);
+    m.compile(Outputs().jni_glue(filename_prefix + ".c").java_glue(filename_prefix + ".java"));
+}
+
 void Pipeline::print_loop_nest() {
     user_assert(defined()) << "Can't print loop nest of undefined Pipeline.\n";
     std::cerr << Halide::Internal::print_loop_nest(contents->outputs);

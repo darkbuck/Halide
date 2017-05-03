@@ -145,6 +145,17 @@ public:
                              const std::string &fn_name,
                              const Target &target = get_target_from_environment());
 
+    /** Emit a Java Native Interface (JNI) glue .c file and a Java
+     * class in a .java file for calling this pipeline from Java
+     * code. It is required that the target specify C++ name mangling
+     * and the Java package and class name will be taken from the
+     * fn_name argument. (The Java class name is the namespace just
+     * before the function name.)  */
+    EXPORT void compile_to_jni(const std::string &filename_prefix,
+                               const std::vector<Argument> &,
+                               const std::string &fn_name,
+                               const Target &target = get_target_from_environment());
+
     /** Write out an internal representation of lowered code. Useful
      * for analyzing and debugging scheduling. Can emit html or plain
      * text. */

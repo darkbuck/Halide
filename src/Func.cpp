@@ -2832,6 +2832,11 @@ void Func::compile_to_c(const string &filename, const vector<Argument> &args,
     pipeline().compile_to_c(filename, args, fn_name, target);
 }
 
+void Func::compile_to_jni(const string &filename_prefix, const vector<Argument> &args,
+                          const string &fn_name, const Target &target) {
+    pipeline().compile_to_jni(filename_prefix, args, fn_name, target);
+}
+
 void Func::compile_to_lowered_stmt(const string &filename,
                                    const vector<Argument> &args,
                                    StmtOutputFormat fmt,

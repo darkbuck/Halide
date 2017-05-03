@@ -332,6 +332,7 @@ SOURCE_FILES = \
   IROperator.cpp \
   IRPrinter.cpp \
   IRVisitor.cpp \
+  JavaGlueGen.cpp \
   JITModule.cpp \
   Lerp.cpp \
   LLVM_Output.cpp \
@@ -467,6 +468,7 @@ HEADER_FILES = \
   IROperator.h \
   IRPrinter.h \
   IRVisitor.h \
+  JavaGlueGen.h \
   JITModule.h \
   Lambda.h \
   Lerp.h \
