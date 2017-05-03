@@ -206,7 +206,7 @@ void JavaGlueGen::compile(const Module &module) {
 
     // TODO: Is this the right name for this?
     // TODO: Do we need any other names?
-    dest << "import com.halide.runtime.Buffer;\n";
+    dest << "import org.halide-lang.runtime.Buffer;\n";
 
     std::map<std::string, std::vector<LoweredFunc>> class_contents;
 
