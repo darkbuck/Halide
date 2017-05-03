@@ -1036,10 +1036,31 @@ public:
                               const std::vector<ExternFuncArgument> &params,
                               Type t,
                               int dimensionality,
+                              NameMangling mangling,
+                              bool uses_old_buffer_t) {
+        define_extern(function_name, params, std::vector<Type>{t},
+                      dimensionality, mangling, DeviceAPI::Host, uses_old_buffer_t);
+    }
+
+    EXPORT void define_extern(const std::string &function_name,
+                              const std::vector<ExternFuncArgument> &params,
+                              Type t,
+                              int dimensionality,
                               NameMangling mangling = NameMangling::Default,
+                              DeviceAPI device_api = DeviceAPI::Host,
                               bool uses_old_buffer_t = false) {
         define_extern(function_name, params, std::vector<Type>{t},
-                      dimensionality, mangling, uses_old_buffer_t);
+                      dimensionality, mangling, device_api, uses_old_buffer_t);
+    }
+
+    EXPORT void define_extern(const std::string &function_name,
+                              const std::vector<ExternFuncArgument> &params,
+                              const std::vector<Type> &types,
+                              int dimensionality,
+                              NameMangling mangling,
+                              bool uses_old_buffer_t) {
+      define_extern(function_name, params, types,
+                    dimensionality, mangling, DeviceAPI::Host, uses_old_buffer_t);
     }
 
     EXPORT void define_extern(const std::string &function_name,
@@ -1047,6 +1068,7 @@ public:
                               const std::vector<Type> &types,
                               int dimensionality,
                               NameMangling mangling = NameMangling::Default,
+                              DeviceAPI device_api = DeviceAPI::Host,
                               bool uses_old_buffer_t = false);
     // @}
 
@@ -2051,7 +2073,7 @@ public:
 
     /** You can cast a Func to its pure stage for the purposes of
      * scheduling it. */
-    operator Stage() const;
+    EXPORT operator Stage() const;
 
     /** Get a handle on the output buffer for this Func. Only relevant
      * if this is the output Func in a pipeline. Useful for making
