@@ -76,7 +76,7 @@ protected:
     LoopLevel loop_level;
 
     EXPORT ScheduleParamBase(const Type &t, const std::string &name, bool is_explicit_name);
-    EXPORT ~ScheduleParamBase();
+    EXPORT virtual ~ScheduleParamBase();
 
     // This is provided only for GeneratorBase; other code should not need to use it.
     virtual void set_from_string(const std::string &new_value_string) = 0;
@@ -86,6 +86,16 @@ protected:
 };
 
 }  // namespace Internal
+
+// This is strictly some syntactic sugar to suppress certain compiler warnings.
+template<typename FROM, typename TO>
+struct Convert {
+    template <typename TO2 = TO, typename std::enable_if<!std::is_same<TO2, bool>::value>::type * = nullptr>
+    inline static TO2 value(const FROM &from) { return from; }
+
+    template <typename TO2 = TO, typename std::enable_if<std::is_same<TO2, bool>::value>::type * = nullptr>
+    inline static TO2 value(const FROM &from) { return from != 0; }
+};
 
 /** A ScheduleParam is a "Param" that can contain a scalar Expr or a LoopLevel;
  * unlike Param<>, its value cannot be set at runtime. All ScheduleParam values
@@ -118,13 +128,13 @@ class ScheduleParam : public Internal::ScheduleParamBase {
         if (!std::is_same<T, T2>::value &&
             std::is_arithmetic<T>::value &&
             std::is_arithmetic<T2>::value) {
-            const T t = value;
-            const T2 t2 = t;
+            const T t = Convert<T2, T>::value(value);
+            const T2 t2 = Convert<T, T2>::value(t);
             if (t2 != value) {
                 user_error << "The ScheduleParam " << name() << " cannot be set with a value of type " << type << ".\n";
             }
         }
-        scalar_parameter.set_scalar<T>(value);
+        scalar_parameter.set_scalar<T>(Convert<T2, T>::value(value));
     }
 
     template <typename T2, typename std::enable_if<std::is_same<T2, LoopLevel>::value>::type * = nullptr>
