@@ -11,7 +11,10 @@ namespace {
 std::string lowered_arg_to_java_arg(const Argument &arg) {
     std::string result;
 
-    if (arg.kind == Argument::InputScalar) {
+    if (arg.kind == Argument::InputBuffer || arg.kind == Argument::OutputBuffer ||
+        arg.type == type_of<halide_buffer_t *>()) {
+         result = "Buffer ";
+    } else {
         // TODO: Some sort of translation?
         user_assert(!arg.type.is_uint()) << "Unsigned argument types are not supported in Java.\n";
         // TODO: Likey need some way to pass through arguments to callbacks, user context, etc.
@@ -20,36 +23,34 @@ std::string lowered_arg_to_java_arg(const Argument &arg) {
         if (arg.type.is_int()) {
             switch (arg.type.bits()) {
             case 1:
-                result = "boolean";
+                result = "boolean ";
                 break;
             case 8:
-                result = "byte";
+                result = "byte ";
                 break;
             case 16:
-                result = "short";
+                result = "short ";
                 break;
             case 32:
-                result = "int";
+                result = "int ";
                 break;
             case 64:
-                result = "long";
+                result = "long ";
                 break;
             }
         } else {
             internal_assert(arg.type.is_float()) << "Expected only remaining type to be floating-point here.\n";
             switch (arg.type.bits()) {
             case 32:
-                result = "float";
+                result = "float ";
                 break;
             case 64:
-                result = "double";
+                result = "double ";
                 break;
             }
         }
-    } else {
-        result = "Buffer ";
     }
-
+ 
     result += arg.name;
     return result;
 }
@@ -57,7 +58,10 @@ std::string lowered_arg_to_java_arg(const Argument &arg) {
 std::string lowered_arg_to_jni_arg(const Argument &arg) {
     std::string result;
 
-    if (arg.kind == Argument::InputScalar) {
+    if (arg.kind == Argument::InputBuffer || arg.kind == Argument::OutputBuffer ||
+        arg.type == type_of<halide_buffer_t *>()) {
+        result = "jobject ";
+    } else {
         // TODO: Some sort of translation?
         user_assert(!arg.type.is_uint()) << "Unsigned argument types are not supported in Java.\n";
         // TODO: Likey need some way to pass through arguments to callbacks, user context, etc.
@@ -66,39 +70,46 @@ std::string lowered_arg_to_jni_arg(const Argument &arg) {
         if (arg.type.is_int()) {
             switch (arg.type.bits()) {
             case 1:
-                result = "jboolean";
+                result = "jboolean ";
                 break;
             case 8:
-                result = "jbyte";
+                result = "jbyte ";
                 break;
             case 16:
-                result = "jshort";
+                result = "jshort ";
                 break;
             case 32:
-                result = "jint";
+                result = "jint ";
                 break;
             case 64:
-                result = "jlong";
+                result = "jlong ";
                 break;
             }
         } else {
             internal_assert(arg.type.is_float()) << "Expected only remaining type to be floating-point here.\n";
             switch (arg.type.bits()) {
             case 32:
-                result = "jfloat";
+                result = "jfloat ";
                 break;
             case 64:
-                result = "jdouble";
+                result = "jdouble ";
                 break;
             }
            
         }
-    } else {
-        result = "jobject ";
     }
 
     result += arg.name;
     return result;
+}
+
+bool has_old_buffer_t_arg(const LoweredFunc &f) {
+    for (const auto &arg : f.args) {
+        if (arg.type == type_of<buffer_t *>()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }
@@ -108,10 +119,11 @@ JNIGlueGen::JNIGlueGen(std::ostream &dest, const std::string &header_name) : des
 
 void JNIGlueGen::compile(const Module &module) {
     dest << "#include <jni.h>\n\n";
+    dest << "#include \"HalideBuffer.h\"\n\n";
     dest << "#include \"" << header_name << "\"\n\n";
     dest << "extern \"C\" {\n";
     for (const auto &f : module.functions()) {
-        if (f.linkage == LoweredFunc::Internal) {
+        if (f.linkage == LoweredFunc::Internal || has_old_buffer_t_arg(f)) {
             continue;
         }
 
@@ -139,7 +151,7 @@ void JNIGlueGen::compile(const Module &module) {
 
         size_t buf_index = 0;
         if (buffer_args != 0) {
-            dest << "    Halide::Runtime::Buffer<> _buf_args[" << buffer_args << "]\n\n;";
+            dest << "    Halide::Runtime::Buffer<> _buf_args[" << buffer_args << "];\n\n";
 
             for (const auto &arg : f.args) {
               if (arg.kind == Argument::InputBuffer || arg.kind == Argument::OutputBuffer) {
@@ -152,7 +164,7 @@ void JNIGlueGen::compile(const Module &module) {
 
         buf_index = 0;
         prefix = "";
-        dest << "int _result = " << f.name << "(";
+        dest << "    int _result = " << f.name << "(";
         for (const auto &arg : f.args) {
             if (arg.kind == Argument::InputScalar) {
                 dest << prefix << arg.name;
@@ -180,7 +192,7 @@ void JavaGlueGen::compile(const Module &module) {
     std::string first_name;
 
     for (const auto &f : module.functions()) {
-        if (f.linkage == LoweredFunc::Internal) {
+        if (f.linkage == LoweredFunc::Internal || has_old_buffer_t_arg(f)) {
             continue;
         }
         first_name = f.name;
@@ -204,14 +216,14 @@ void JavaGlueGen::compile(const Module &module) {
         dest << ";\n\n";
     }
 
-    // TODO: Is this the right name for this?
+    // TODO: Don't think "halide-lang" will work. What should we do here?
     // TODO: Do we need any other names?
-    dest << "import org.halide-lang.runtime.Buffer;\n";
+    dest << "import org.halide.runtime.Buffer;\n";
 
     std::map<std::string, std::vector<LoweredFunc>> class_contents;
 
     for (const auto &f : module.functions()) {
-        if (f.linkage == LoweredFunc::Internal) {
+        if (f.linkage == LoweredFunc::Internal || has_old_buffer_t_arg(f)) {
             continue;
         }
 
