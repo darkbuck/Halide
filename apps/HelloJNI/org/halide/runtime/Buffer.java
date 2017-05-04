@@ -2,6 +2,7 @@ package org.halide.runtime;
 
 import java.io.Closeable;
 import java.nio.ByteBuffer;
+import java.util.Objects;
 
 public class Buffer implements Closeable {
 
@@ -12,7 +13,7 @@ public class Buffer implements Closeable {
     /**
      * A Java version of enum halide_type_code_t.
      */
-    enum TypeCode {
+    public enum TypeCode {
         INT ((byte)0),
         UINT ((byte)1),
         FLOAT ((byte)2),
@@ -28,7 +29,7 @@ public class Buffer implements Closeable {
     /**
      * A Java version of struct halide_type_t.
      */
-    static class Type {
+    public static class Type {
 
         public static final Type INT8 = new Type(TypeCode.INT, (byte)8);
         public static final Type INT16 = new Type(TypeCode.INT, (byte)16);
@@ -41,7 +42,6 @@ public class Buffer implements Closeable {
         public static final Type FLOAT16 = new Type(TypeCode.FLOAT, (byte)16);
         public static final Type FLOAT32 = new Type(TypeCode.FLOAT, (byte)32);
         public static final Type FLOAT64 = new Type(TypeCode.FLOAT, (byte)64);
-
         public final TypeCode typeCode;
 
         /* bits is interpreted as unsigned by the native code */
@@ -58,16 +58,81 @@ public class Buffer implements Closeable {
             this.bits = bits;
             this.lanes = lanes;
         }
+
+        public boolean equals(Object o) {
+            if (o == null || !(o instanceof Type)) {
+                return false;
+            }
+            Type ot = (Type)o;
+            return (typeCode == ot.typeCode &&
+                    bits == ot.bits &&
+                    lanes == ot.lanes);
+        }
+
+        public int hashCode() {
+            return Objects.hash(typeCode, bits, lanes);
+        }
+
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("{");
+            sb.append(" typeCode: ");
+            sb.append(typeCode.toString());
+            sb.append(", bits: " + bits);
+            sb.append(", lanes: " + lanes);
+            sb.append(" }");
+            return sb.toString();
+        }
     }
 
     private long nativeHandle;
 
-    Buffer(Type type, int... sizes) {
+    /**
+     * Construct a new Buffer and allocate native memory. The underlying native Buffer owns the
+     * memory ({@link managesMemory()} returns true).
+     *
+     * @param type Type for each element.
+     * @param sizes The extent of each dimension.
+     */
+    public Buffer(Type type, int... sizes) {
         nativeHandle = nativeNewBuffer(type.typeCode.halideTypeCode, type.bits, type.lanes, sizes);
+    }
+
+    /**
+     * Construct a new Buffer wrapping native memory. Assumes dense row-major packing and a min
+     * coordinate of zero. Does not take ownership of the data and does not set the host_dirty flag.
+     *
+     * @param type Type for each element.
+     * @param nativeDataPointer An address pointing to the native data array, cast to a long.
+     * @param sizes The extent of each dimension.
+     */
+    public Buffer(Type type, long nativeDataPointer, int... sizes) {
+        nativeHandle = nativeNewBuffer2(type.typeCode.halideTypeCode, type.bits, type.lanes,
+                nativeDataPointer, sizes);
+    }
+
+    // TODO(jiawen): Add constructor for taking a direct ByteBuffer with strides to create a
+    // non-owning Buffer view of native memory. This involves wrapping
+    // halide_dimension_t.
+
+    // TODO(jiawen): copy() might be tricky to implement.
+
+    public boolean managesMemory() {
+        return nativeManagesMemory(nativeHandle);
     }
 
     public int dimensions() {
         return nativeDimensions(nativeHandle);
+    }
+
+    public Type type() {
+        // bytes[0] will store the typecode.
+        // bytes[1] will store the number of bits.
+        byte[] codeAndBits = new byte[2];
+        short lanes = nativeGetType(nativeHandle, codeAndBits);
+
+        TypeCode typeCode = TypeCode.values()[codeAndBits[0]];
+        return new Type(typeCode, codeAndBits[1], lanes);
     }
 
     public int min(int i) {
@@ -95,6 +160,14 @@ public class Buffer implements Closeable {
                         i, dimensions()));
         }
         return nativeStride(nativeHandle, i);
+    }
+
+    /**
+     * Returns a handle to the native halide_buffer_t*. This is the handle that will be eventually
+     * passed to pipelines for input and output buffers.
+     */
+    public long rawBuffer() {
+        return nativeRawBuffer(nativeHandle);
     }
 
     public int width() {
@@ -141,15 +214,26 @@ public class Buffer implements Closeable {
 
     private static native long nativeNewBuffer(byte typeCode, byte bits, short lanes, int... sizes);
 
+    private static native long nativeNewBuffer2(byte typeCode, byte bits, short lanes,
+            long nativeDataPointer, int... sizes);
+
     private static native boolean nativeDeleteBuffer(long handle);
 
+    private static native boolean nativeManagesMemory(long handle);
+
     private static native int nativeDimensions(long handle);
+
+    // Stores typeCode in codeAndBits[0]. Stores number of bits in codeAndBits[1].
+    // Returns the number of lanes.
+    private static native short nativeGetType(long handle, byte[] codeAndBits);
 
     private static native int nativeMin(long handle, int i);
 
     private static native int nativeExtent(long handle, int i);
 
     private static native int nativeStride(long handle, int i);
+
+    private static native long nativeRawBuffer(long nativeHandle);
 
     private static native int nativeWidth(long handle);
 

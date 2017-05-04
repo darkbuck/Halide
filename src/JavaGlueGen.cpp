@@ -5,15 +5,19 @@
 
 namespace Halide {
 namespace Internal {
-    
+
 namespace {
 
-std::string lowered_arg_to_java_arg(const Argument &arg) {
+std::string lowered_arg_to_java_arg(const Argument &arg, bool is_native) {
     std::string result;
 
     if (arg.kind == Argument::InputBuffer || arg.kind == Argument::OutputBuffer ||
         arg.type == type_of<halide_buffer_t *>()) {
-         result = "Buffer ";
+        if (is_native) {
+            result = "long ";
+        } else {
+            result = "Buffer ";
+        }
     } else {
         // TODO: Some sort of translation?
         user_assert(!arg.type.is_uint()) << "Unsigned argument types are not supported in Java.\n";
@@ -50,7 +54,7 @@ std::string lowered_arg_to_java_arg(const Argument &arg) {
             }
         }
     }
- 
+
     result += arg.name;
     return result;
 }
@@ -60,7 +64,7 @@ std::string lowered_arg_to_jni_arg(const Argument &arg) {
 
     if (arg.kind == Argument::InputBuffer || arg.kind == Argument::OutputBuffer ||
         arg.type == type_of<halide_buffer_t *>()) {
-        result = "jobject ";
+        result = "jlong ";
     } else {
         // TODO: Some sort of translation?
         user_assert(!arg.type.is_uint()) << "Unsigned argument types are not supported in Java.\n";
@@ -95,12 +99,24 @@ std::string lowered_arg_to_jni_arg(const Argument &arg) {
                 result = "jdouble ";
                 break;
             }
-           
+
         }
     }
 
     result += arg.name;
     return result;
+}
+
+// Returns arg.name + ".rawBuffer()" for Buffer arguments, arg.name otherwise.
+std::string lowered_arg_to_java_argname(const Argument &arg) {
+    std::string result;
+
+    if (arg.kind == Argument::InputBuffer || arg.kind == Argument::OutputBuffer ||
+        arg.type == type_of<halide_buffer_t *>()) {
+        return arg.name + ".rawBuffer()";
+    } else {
+        return arg.name;
+    }
 }
 
 bool has_old_buffer_t_arg(const LoweredFunc &f) {
@@ -119,8 +135,8 @@ JNIGlueGen::JNIGlueGen(std::ostream &dest, const std::string &header_name) : des
 
 void JNIGlueGen::compile(const Module &module) {
     dest << "#include <jni.h>\n\n";
-    dest << "#include \"HalideBuffer.h\"\n\n";
     dest << "#include \"" << header_name << "\"\n\n";
+    dest << "struct halide_buffer_t;\n\n";
     dest << "extern \"C\" {\n";
     for (const auto &f : module.functions()) {
         if (f.linkage == LoweredFunc::Internal || has_old_buffer_t_arg(f)) {
@@ -129,8 +145,8 @@ void JNIGlueGen::compile(const Module &module) {
 
         std::vector<std::string> namespaces;
         std::string base_fn_name = extract_namespaces(f.name, namespaces);
-        
-        std::string jni_name = "Java_com_";
+
+        std::string jni_name = "Java_";
         for (const auto &n : namespaces) {
             jni_name += n + "_";
         }
@@ -138,7 +154,7 @@ void JNIGlueGen::compile(const Module &module) {
 
         size_t buffer_args = 0;
         // TODO: Decide it we want to throw an exception instead of returning the int32_t result code
-        dest << "JNIEXPORT int JNICALL " << jni_name << "(";
+        dest << "JNIEXPORT int JNICALL " << jni_name << "(JNIEnv *env, jclass cls, ";
         const char *prefix = "";
         for (const auto &arg : f.args) {
             dest << prefix << lowered_arg_to_jni_arg(arg);
@@ -151,11 +167,13 @@ void JNIGlueGen::compile(const Module &module) {
 
         size_t buf_index = 0;
         if (buffer_args != 0) {
-            dest << "    Halide::Runtime::Buffer<> _buf_args[" << buffer_args << "];\n\n";
+            dest << "    halide_buffer_t *_buf_args[" << buffer_args << "];\n\n";
 
             for (const auto &arg : f.args) {
               if (arg.kind == Argument::InputBuffer || arg.kind == Argument::OutputBuffer) {
-                    dest << "    _buf_args[" << buf_index << "] = java_buffer_to_halide_buffer_t(" << arg.name << ");\n";
+                    dest << "    _buf_args[" << buf_index <<
+                        "] = reinterpret_cast<halide_buffer_t *>(" <<
+                        arg.name << ");\n";
                     buf_index += 1;
                 }
             }
@@ -169,7 +187,7 @@ void JNIGlueGen::compile(const Module &module) {
             if (arg.kind == Argument::InputScalar) {
                 dest << prefix << arg.name;
             } else {
-                dest << prefix << "_buf_args[" << buf_index << "].raw_buffer()";
+                dest << prefix << "_buf_args[" << buf_index << "]";
                 buf_index += 1;
             }
             prefix = ", ";
@@ -253,10 +271,29 @@ void JavaGlueGen::compile(const Module &module) {
             std::string this_fn_name = extract_namespaces(f.name, this_fn_namespaces);
 
             // TODO: This returns the error code, but the wrapper should probably throw instead.
-            dest << "    public native int " << this_fn_name << "(";
+            dest << "    public static int " << this_fn_name << "(";
             const char *prefix = "";
             for (const auto &arg : f.args) {
-                dest << prefix << lowered_arg_to_java_arg(arg);
+                dest << prefix << lowered_arg_to_java_arg(arg, false);
+                prefix = ", ";
+            }
+            dest << ") {\n";
+            dest << "        return " << this_fn_name << "(";
+
+            prefix = "";
+            for (const auto &arg : f.args) {
+                dest << prefix << lowered_arg_to_java_argname(arg);
+                prefix = ", ";
+            }
+            dest << ");\n";
+            dest << "    }\n";
+
+            dest << "\n";
+
+            dest << "    public static native int " << this_fn_name << "(";
+            prefix = "";
+            for (const auto &arg : f.args) {
+                dest << prefix << lowered_arg_to_java_arg(arg, true);
                 prefix = ", ";
             }
             dest << ");\n";
