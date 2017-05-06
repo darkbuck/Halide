@@ -74,6 +74,7 @@ DECLARE_CPP_INITMOD(android_host_cpu_count)
 DECLARE_CPP_INITMOD(android_io)
 DECLARE_CPP_INITMOD(android_opengl_context)
 DECLARE_CPP_INITMOD(android_tempfile)
+DECLARE_CPP_INITMOD(thread_async)
 DECLARE_CPP_INITMOD(buffer_t)
 DECLARE_CPP_INITMOD(cache)
 DECLARE_CPP_INITMOD(can_use_target)
@@ -868,6 +869,9 @@ std::unique_ptr<llvm::Module> get_initial_module_for_target(Target t, llvm::LLVM
             modules.push_back(get_initmod_module_jit_ref_count(c, bits_64, debug));
             modules.push_back(get_initmod_hexagon_host(c, bits_64, debug));
         }
+        if (t.has_feature(Target::ThreadAsync)) {
+            modules.push_back(get_initmod_thread_async(c, bits_64, debug));
+        } 
     }
 
     if (module_type == ModuleAOT && t.has_feature(Target::Matlab)) {

@@ -6,6 +6,7 @@
 #include "CodeGen_Metal_Dev.h"
 #include "CodeGen_OpenGL_Dev.h"
 #include "CodeGen_OpenGLCompute_Dev.h"
+#include "CodeGen_ThreadAsync_Dev.h"
 #include "IROperator.h"
 #include "IRPrinter.h"
 #include "Debug.h"
@@ -118,6 +119,10 @@ CodeGen_GPU_Host<CodeGen_CPU>::CodeGen_GPU_Host(Target target) : CodeGen_CPU(tar
     if (target.has_feature(Target::Metal)) {
         debug(1) << "Constructing Metal device codegen\n";
         cgdev[DeviceAPI::Metal] = new CodeGen_Metal_Dev(target);
+    }
+    if (target.has_feature(Target::ThreadAsync)) {
+        debug(1) << "Constructing Metal device codegen\n";
+        cgdev[DeviceAPI::ThreadAsync] = new CodeGen_ThreadAsync_Dev(target);
     }
 
     if (cgdev.empty()) {

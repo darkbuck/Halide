@@ -220,10 +220,12 @@ Module lower(const vector<Function> &output_funcs, const string &pipeline_name, 
         debug(1) << "Skipping rewriting memoized allocations...\n";
     }
 
+    // TODO: This needs to go.
     if (t.has_gpu_feature() ||
         t.has_feature(Target::OpenGLCompute) ||
         t.has_feature(Target::OpenGL) ||
-        (t.arch != Target::Hexagon && (t.features_any_of({Target::HVX_64, Target::HVX_128})))) {
+        (t.arch != Target::Hexagon && (t.features_any_of({Target::HVX_64, Target::HVX_128}))) ||
+	t.has_feature(Target::ThreadAsync)) {
         debug(1) << "Selecting a GPU API for GPU loops...\n";
         s = select_gpu_api(s, t);
         debug(2) << "Lowering after selecting a GPU API:\n" << s << "\n\n";

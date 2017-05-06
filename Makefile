@@ -290,6 +290,7 @@ SOURCE_FILES = \
   CodeGen_Posix.cpp \
   CodeGen_PowerPC.cpp \
   CodeGen_PTX_Dev.cpp \
+  CodeGen_ThreadAsync_Dev.cpp \
   CodeGen_X86.cpp \
   CPlusPlusMangle.cpp \
   CSE.cpp \
@@ -419,6 +420,7 @@ HEADER_FILES = \
   CodeGen_Posix.h \
   CodeGen_PowerPC.h \
   CodeGen_PTX_Dev.h \
+  CodeGen_ThreadAsync_Dev.h \
   CodeGen_X86.h \
   ConciseCasts.h \
   CPlusPlusMangle.h \
@@ -543,6 +545,7 @@ RUNTIME_CPP_COMPONENTS = \
   android_opengl_context \
   android_tempfile \
   arm_cpu_features \
+  thread_async \
   buffer_t \
   cache \
   can_use_target \

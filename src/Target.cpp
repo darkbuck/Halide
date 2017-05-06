@@ -261,6 +261,7 @@ const std::map<std::string, Target::Feature> feature_name_map = {
     {"trace_loads", Target::TraceLoads},
     {"trace_stores", Target::TraceStores},
     {"trace_realizations", Target::TraceRealizations},
+    {"thread_async", Target::ThreadAsync},
 };
 
 bool lookup_feature(const std::string &tok, Target::Feature &result) {
@@ -518,6 +519,7 @@ Target::Feature target_feature_for_device_api(DeviceAPI api) {
     case DeviceAPI::OpenGLCompute: return Target::OpenGLCompute;
     case DeviceAPI::Metal:         return Target::Metal;
     case DeviceAPI::Hexagon:       return Target::HVX_128;
+    case DeviceAPI::ThreadAsync:   return Target::ThreadAsync;
     default:                       return Target::FeatureEnd;
     }
 }
