@@ -6,10 +6,11 @@ namespace Halide {
 namespace Internal {
 
 namespace {
-bool is_semaphore_acquire(Stmt s) {
+bool is_semaphore_acquire(Stmt s, const std::string &func) {
     const Evaluate *eval = s.as<Evaluate>();
     const Call *call = eval ? eval->value.as<Call>() : nullptr;
-    return call && call->name == "halide_semaphore_acquire";
+    const Variable *var = call ? call->args[0].as<Variable>() : nullptr;
+    return var && call->name == "halide_semaphore_acquire" && starts_with(var->name, func + ".");
 }
 }
 
@@ -24,8 +25,9 @@ class GenerateProducerBody : public IRMutator {
         if (op->name == func && op->is_producer) {
             // If the body is just a semaphore acquire injected by
             // storage folding, then this doesn't need additional
-            // synchronization. It would be correct, but wasteful.
-            if (is_semaphore_acquire(op->body)) {
+            // synchronization. It would be incorrect anyway, because
+            // there's no matching consume node to do the acquire.
+            if (is_semaphore_acquire(op->body, func)) {
                 stmt = op->body;
             } else {
                 // Add post-synchronization
