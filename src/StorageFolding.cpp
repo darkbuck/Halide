@@ -120,6 +120,9 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
         Box required = box_required(body, func.name());
         Box box = box_union(provided, required);
 
+        // If the producer is asynchronous, we may need some synchronization
+        vector<Semaphore> semaphores;
+
         // Try each dimension in turn from outermost in
         for (size_t i = box.size(); i > 0; i--) {
             Expr min = simplify(box[i-1].min);
@@ -179,13 +182,13 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
             // variable, and should depend on the loop variable.
             if (min_monotonic_increasing || max_monotonic_decreasing) {
                 Expr extent = simplify(max - min + 1);
-                Expr factor;
+                Expr factor, slop;
                 if (explicit_factor.defined()) {
                     Expr error = Call::make(Int(32), "halide_error_fold_factor_too_small",
                                             {func.name(), storage_dim.var, explicit_factor, op->name, extent},
                                             Call::Extern);
                     body = Block::make(AssertStmt::make(extent <= explicit_factor, error), body);
-
+                    slop = explicit_factor - extent;
                     factor = explicit_factor;
                 } else {
                     // The max of the extent over all values of the loop variable must be a constant
@@ -206,6 +209,7 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                                  << "extent = " << extent << "\n"
                                  << "max extent = " << max_extent << "\n";
                     }
+                    slop = factor - max_extent;
                 }
 
                 if (factor.defined()) {
@@ -214,6 +218,32 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                     Fold fold = {(int)i - 1, factor};
                     dims_folded.push_back(fold);
                     body = FoldStorageOfFunction(func.name(), (int)i - 1, factor).mutate(body);
+
+                    // If the producer is async, it can run ahead by at most 'slop' iterations
+                    if (starts_with(func.name(), "magic_prefix")) {
+                        // Make a semaphore
+                        std::string sema_name = func.name() + "." + op->name + ".semaphore";
+                        Expr sema_var = Variable::make(Handle(), sema_name);
+                        dims_folded.back().semaphore = Semaphore {sema_name, sema_var, slop};
+
+                        // The sync that stops the producer from
+                        // clobbering data that hasn't been used yet.
+                        Stmt block_the_producer =
+                            Evaluate::make(Call::make(Int(32), "halide_semaphore_acquire", {sema_var}, Call::Extern));
+
+                        // Put it inside a Produce node, because we want it to run on the producer's thread.
+                        block_the_producer = ProducerConsumer::make_produce(func.name(), block_the_producer);
+
+                        // Once the consumer is done, release the
+                        // producer to work on the next
+                        // iteration. This release could possibly be
+                        // moved earlier, but the end of the loop
+                        // iteration is a safe place to put it.
+                        Stmt release_producer =
+                            Evaluate::make(Call::make(Int(32), "halide_semaphore_release", {sema_var}, Call::Extern));
+
+                        body = Block::make({block_the_producer, body, release_producer});
+                    }
 
                     Expr next_var = Variable::make(Int(32), op->name) + 1;
                     Expr next_min = substitute(op->name, next_var, min);
@@ -230,6 +260,7 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                         return;
                     }
                 }
+
             } else {
                 debug(3) << "Not folding because loop min or max not monotonic in the loop variable\n"
                          << "min = " << min << "\n"
@@ -252,9 +283,16 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
     }
 
 public:
+    struct Semaphore {
+        string name;
+        Expr var;
+        Expr slop;
+    };
+
     struct Fold {
         int dim;
         Expr factor;
+        Semaphore semaphore;
     };
     vector<Fold> dims_folded;
 
@@ -338,6 +376,18 @@ class StorageFolding : public IRMutator {
                 }
 
                 stmt = Realize::make(op->name, op->types, bounds, op->condition, body);
+
+                // Each fold may have an associated semaphore that needs initialization
+                for (size_t i = 0; i < folder.dims_folded.size(); i++) {
+                    auto sema = folder.dims_folded[i].semaphore;
+                    if (sema.var.defined()) {
+                        Expr sema_space = Call::make(Handle(), Call::alloca, {4}, Call::Intrinsic);
+                        Expr sema_init = Call::make(Handle(), "halide_semaphore_init",
+                                                    {sema.var, sema.slop + 1}, Call::Extern);
+                        stmt = Block::make(Evaluate::make(sema_init), stmt);
+                        stmt = LetStmt::make(sema.name, sema_space, stmt);
+                    }
+                }
             }
         }
     }

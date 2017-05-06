@@ -91,4 +91,25 @@ WEAK void halide_cond_wait(struct halide_cond *cond, struct halide_mutex *mutex)
     pthread_cond_wait(cond, mutex);
 }
 
+WEAK int halide_semaphore_init(volatile int *sem, int val) {
+    *sem = val;
+    return val;
+}
+
+WEAK int halide_semaphore_acquire(volatile int *sem) {
+    while (1) {
+        int old_val = *sem;
+        if (old_val > 0) {
+            int new_val = old_val - 1;
+            if (__sync_bool_compare_and_swap(sem, old_val, new_val)) {
+                return new_val;
+            }
+        }
+    }
+}
+
+WEAK int halide_semaphore_release(volatile int *sem) {
+    return __sync_add_and_fetch(sem, 1);
+}
+
 } // extern "C"

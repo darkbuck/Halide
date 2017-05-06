@@ -42,10 +42,13 @@ private:
 private:
     using IRMutator::visit;
 
-    const vector<PrefetchDirective> &get_prefetch_list(const string &loop_name) {
+    vector<PrefetchDirective> get_prefetch_list(const string &loop_name) {
         if (!current_func || !starts_with(loop_name, current_func->name() + ".s" + std::to_string(stage))) {
             vector<string> v = split_string(loop_name, ".");
-            internal_assert(v.size() > 2);
+            if (v.size() < 2) {
+                // must be a synthetic loop not associated with a Func.
+                return vector<PrefetchDirective>();
+            }
             const string &func_name = v[0];
 
             // Get the stage index
