@@ -1,3 +1,4 @@
+#include "printer.h"
 
 namespace Halide { namespace Runtime { namespace Internal {
 
@@ -9,7 +10,13 @@ struct work {
     uint8_t *closure;
     int active_workers;
     int exit_status;
-    bool running() { return next < max || active_workers > 0; }
+    int *semaphore;
+    bool running() {
+        return next < max || active_workers > 0;
+    }
+    bool make_runnable() {
+        return semaphore == NULL || halide_semaphore_try_acquire(semaphore);
+    }
 };
 
 // The work queue and thread pool is weak, so one big work queue is shared by all halide functions
@@ -91,26 +98,47 @@ WEAK void worker_thread_already_locked(work *owned_job) {
     while (owned_job != NULL ? owned_job->running()
            : work_queue.running()) {
 
-        if (work_queue.jobs == NULL) {
+        print(NULL) << "Work queue:\n";
+        for (work *j = work_queue.jobs; j; j = j->next_job) {
+            if (j->semaphore) {
+                print(NULL) << j << ", " << j->semaphore << ", " << *(j->semaphore) << "\n";
+            } else {
+                print(NULL) << j << "\n";
+            }
+        }
+        print(NULL) << "NULL\n";
+        
+        
+        // Grab the next runnable job.
+        work **prev_ptr = &work_queue.jobs;
+        work *job = work_queue.jobs;
+        while (job && !job->make_runnable()) {
+            prev_ptr = &job->next_job;
+            job = job->next_job;
+        }
+
+        print(NULL) << "Next runnable job: " << job << "\n";
+            
+        if (job == NULL) {
             if (owned_job) {
-                // There are no jobs pending. Wait for the last worker
+                // There are no runnable jobs pending. Wait for the last worker
                 // to signal that the job is finished.
+                print(NULL) << "Master waiting...\n";
                 halide_cond_wait(&work_queue.wakeup_owners, &work_queue.mutex);
             } else if (work_queue.a_team_size <= work_queue.target_a_team_size) {
                 // There are no jobs pending. Wait until more jobs are enqueued.
+                print(NULL) << "Worker waiting...\n";
                 halide_cond_wait(&work_queue.wakeup_a_team, &work_queue.mutex);
             } else {
                 // There are no jobs pending, and there are too many
                 // threads in the A team. Transition to the B team
                 // until the wakeup_b_team condition is fired.
+                print(NULL) << "Worker waiting...\n";
                 work_queue.a_team_size--;
                 halide_cond_wait(&work_queue.wakeup_b_team, &work_queue.mutex);
                 work_queue.a_team_size++;
             }
         } else {
-            // Grab the next job.
-            work *job = work_queue.jobs;
-
             // Claim a task from it.
             work myjob = *job;
             job->next++;
@@ -118,7 +146,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
             // If there were no more tasks pending for this job,
             // remove it from the stack.
             if (job->next == job->max) {
-                work_queue.jobs = job->next_job;
+                *prev_ptr = job->next_job;
             }
 
             // Increment the active_worker count so that other threads
@@ -126,11 +154,15 @@ WEAK void worker_thread_already_locked(work *owned_job) {
             // though there are no outstanding tasks for it.
             job->active_workers++;
 
+            print(NULL) << "Beginning task " << job << ": " << myjob.next << "\n";
+            
             // Release the lock and do the task.
             halide_mutex_unlock(&work_queue.mutex);
             int result = halide_do_task(myjob.user_context, myjob.f, myjob.next,
                                         myjob.closure);
             halide_mutex_lock(&work_queue.mutex);
+
+            print(NULL) << "End task " << job << ": " << myjob.next << "\n";
 
             // If this task failed, set the exit status on the job.
             if (result) {
@@ -155,52 +187,46 @@ WEAK void worker_thread(void *) {
     halide_mutex_unlock(&work_queue.mutex);
 }
 
-}}}  // namespace Halide::Runtime::Internal
 
-using namespace Halide::Runtime::Internal;
+WEAK int enqueue_work_and_enter_thread_pool(void *user_context, halide_task_t f,
+                                            int min, int size, int *semaphore, uint8_t *closure) {
+    print(NULL) << "Locking mutex...\n";
 
-extern "C" {
-
-WEAK int halide_default_do_task(void *user_context, halide_task_t f, int idx,
-                                uint8_t *closure) {
-    return f(user_context, idx, closure);
-}
-
-WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
-                                   int min, int size, uint8_t *closure) {
     // Grab the lock. If it hasn't been initialized yet, then the
     // field will be zero-initialized because it's a static global.
     halide_mutex_lock(&work_queue.mutex);
 
+    print(NULL) << "Enqueueing task: " << (void *)f << ", " << min << ", " << size << ", " << semaphore << "\n";   
+    
     if (!work_queue.initialized) {
-        work_queue.shutdown = false;
-        halide_cond_init(&work_queue.wakeup_owners);
-        halide_cond_init(&work_queue.wakeup_a_team);
-        halide_cond_init(&work_queue.wakeup_b_team);
-        work_queue.jobs = NULL;
-
-        // Compute the desired number of threads to use. Other code
-        // can also mess with this value, but only when the work queue
-        // is locked.
-        if (!work_queue.desired_num_threads) {
-            work_queue.desired_num_threads = default_desired_num_threads();
-        }
-        work_queue.desired_num_threads = clamp_num_threads(work_queue.desired_num_threads);
-        work_queue.threads_created = 0;
-
-        // Everyone starts on the a team.
-        work_queue.a_team_size = work_queue.desired_num_threads;
-
-        work_queue.initialized = true;
-    }
-
-    while (work_queue.threads_created < work_queue.desired_num_threads - 1) {
+         work_queue.shutdown = false;
+         halide_cond_init(&work_queue.wakeup_owners);
+         halide_cond_init(&work_queue.wakeup_a_team);
+         halide_cond_init(&work_queue.wakeup_b_team);
+         work_queue.jobs = NULL;
+         
+         // Compute the desired number of threads to use. Other code
+         // can also mess with this value, but only when the work queue
+         // is locked.
+         if (!work_queue.desired_num_threads) {
+             work_queue.desired_num_threads = default_desired_num_threads();
+         }
+         work_queue.desired_num_threads = clamp_num_threads(work_queue.desired_num_threads);
+         work_queue.threads_created = 0;
+         
+         // Everyone starts on the a team.
+         work_queue.a_team_size = work_queue.desired_num_threads;
+         
+         work_queue.initialized = true;
+     }
+     
+     while (work_queue.threads_created < work_queue.desired_num_threads - 1) {
         // We might need to make some new threads, if work_queue.desired_num_threads has
         // increased.
         work_queue.threads[work_queue.threads_created++] =
             halide_spawn_thread(worker_thread, NULL);
-    }
-
+    }   
+    
     // Make the job.
     work job;
     job.f = f;               // The job should call this function. It takes an index and a closure.
@@ -210,7 +236,8 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     job.closure = closure;   // Use this closure.
     job.exit_status = 0;     // The job hasn't failed yet
     job.active_workers = 0;  // Nobody is working on this yet
-
+    job.semaphore = semaphore;  // The job can't start until this is > 0
+    
     if (!work_queue.jobs && size < work_queue.desired_num_threads) {
         // If there's no nested parallelism happening and there are
         // fewer tasks to do than threads, then set the target A team
@@ -239,13 +266,36 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     }
 
     // Do some work myself.
+    print(NULL) << "Master entering worker pool\n";
     worker_thread_already_locked(&job);
+    print(NULL) << "Master leaving worker pool\n";
 
     halide_mutex_unlock(&work_queue.mutex);
 
     // Return zero if the job succeeded, otherwise return the exit
     // status of one of the failing jobs (whichever one failed last).
     return job.exit_status;
+}
+                                            
+}}}  // namespace Halide::Runtime::Internal
+
+using namespace Halide::Runtime::Internal;
+
+extern "C" {
+
+WEAK int halide_default_do_task(void *user_context, halide_task_t f, int idx,
+                                uint8_t *closure) {
+    return f(user_context, idx, closure);
+}
+
+WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
+                                   int min, int size, uint8_t *closure) {
+    return enqueue_work_and_enter_thread_pool(user_context, f, min, size, NULL, closure);
+}
+
+// TODO: Make this default_do_async and add the function pointer indirection junk
+WEAK int halide_do_async_consumer(void *user_context, halide_task_t f, int *semaphore, uint8_t *closure) {
+    return enqueue_work_and_enter_thread_pool(user_context, f, 0, 1, semaphore, closure);
 }
 
 WEAK int halide_set_num_threads(int n) {

@@ -350,6 +350,7 @@ protected:
     virtual void visit(const AssertStmt *);
     virtual void visit(const ProducerConsumer *);
     virtual void visit(const For *);
+    virtual void visit(const AsyncConsumer *);
     virtual void visit(const Store *);
     virtual void visit(const Block *);
     virtual void visit(const IfThenElse *);

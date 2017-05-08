@@ -87,6 +87,65 @@ public:
         func(f), dim(d), factor(e) {}
 };
 
+struct Semaphore {
+    string name;
+    Expr var;
+    Expr slop;
+};
+
+class InjectSynchronization : public IRMutator {
+    const std::string &func;
+    Expr semaphore;
+    
+    void visit(const For *op) {
+        // Don't enter for loops. If there's another loop in between
+        // the currently folded loop and the produce/consume nodes,
+        // then it must be serial with no overlap between produced and
+        // consumed regions from one iteration to the next. This is
+        // outside the asynchronous producer, so we don't need
+        // synchronization over the current loop.
+        stmt = op;
+    }
+
+    void visit(const ProducerConsumer *op) {
+        if (op->name == func) {
+            semaphore_needed = true;
+            if (op->is_producer) {
+                // The sync that stops the producer from
+                // clobbering data that hasn't been used yet.
+                // TODO: How do I ensure this runs on the producer thread?
+                stmt = AsyncConsumer::make(semaphore, op);
+            } else {
+                Stmt release_producer =
+                    Evaluate::make(Call::make(Int(32), "halide_semaphore_release", {semaphore}, Call::Extern));                
+                Stmt body = Block::make(op->body, release_producer);
+                stmt = ProducerConsumer::make(op->name, op->is_producer, body);
+            }
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+public:
+    bool semaphore_needed = false;
+    InjectSynchronization(const std::string &f, Expr s) : func(f), semaphore(s) {}
+};
+
+std::pair<Stmt, Semaphore> inject_synchronization(Stmt body, const std::string &func, Expr slop) {
+    Semaphore sema;
+    sema.name = func + ".folding_semaphore" + unique_name('_');
+    sema.var = Variable::make(type_of<int *>(), sema.name);
+    sema.slop = slop;
+
+    InjectSynchronization injector(func, sema.var);
+    body = injector.mutate(body);
+    if (injector.semaphore_needed) {
+        return {body, sema};
+    } else {
+        return {body, Semaphore{}};
+    }
+}
+
 // Attempt to fold the storage of a particular function in a statement
 class AttemptStorageFoldingOfFunction : public IRMutator {
     Function func;
@@ -119,9 +178,6 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
         Box provided = box_provided(body, func.name());
         Box required = box_required(body, func.name());
         Box box = box_union(provided, required);
-
-        // If the producer is asynchronous, we may need some synchronization
-        vector<Semaphore> semaphores;
 
         // Try each dimension in turn from outermost in
         for (size_t i = box.size(); i > 0; i--) {
@@ -221,28 +277,14 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
 
                     // If the producer is async, it can run ahead by at most 'slop' iterations
                     if (starts_with(func.name(), "magic_prefix")) {
-                        // Make a semaphore
-                        std::string sema_name = func.name() + "." + op->name + ".semaphore";
-                        Expr sema_var = Variable::make(Handle(), sema_name);
-                        dims_folded.back().semaphore = Semaphore {sema_name, sema_var, slop};
-
-                        // The sync that stops the producer from
-                        // clobbering data that hasn't been used yet.
-                        Stmt block_the_producer =
-                            Evaluate::make(Call::make(Int(32), "halide_semaphore_acquire", {sema_var}, Call::Extern));
-
-                        // Put it inside a Produce node, because we want it to run on the producer's thread.
-                        block_the_producer = ProducerConsumer::make_produce(func.name(), block_the_producer);
-
-                        // Once the consumer is done, release the
-                        // producer to work on the next
-                        // iteration. This release could possibly be
-                        // moved earlier, but the end of the loop
-                        // iteration is a safe place to put it.
-                        Stmt release_producer =
-                            Evaluate::make(Call::make(Int(32), "halide_semaphore_release", {sema_var}, Call::Extern));
-
-                        body = Block::make({block_the_producer, body, release_producer});
+                        Semaphore sema;                       
+                        sema.name = func.name() + ".folding_semaphore." + unique_name('_');
+                        sema.var = Variable::make(type_of<int *>(), sema.name);
+                        sema.slop = slop;
+                        Expr release_producer = Call::make(Int(32), "halide_semaphore_release", {sema.var}, Call::Extern);
+                        body = Block::make(body, Evaluate::make(release_producer));
+                        body = AsyncConsumer::make(sema.var, body);
+                        dims_folded.back().semaphore = sema;
                     }
 
                     Expr next_var = Variable::make(Int(32), op->name) + 1;
@@ -283,12 +325,6 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
     }
 
 public:
-    struct Semaphore {
-        string name;
-        Expr var;
-        Expr slop;
-    };
-
     struct Fold {
         int dim;
         Expr factor;

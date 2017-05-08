@@ -54,6 +54,7 @@ enum class IRNodeType {
     AssertStmt,
     ProducerConsumer,
     For,
+    AsyncConsumer,
     Store,
     Provide,
     Allocate,

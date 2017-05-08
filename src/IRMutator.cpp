@@ -214,6 +214,17 @@ void IRMutator::visit(const For *op) {
     }
 }
 
+void IRMutator::visit(const AsyncConsumer *op) {
+    Expr sema = mutate(op->semaphore);
+    Stmt body = mutate(op->body);
+    if (sema.same_as(op->semaphore) &&
+        body.same_as(op->body)) {
+        stmt = op;
+    } else {
+        stmt = AsyncConsumer::make(sema, body);
+    }
+}
+
 void IRMutator::visit(const Store *op) {
     Expr predicate = mutate(op->predicate);
     Expr value = mutate(op->value);

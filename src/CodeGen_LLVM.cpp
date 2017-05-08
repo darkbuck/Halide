@@ -3088,6 +3088,108 @@ void CodeGen_LLVM::visit(const For *op) {
     }
 }
 
+void CodeGen_LLVM::visit(const AsyncConsumer *op) {
+    // TODO: factor out common code with do_par_for
+
+    // Find every symbol that the body of this loop refers to
+    // and dump it into a closure
+    Closure closure(op->body);
+    
+    // Allocate a closure
+    StructType *closure_t = build_closure_type(closure, buffer_t_type, context);
+    Value *ptr = create_alloca_at_entry(closure_t, 1);
+
+    // Fill in the closure
+    pack_closure(closure_t, ptr, closure, symbol_table, buffer_t_type, builder);
+
+    // Make a new function that does the body
+    llvm::Type *voidPointerType = (llvm::Type *)(i8_t->getPointerTo());
+    llvm::Type *args_t[] = {voidPointerType, i32_t, voidPointerType};
+    FunctionType *func_t = FunctionType::get(i32_t, args_t, false);
+    llvm::Function *containing_function = function;
+    function = llvm::Function::Create(func_t, llvm::Function::InternalLinkage,
+                                      "async_consumer_" + function->getName() + unique_name('_'), module.get());
+
+    #if LLVM_VERSION < 50
+    function->setDoesNotAlias(3);
+    #else
+    function->addParamAttr(2, Attribute::NoAlias);
+    #endif
+    set_function_attributes_for_target(function, target);
+
+    // Make the initial basic block and jump the builder into the new function
+    IRBuilderBase::InsertPoint call_site = builder->saveIP();
+    BasicBlock *block = BasicBlock::Create(*context, "entry", function);
+    builder->SetInsertPoint(block);
+
+    // Get the user context value before swapping out the symbol table.
+    Value *user_context = get_user_context();
+
+    // Grab the semaphore
+    Value *semaphore = codegen(op->semaphore);
+    
+    // Save the destructor block
+    BasicBlock *parent_destructor_block = destructor_block;
+    destructor_block = nullptr;
+
+    // Make a new scope to use
+    Scope<Value *> saved_symbol_table;
+    symbol_table.swap(saved_symbol_table);
+
+    // Get the function arguments
+
+    // The user context is first argument of the function; it's
+    // important that we override the name to be "__user_context",
+    // since the LLVM function has a random auto-generated name for
+    // this argument.
+    llvm::Function::arg_iterator iter = function->arg_begin();
+    sym_push("__user_context", iterator_to_pointer(iter));
+
+    // Next is int task number argument. Unused here.
+    ++iter;
+
+    // The closure pointer is the third and last argument.
+    ++iter;
+    iter->setName("closure");
+    Value *closure_handle = builder->CreatePointerCast(iterator_to_pointer(iter),
+                                                       closure_t->getPointerTo());
+
+    // Load everything from the closure into the new scope
+    unpack_closure(closure, symbol_table, closure_t, closure_handle, builder);
+
+    // Generate the new function body
+    codegen(op->body);
+
+    // Return success
+    return_with_error_code(ConstantInt::get(i32_t, 0));
+
+    // Move the builder back to the main function and call do_async_consumer
+    builder->restoreIP(call_site);
+    llvm::Function *do_async_consumer = module->getFunction("halide_do_async_consumer");
+    internal_assert(do_async_consumer) << "Could not find halide_do_async_consumer in initial module\n";
+    #if LLVM_VERSION < 50
+    do_async_consumer->setDoesNotAlias(4);
+    #else
+    do_async_consumer->addParamAttr(3, Attribute::NoAlias);
+    #endif
+    ptr = builder->CreatePointerCast(ptr, i8_t->getPointerTo());
+    semaphore = builder->CreatePointerCast(semaphore, i32_t->getPointerTo());
+    Value *args[] = {user_context, function, semaphore, ptr};
+    debug(4) << "Creating call to do_async_consumer\n";
+    Value *result = builder->CreateCall(do_async_consumer, args);
+
+    // Now restore the scope
+    symbol_table.swap(saved_symbol_table);
+    function = containing_function;
+
+    // Restore the destructor block
+    destructor_block = parent_destructor_block;
+
+    // Check for success
+    Value *did_succeed = builder->CreateICmpEQ(result, ConstantInt::get(i32_t, 0));
+    create_assertion(did_succeed, Expr(), result);    
+}
+
 void CodeGen_LLVM::visit(const Store *op) {
     // Even on 32-bit systems, Handles are treated as 64-bit in
     // memory, so convert stores of handles to stores of uint64_ts.

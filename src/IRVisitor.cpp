@@ -168,6 +168,11 @@ void IRVisitor::visit(const For *op) {
     op->body.accept(this);
 }
 
+void IRVisitor::visit(const AsyncConsumer *op) {
+    op->semaphore.accept(this);
+    op->body.accept(this);
+}
+
 void IRVisitor::visit(const Store *op) {
     op->predicate.accept(this);
     op->value.accept(this);
@@ -404,6 +409,11 @@ void IRGraphVisitor::visit(const ProducerConsumer *op) {
 void IRGraphVisitor::visit(const For *op) {
     include(op->min);
     include(op->extent);
+    include(op->body);
+}
+
+void IRGraphVisitor::visit(const AsyncConsumer *op) {
+    include(op->semaphore);
     include(op->body);
 }
 

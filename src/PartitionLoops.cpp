@@ -985,7 +985,7 @@ Stmt partition_loops(Stmt s) {
     s = LowerLikelyIfInnermost().mutate(s);
     s = MarkClampedRampsAsLikely().mutate(s);
     s = ExpandSelects().mutate(s);
-    s = PartitionLoops().mutate(s);
+    //s = PartitionLoops().mutate(s);
     s = RenormalizeGPULoops().mutate(s);
     s = RemoveLikelyTags().mutate(s);
     s = CollapseSelects().mutate(s);

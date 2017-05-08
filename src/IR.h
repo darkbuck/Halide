@@ -663,6 +663,15 @@ struct For : public StmtNode<For> {
     static const IRNodeType _type_info = IRNodeType::For;
 };
 
+struct AsyncConsumer : public StmtNode<AsyncConsumer> {
+    Expr semaphore;
+    Stmt body;
+
+    EXPORT static Stmt make(const Expr &semaphore, const Stmt &body);
+
+    static const IRNodeType _type_info = IRNodeType::AsyncConsumer;
+};
+
 /** Construct a new vector by taking elements from another sequence of
  * vectors. */
 struct Shuffle : public ExprNode<Shuffle> {

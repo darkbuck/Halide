@@ -5,15 +5,6 @@
 namespace Halide {
 namespace Internal {
 
-namespace {
-bool is_semaphore_acquire(Stmt s, const std::string &func) {
-    const Evaluate *eval = s.as<Evaluate>();
-    const Call *call = eval ? eval->value.as<Call>() : nullptr;
-    const Variable *var = call ? call->args[0].as<Variable>() : nullptr;
-    return var && call->name == "halide_semaphore_acquire" && starts_with(var->name, func + ".");
-}
-}
-
 class GenerateProducerBody : public IRMutator {
     const std::string &func;
     Expr sema;
@@ -23,18 +14,10 @@ class GenerateProducerBody : public IRMutator {
     // Preserve produce nodes and add synchronization
     void visit(const ProducerConsumer *op) {
         if (op->name == func && op->is_producer) {
-            // If the body is just a semaphore acquire injected by
-            // storage folding, then this doesn't need additional
-            // synchronization. It would be incorrect anyway, because
-            // there's no matching consume node to do the acquire.
-            if (is_semaphore_acquire(op->body, func)) {
-                stmt = op->body;
-            } else {
-                // Add post-synchronization
-                Expr release = Call::make(Int(32), "halide_semaphore_release", {sema}, Call::Extern);
-                Stmt body = Block::make(op->body, Evaluate::make(release));
-                stmt = ProducerConsumer::make_produce(op->name, body);
-            }
+            // Add post-synchronization
+            Expr release = Call::make(Int(32), "halide_semaphore_release", {sema}, Call::Extern);
+            Stmt body = Block::make(op->body, Evaluate::make(release));
+            stmt = ProducerConsumer::make_produce(op->name, body);
         } else {
             Stmt body = mutate(op->body);
             if (is_no_op(body)) {
@@ -119,11 +102,22 @@ class GenerateConsumerBody : public IRMutator {
                 stmt = Evaluate::make(0);
             } else {
                 // Synchronize on the work done by the producer before beginning consumption
-                Expr acquire = Call::make(Int(32), "halide_semaphore_acquire", {sema}, Call::Extern);
-                IRMutator::visit(op);
-                stmt = Block::make(Evaluate::make(acquire), stmt);
+                stmt = AsyncConsumer::make(sema, op);
             }
         } else {
+            IRMutator::visit(op);
+        }
+    }
+
+
+    void visit(const AsyncConsumer *op) {
+        // Don't want to duplicate any semaphore acquires. Ones from folding should go to the producer side.
+        const Variable *var = op->semaphore.as<Variable>();
+        internal_assert(var);
+        if (starts_with(var->name, func + ".folding_semaphore.")) {
+            stmt = mutate(op->body);
+        } else {
+            // All other acquires go to the consumer
             IRMutator::visit(op);
         }
     }
@@ -159,6 +153,8 @@ class ForkAsyncProducers : public IRMutator {
             // Recurse on both sides
             producer = mutate(producer);
             consumer = mutate(consumer);
+
+            debug(0) << producer << "\n\n" << consumer << "\n";
 
             // Poor man's task parallel block
             std::string task = unique_name('t');

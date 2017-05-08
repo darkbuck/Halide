@@ -152,6 +152,7 @@ bool function_takes_user_context(const std::string &name) {
         "halide_device_sync",
         "halide_do_par_for",
         "halide_do_task",
+        "halide_do_async_consumer",
         "halide_error",
         "halide_free",
         "halide_malloc",
