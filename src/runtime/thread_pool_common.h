@@ -115,14 +115,16 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         #endif
 
         // Grab the next runnable job.
+        int unrunnable_jobs = 0;
         work **prev_ptr = &work_queue.jobs;
         work *job = work_queue.jobs;
         while (job) {
-            if (job->make_runnable() &&
-               (!owned_job || job->id >= owned_job->id)) {
+            if ((!owned_job || job->id >= owned_job->id) &&
+                job->make_runnable()) {
                 // We can run this job.
                 break;
             }
+            unrunnable_jobs++;
             prev_ptr = &job->next_job;
             job = job->next_job;
         }
@@ -131,25 +133,33 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         print(NULL) << "Next runnable job: " << job << "\n";
         #endif
 
-        bool all_jobs_blocked = (job == NULL) && (work_queue.jobs);
-
         if (job == NULL) {
             if (owned_job) {
                 // There are no runnable jobs pending. Wait for the last worker
                 // to signal that the job is finished.
-                print(NULL) << "WAIT: Master..."<< all_jobs_blocked << "\n";
+                print(NULL) << "WAIT: Master..."<< unrunnable_jobs << "\n";
+                if (unrunnable_jobs) {
+                    // Wake up the workers: TODO only if there are
+                    // jobs that are unrunnable due to ordering
+                    // concerns, not semaphore issues. And probably
+                    // not the b team.
+                    print(NULL) << "Waking up everyone\n";
+                    halide_cond_broadcast(&work_queue.wakeup_owners);
+                    halide_cond_broadcast(&work_queue.wakeup_a_team);
+                    halide_cond_broadcast(&work_queue.wakeup_b_team);
+                }
                 halide_cond_wait(&work_queue.wakeup_owners, &work_queue.mutex);
                 print(NULL) << "AWAKE: Master...\n";
             } else if (work_queue.a_team_size <= work_queue.target_a_team_size) {
                 // There are no jobs pending. Wait until more jobs are enqueued.
-                print(NULL) << "WAIT: Worker..." << all_jobs_blocked << "\n";
+                print(NULL) << "WAIT: Worker..." << unrunnable_jobs << "\n";
                 halide_cond_wait(&work_queue.wakeup_a_team, &work_queue.mutex);
                 print(NULL) << "AWAKE: Worker...\n";
             } else {
                 // There are no jobs pending, and there are too many
                 // threads in the A team. Transition to the B team
                 // until the wakeup_b_team condition is fired.
-                print(NULL) << "WAIT: Worker..." << all_jobs_blocked << "\n";
+                print(NULL) << "WAIT: Worker..." << unrunnable_jobs << "\n";
                 work_queue.a_team_size--;
                 halide_cond_wait(&work_queue.wakeup_b_team, &work_queue.mutex);
                 work_queue.a_team_size++;
