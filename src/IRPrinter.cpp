@@ -576,7 +576,7 @@ void IRPrinter::visit(const For *op) {
     stream << "}\n";
 }
 
-void IRPrinter::visit(const AsyncConsumer *op) {
+void IRPrinter::visit(const Acquire *op) {
     do_indent();
     stream << "acquire (";
     print(op->semaphore);

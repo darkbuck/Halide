@@ -80,7 +80,7 @@ private:
     void visit(const AssertStmt *);
     void visit(const ProducerConsumer *);
     void visit(const For *);
-    void visit(const AsyncConsumer *);
+    void visit(const Acquire *);
     void visit(const Store *);
     void visit(const Provide *);
     void visit(const Allocate *);
@@ -369,8 +369,8 @@ void IRComparer::visit(const For *op) {
     compare_stmt(s->body, op->body);
 }
 
-void IRComparer::visit(const AsyncConsumer *op) {
-    const AsyncConsumer *s = stmt.as<AsyncConsumer>();
+void IRComparer::visit(const Acquire *op) {
+    const Acquire *s = stmt.as<Acquire>();
 
     compare_expr(s->semaphore, op->semaphore);
     compare_stmt(s->body, op->body);

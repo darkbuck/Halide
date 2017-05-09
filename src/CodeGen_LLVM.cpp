@@ -3088,7 +3088,7 @@ void CodeGen_LLVM::visit(const For *op) {
     }
 }
 
-void CodeGen_LLVM::visit(const AsyncConsumer *op) {
+void CodeGen_LLVM::visit(const Acquire *op) {
     // TODO: factor out common code with do_par_for
 
     // Find every symbol that the body of this loop refers to

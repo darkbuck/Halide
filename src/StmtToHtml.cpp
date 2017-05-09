@@ -379,7 +379,7 @@ private:
         scope.pop(op->name);
     }
 
-    void visit(const AsyncConsumer *op) {
+    void visit(const Acquire *op) {
         stream << open_div("Acquire");
         int id = unique_id();
         stream << open_span("Matched");

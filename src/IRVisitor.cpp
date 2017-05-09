@@ -168,7 +168,7 @@ void IRVisitor::visit(const For *op) {
     op->body.accept(this);
 }
 
-void IRVisitor::visit(const AsyncConsumer *op) {
+void IRVisitor::visit(const Acquire *op) {
     op->semaphore.accept(this);
     op->body.accept(this);
 }
@@ -412,7 +412,7 @@ void IRGraphVisitor::visit(const For *op) {
     include(op->body);
 }
 
-void IRGraphVisitor::visit(const AsyncConsumer *op) {
+void IRGraphVisitor::visit(const Acquire *op) {
     include(op->semaphore);
     include(op->body);
 }

@@ -346,7 +346,7 @@ class MonotonicVisitor : public IRVisitor {
         internal_error << "Monotonic of statement\n";
     }
 
-    void visit(const AsyncConsumer *op) {
+    void visit(const Acquire *op) {
         internal_error << "Monotonic of statement\n";
     }
 

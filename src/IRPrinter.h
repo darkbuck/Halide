@@ -125,7 +125,7 @@ protected:
     void visit(const AssertStmt *);
     void visit(const ProducerConsumer *);
     void visit(const For *);
-    void visit(const AsyncConsumer *);
+    void visit(const Acquire *);
     void visit(const Store *);
     void visit(const Provide *);
     void visit(const Allocate *);

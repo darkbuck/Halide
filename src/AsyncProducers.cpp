@@ -91,23 +91,23 @@ class GenerateProducerBody : public IRMutator {
         }
     }
 
-    void visit(const AsyncConsumer *op) {
+    void visit(const Acquire *op) {
         Stmt body = mutate(op->body);
         const Variable *var = op->semaphore.as<Variable>();
-        debug(0) << "Hit AsyncConsumer: " << op->semaphore << "\n";
+        debug(0) << "Hit Acquire: " << op->semaphore << "\n";
         internal_assert(var);
         if (is_no_op(body)) {
             stmt = body;
         } else if (starts_with(var->name, func + ".folding_semaphore.")) {
             // This is a storage-folding semaphore. Keep it.
-            stmt = AsyncConsumer::make(op->semaphore, body);
+            stmt = Acquire::make(op->semaphore, body);
         } else {
             // Uh-oh, the consumer also has a copy of this await! Make
             // a distinct one for the producer
             string forked_await = var->name + unique_name('_');
             debug(0) << "Queueing up forked await: " << var->name << " -> " << forked_await << "\n";
             forked_awaits[var->name] = forked_await;
-            stmt = AsyncConsumer::make(Variable::make(type_of<int *>(), forked_await), body);
+            stmt = Acquire::make(Variable::make(type_of<int *>(), forked_await), body);
         }
     }
 
@@ -142,14 +142,14 @@ class GenerateConsumerBody : public IRMutator {
                 stmt = Evaluate::make(0);
             } else {
                 // Synchronize on the work done by the producer before beginning consumption
-                stmt = AsyncConsumer::make(sema, op);
+                stmt = Acquire::make(sema, op);
             }
         } else {
             IRMutator::visit(op);
         }
     }
 
-    void visit(const AsyncConsumer *op) {
+    void visit(const Acquire *op) {
         // Don't want to duplicate any semaphore acquires. Ones from folding should go to the producer side.
         const Variable *var = op->semaphore.as<Variable>();
         internal_assert(var);

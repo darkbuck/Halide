@@ -116,7 +116,7 @@ class InjectSynchronization : public IRMutator {
                 // The sync that stops the producer from
                 // clobbering data that hasn't been used yet.
                 // TODO: How do I ensure this runs on the producer thread?
-                stmt = AsyncConsumer::make(semaphore, op);
+                stmt = Acquire::make(semaphore, op);
             } else {
                 Stmt release_producer =
                     Evaluate::make(Call::make(Int(32), "halide_semaphore_release", {semaphore}, Call::Extern));
@@ -285,7 +285,7 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                         sema.slop = slop;
                         Expr release_producer = Call::make(Int(32), "halide_semaphore_release", {sema.var}, Call::Extern);
                         body = Block::make(body, Evaluate::make(release_producer));
-                        body = AsyncConsumer::make(sema.var, body);
+                        body = Acquire::make(sema.var, body);
                         dims_folded.back().semaphore = sema;
                     }
 

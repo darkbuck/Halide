@@ -342,11 +342,11 @@ Stmt For::make(const std::string &name, const Expr &min, const Expr &extent, For
     return node;
 }
 
-Stmt AsyncConsumer::make(const Expr &semaphore, const Stmt &body) {
-    internal_assert(semaphore.defined()) << "AsyncConsumer with undefined semaphore\n";
-    internal_assert(body.defined()) << "AsyncConsumer with undefined body\n";
+Stmt Acquire::make(const Expr &semaphore, const Stmt &body) {
+    internal_assert(semaphore.defined()) << "Acquire with undefined semaphore\n";
+    internal_assert(body.defined()) << "Acquire with undefined body\n";
 
-    AsyncConsumer *node = new AsyncConsumer;
+    Acquire *node = new Acquire;
     node->semaphore = semaphore;
     node->body = body;
     return node;
@@ -776,7 +776,7 @@ template<> void StmtNode<LetStmt>::accept(IRVisitor *v) const { v->visit((const 
 template<> void StmtNode<AssertStmt>::accept(IRVisitor *v) const { v->visit((const AssertStmt *)this); }
 template<> void StmtNode<ProducerConsumer>::accept(IRVisitor *v) const { v->visit((const ProducerConsumer *)this); }
 template<> void StmtNode<For>::accept(IRVisitor *v) const { v->visit((const For *)this); }
-template<> void StmtNode<AsyncConsumer>::accept(IRVisitor *v) const { v->visit((const AsyncConsumer *)this); }
+template<> void StmtNode<Acquire>::accept(IRVisitor *v) const { v->visit((const Acquire *)this); }
 template<> void StmtNode<Store>::accept(IRVisitor *v) const { v->visit((const Store *)this); }
 template<> void StmtNode<Provide>::accept(IRVisitor *v) const { v->visit((const Provide *)this); }
 template<> void StmtNode<Allocate>::accept(IRVisitor *v) const { v->visit((const Allocate *)this); }

@@ -51,7 +51,7 @@ public:
     void visit(const AssertStmt *);
     void visit(const ProducerConsumer *);
     void visit(const For *);
-    void visit(const AsyncConsumer *);
+    void visit(const Acquire *);
     void visit(const Store *);
     void visit(const Provide *);
     void visit(const Allocate *);
@@ -414,7 +414,7 @@ void ComputeModulusRemainder::visit(const For *) {
     internal_assert(false) << "modulus_remainder of statement\n";
 }
 
-void ComputeModulusRemainder::visit(const AsyncConsumer *) {
+void ComputeModulusRemainder::visit(const Acquire *) {
     internal_assert(false) << "modulus_remainder of statement\n";
 }
 

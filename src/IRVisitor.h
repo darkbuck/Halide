@@ -54,7 +54,7 @@ public:
     EXPORT virtual void visit(const AssertStmt *);
     EXPORT virtual void visit(const ProducerConsumer *);
     EXPORT virtual void visit(const For *);
-    EXPORT virtual void visit(const AsyncConsumer *);
+    EXPORT virtual void visit(const Acquire *);
     EXPORT virtual void visit(const Store *);
     EXPORT virtual void visit(const Provide *);
     EXPORT virtual void visit(const Allocate *);
@@ -121,7 +121,7 @@ public:
     EXPORT virtual void visit(const AssertStmt *);
     EXPORT virtual void visit(const ProducerConsumer *);
     EXPORT virtual void visit(const For *);
-    EXPORT virtual void visit(const AsyncConsumer *);
+    EXPORT virtual void visit(const Acquire *);
     EXPORT virtual void visit(const Store *);
     EXPORT virtual void visit(const Provide *);
     EXPORT virtual void visit(const Allocate *);
