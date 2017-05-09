@@ -96,7 +96,9 @@ struct Semaphore {
 class InjectSynchronization : public IRMutator {
     const std::string &func;
     Expr semaphore;
-    
+
+    using IRMutator::visit;
+
     void visit(const For *op) {
         // Don't enter for loops. If there's another loop in between
         // the currently folded loop and the produce/consume nodes,
@@ -117,7 +119,7 @@ class InjectSynchronization : public IRMutator {
                 stmt = AsyncConsumer::make(semaphore, op);
             } else {
                 Stmt release_producer =
-                    Evaluate::make(Call::make(Int(32), "halide_semaphore_release", {semaphore}, Call::Extern));                
+                    Evaluate::make(Call::make(Int(32), "halide_semaphore_release", {semaphore}, Call::Extern));
                 Stmt body = Block::make(op->body, release_producer);
                 stmt = ProducerConsumer::make(op->name, op->is_producer, body);
             }
@@ -276,8 +278,8 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                     body = FoldStorageOfFunction(func.name(), (int)i - 1, factor).mutate(body);
 
                     // If the producer is async, it can run ahead by at most 'slop' iterations
-                    if (starts_with(func.name(), "magic_prefix")) {
-                        Semaphore sema;                       
+                    if (starts_with(func.name(), "async_")) {
+                        Semaphore sema;
                         sema.name = func.name() + ".folding_semaphore." + unique_name('_');
                         sema.var = Variable::make(type_of<int *>(), sema.name);
                         sema.slop = slop;

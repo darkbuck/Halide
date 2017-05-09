@@ -341,6 +341,7 @@ private:
         stream << close_div();
         scope.pop(op->name);
     }
+
     void visit(const For *op) {
         scope.push(op->name, unique_id());
         stream << open_div("For");
@@ -377,6 +378,24 @@ private:
         stream << close_div();
         scope.pop(op->name);
     }
+
+    void visit(const AsyncConsumer *op) {
+        stream << open_div("Acquire");
+        int id = unique_id();
+        stream << open_span("Matched");
+        stream << open_expand_button(id);
+        stream << keyword("acquire (");
+        stream << close_span();
+        print(op->semaphore);
+        stream << matched(")");
+        stream << close_expand_button() << " {";
+        stream << open_div("Acquire Indent", id);
+        print(op->body);
+        stream << close_div();
+        stream << matched("}");
+        stream << close_div();
+    }
+
     void visit(const Store *op) {
         stream << open_div("Store WrapLine");
         stream << open_span("Matched");

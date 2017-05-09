@@ -1,5 +1,6 @@
 #include "HalideRuntime.h"
 #include "runtime_internal.h"
+#include "printer.h"
 
 // TODO: This code currently doesn't work on OS X (Darwin) as we
 // require that locking a zero-initialized mutex works.  The fix is
@@ -92,24 +93,30 @@ WEAK void halide_cond_wait(struct halide_cond *cond, struct halide_mutex *mutex)
 }
 
 WEAK int halide_semaphore_init(volatile int *sem, int val) {
+    print(NULL) << "SEMAPHORE INIT " << (void *)sem << " = " << val << "\n";
     *sem = val;
     return val;
 }
 
-WEAK int halide_semaphore_acquire(volatile int *sem) {
-    while (1) {
-        int old_val = *sem;
-        if (old_val > 0) {
-            int new_val = old_val - 1;
-            if (__sync_bool_compare_and_swap(sem, old_val, new_val)) {
-                return new_val;
-            }
-        }
+WEAK bool halide_semaphore_try_acquire(volatile int *sem) {
+    // Decrement and get new value
+    int new_val = __sync_add_and_fetch(sem, -1);
+    if (new_val < 0) {
+        // Oops, increment and return failure
+        __sync_add_and_fetch(sem, 1);
+        print(NULL) << "SEMAPHORE_TRY_ACQUIRE FAIL: " << (void *)sem << "\n";
+        return false;
+    } else {
+        print(NULL) << "SEMAPHORE_TRY_ACQUIRE SUCCESS: " << (void *)sem << " = " << new_val << "\n";
+        return true;
     }
 }
 
 WEAK int halide_semaphore_release(volatile int *sem) {
-    return __sync_add_and_fetch(sem, 1);
+    int new_val = __sync_add_and_fetch(sem, 1);
+    // A task just became runnable
+    print(NULL) << "SEMAPHORE_RELEASE: " << (void *)sem << " = " << new_val << "\n";
+    return new_val;
 }
 
 } // extern "C"

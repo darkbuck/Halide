@@ -547,7 +547,7 @@ void IRPrinter::visit(const AssertStmt *op) {
 
 void IRPrinter::visit(const ProducerConsumer *op) {
     do_indent();
-    if (op->is_producer) {        
+    if (op->is_producer) {
         stream << "produce " << op->name << " {\n";
     } else {
         stream << "consume " << op->name << " {\n";
@@ -578,7 +578,7 @@ void IRPrinter::visit(const For *op) {
 
 void IRPrinter::visit(const AsyncConsumer *op) {
     do_indent();
-    stream << "async consumer (";
+    stream << "acquire (";
     print(op->semaphore);
     stream << ") {\n";
     indent += 2;

@@ -11,8 +11,8 @@ HalideExtern_1(int, expensive, int);
 int main(int argc, char **argv) {
 
     // Basic compute-root async producer
-    if (1) {
-        Func producer("magic_prefix_producer"), consumer;
+    if (0) {
+        Func producer("async_producer"), consumer;
         Var x, y;
 
         producer(x, y) = x + y;
@@ -33,8 +33,8 @@ int main(int argc, char **argv) {
     }
 
     // Sliding and folding over y
-    if (1) {
-        Func producer("magic_prefix_producer"), consumer;
+    if (0) {
+        Func producer("async_producer"), consumer;
         Var x, y;
 
         producer(x, y) = x + y;
@@ -56,8 +56,8 @@ int main(int argc, char **argv) {
     }
 
     // Sliding over x and y, folding over y
-    if (1) {
-        Func producer("magic_prefix_producer"), consumer;
+    if (0) {
+        Func producer("async_producer"), consumer;
         Var x, y;
 
         producer(x, y) = x + y;
@@ -83,8 +83,8 @@ int main(int argc, char **argv) {
     // folded to prevent clobbering along each axis. The outer
     // semaphore never actually does anything, because the inner
     // semaphore stops it from getting that far ahead.
-    if (1) {
-        Func producer("magic_prefix_producer"), consumer;
+    if (0) {
+        Func producer("async_producer"), consumer;
         Var x, y;
 
         producer(x, y) = x + y;
@@ -116,9 +116,9 @@ int main(int argc, char **argv) {
     // Multiple async producers at root. This doesn't currently get
     // the producers running at the same time, because one is nested
     // inside the other's consume node. Need to tighten this up.
-    if (1) {
-        Func producer_1("magic_prefix_producer_1");
-        Func producer_2("magic_prefix_producer_2");
+    if (0) {
+        Func producer_1("async_producer_1");
+        Func producer_2("async_producer_2");
         Func consumer;
         Var x, y;
 
@@ -143,9 +143,9 @@ int main(int argc, char **argv) {
     }
 
     // Multiple async producers inside an outer parallel for loop
-    if (1) {
-        Func producer_1("magic_prefix_producer_1");
-        Func producer_2("magic_prefix_producer_2");
+    if (0) {
+        Func producer_1("async_producer_1");
+        Func producer_2("async_producer_2");
         Func consumer;
         Var x, y;
 
@@ -172,8 +172,8 @@ int main(int argc, char **argv) {
     // Multiple async producers inside an outer parallel for loop
     // with sliding within the inner serial loop
     if (1) {
-        Func producer_1("magic_prefix_producer_1");
-        Func producer_2("magic_prefix_producer_2");
+        Func producer_1("async_producer_1");
+        Func producer_2("async_producer_2");
         Func consumer;
         Var x, y;
 
@@ -185,7 +185,7 @@ int main(int argc, char **argv) {
 
         producer_1.compute_at(consumer, x).store_at(consumer, y);
         producer_2.compute_at(consumer, x).store_at(consumer, y);
-        consumer.parallel(y);
+        //consumer.parallel(y);
 
         Buffer<int> out = consumer.realize(16, 16);
         out.for_each_element([&](int x, int y) {
@@ -200,7 +200,7 @@ int main(int argc, char **argv) {
 
     // Nested asynchronous tasks. Currently deadlocks :(
     if (1) {
-        Func f0("magic_prefix_f0"), f1("magic_prefix_f1"), f2;
+        Func f0("async_f0"), f1("async_f1"), f2;
         Var x, y;
 
         f0(x, y) = x + y;
@@ -222,5 +222,6 @@ int main(int argc, char **argv) {
             });
     }
 
+    printf("Success!\n");
     return 0;
 }

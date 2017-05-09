@@ -5,8 +5,14 @@
 namespace Halide {
 namespace Internal {
 
+using std::vector;
+using std::set;
+using std::pair;
+using std::string;
+using std::map;
+
 class GenerateProducerBody : public IRMutator {
-    const std::string &func;
+    const string &func;
     Expr sema;
 
     using IRMutator::visit;
@@ -85,12 +91,46 @@ class GenerateProducerBody : public IRMutator {
         }
     }
 
+    void visit(const AsyncConsumer *op) {
+        Stmt body = mutate(op->body);
+        const Variable *var = op->semaphore.as<Variable>();
+        debug(0) << "Hit AsyncConsumer: " << op->semaphore << "\n";
+        internal_assert(var);
+        if (is_no_op(body)) {
+            stmt = body;
+        } else if (starts_with(var->name, func + ".folding_semaphore.")) {
+            // This is a storage-folding semaphore. Keep it.
+            stmt = AsyncConsumer::make(op->semaphore, body);
+        } else {
+            // Uh-oh, the consumer also has a copy of this await! Make
+            // a distinct one for the producer
+            string forked_await = var->name + unique_name('_');
+            debug(0) << "Queueing up forked await: " << var->name << " -> " << forked_await << "\n";
+            forked_awaits[var->name] = forked_await;
+            stmt = AsyncConsumer::make(Variable::make(type_of<int *>(), forked_await), body);
+        }
+    }
+
+    void visit(const Call *op) {
+        if (op->name == "halide_semaphore_init") {
+            internal_assert(op->args.size() == 2);
+            const Variable *var = op->args[0].as<Variable>();
+            internal_assert(var);
+            inner_semaphores.insert(var->name);
+        }
+        expr = op;
+    }
+
+    map<string, string> &forked_awaits;
+    set<string> inner_semaphores;
+
 public:
-    GenerateProducerBody(const std::string &f, Expr s) : func(f), sema(s) {}
+    GenerateProducerBody(const string &f, Expr s, map<string, string> &a) :
+        func(f), sema(s), forked_awaits(a) {}
 };
 
 class GenerateConsumerBody : public IRMutator {
-    const std::string &func;
+    const string &func;
     Expr sema;
 
     using IRMutator::visit;
@@ -109,7 +149,6 @@ class GenerateConsumerBody : public IRMutator {
         }
     }
 
-
     void visit(const AsyncConsumer *op) {
         // Don't want to duplicate any semaphore acquires. Ones from folding should go to the producer side.
         const Variable *var = op->semaphore.as<Variable>();
@@ -117,56 +156,102 @@ class GenerateConsumerBody : public IRMutator {
         if (starts_with(var->name, func + ".folding_semaphore.")) {
             stmt = mutate(op->body);
         } else {
-            // All other acquires go to the consumer
             IRMutator::visit(op);
         }
     }
 
 public:
-    GenerateConsumerBody(const std::string &f, Expr s) : func(f), sema(s) {}
+    GenerateConsumerBody(const string &f, Expr s) :
+        func(f), sema(s) {}
+};
+
+class ForkAwait : public IRMutator {
+    using IRMutator::visit;
+
+    const string &old_name;
+    Expr new_var;
+
+    void visit(const Evaluate *op) {
+        const Call *call = op->value.as<Call>();
+        const Variable *var = ((call && !call->args.empty()) ?
+                               call->args[0].as<Variable>() :
+                               nullptr);
+        if (var && var->name == old_name &&
+            (call->name == "halide_semaphore_release" ||
+             call->name == "halide_semaphore_init")) {
+            vector<Expr> args = call->args;
+            args[0] = new_var;
+            Stmt new_stmt =
+                Evaluate::make(Call::make(call->type, call->name, args, call->call_type));
+            stmt = Block::make(op, new_stmt);
+        } else {
+            stmt = op;
+        }
+    }
+
+public:
+    ForkAwait(const string &o, const string &new_name) : old_name(o) {
+        new_var = Variable::make(type_of<int *>(), new_name);
+    }
 };
 
 class ForkAsyncProducers : public IRMutator {
     using IRMutator::visit;
 
-    const std::map<std::string, Function> &env;
+    const map<string, Function> &env;
+
+    map<string, string> forked_awaits;
 
     void visit(const Realize *op) {
         auto it = env.find(op->name);
         internal_assert(it != env.end());
         Function f = it->second;
         if (/* f is scheduled async */
-            starts_with(f.name(), "magic_prefix")) {
+            starts_with(f.name(), "async_")) {
             // Make two copies of the body, one which only does the
             // producer, and one which only does the consumer. Inject
             // synchronization to preserve dependencies. Put them in a
             // task-parallel block.
 
             // Make a semaphore.
-            std::string sema_name = op->name + ".semaphore";
+            string sema_name = op->name + ".semaphore";
             Expr sema_var = Variable::make(Handle(), sema_name);
 
             Stmt body = op->body;
-            Stmt producer = GenerateProducerBody(op->name, sema_var).mutate(body);
+            Stmt producer = GenerateProducerBody(op->name, sema_var, forked_awaits).mutate(body);
             Stmt consumer = GenerateConsumerBody(op->name, sema_var).mutate(body);
+
+            debug(0) << "*****************\nForking on " << op->name << "\n";
+            debug(0) << "Producer:\n" << producer << "\n";
+            debug(0) << "Consumer:\n" << consumer << "\n";
+            debug(0) << "Done forking on " << op->name << "\n";
 
             // Recurse on both sides
             producer = mutate(producer);
             consumer = mutate(consumer);
 
-            debug(0) << producer << "\n\n" << consumer << "\n";
-
             // Poor man's task parallel block
-            std::string task = unique_name('t');
+            string task = unique_name('t');
             Expr task_var = Variable::make(Int(32), task);
             body = IfThenElse::make(task_var == 0, producer, consumer);
             body = For::make(task, 0, 2, ForType::Parallel, DeviceAPI::None, body);
 
-            // My poor man's semaphore will just be an int on the stack
+            // The semaphore is just an int on the stack
             Expr sema_space = Call::make(Handle(), Call::alloca, {4}, Call::Intrinsic);
             Expr sema_init = Call::make(Handle(), "halide_semaphore_init", {sema_var, 0}, Call::Extern);
             body = Block::make(Evaluate::make(sema_init), body);
+
+            // If there's a nested async producer, we may have
+            // recursively forked this semaphore inside the mutation
+            // of the producer and consumer.
+            auto it = forked_awaits.find(sema_name);
+            if (it != forked_awaits.end()) {
+                body = ForkAwait(sema_name, it->second).mutate(body);
+                body = LetStmt::make(it->second, sema_space, body);
+            }
+
             body = LetStmt::make(sema_name, sema_space, body);
+
             stmt = Realize::make(op->name, op->types, op->bounds, op->condition, body);
         } else {
             IRMutator::visit(op);
@@ -174,10 +259,10 @@ class ForkAsyncProducers : public IRMutator {
     }
 
 public:
-    ForkAsyncProducers(const std::map<std::string, Function> &e) : env(e) {}
+    ForkAsyncProducers(const map<string, Function> &e) : env(e) {}
 };
 
-Stmt fork_async_producers(Stmt s, const std::map<std::string, Function> &env) {
+Stmt fork_async_producers(Stmt s, const map<string, Function> &env) {
     // TODO: tighten up the scope of consume nodes first
     return ForkAsyncProducers(env).mutate(s);
 }
