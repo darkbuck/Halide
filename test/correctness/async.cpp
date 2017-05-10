@@ -42,7 +42,16 @@ int main(int argc, char **argv) {
         consumer.compute_root();
         producer.store_root().compute_at(consumer, x);
 
-        Buffer<int> out = consumer.realize(16);
+        Buffer<int> out = consumer.realize(1600);
+
+        out.for_each_element([&](int x) {
+                int correct = 2*x - 1;
+                if (out(x) != correct) {
+                    printf("out(%d) = %d instead of %d\n",
+                           x, out(x), correct);
+                    exit(-1);
+                }
+            });
     }
 
     // Sliding and folding over y

@@ -94,7 +94,6 @@ class GenerateProducerBody : public IRMutator {
     void visit(const Acquire *op) {
         Stmt body = mutate(op->body);
         const Variable *var = op->semaphore.as<Variable>();
-        debug(0) << "Hit Acquire: " << op->semaphore << "\n";
         internal_assert(var);
         if (is_no_op(body)) {
             stmt = body;
@@ -105,7 +104,6 @@ class GenerateProducerBody : public IRMutator {
             // Uh-oh, the consumer also has a copy of this acquire! Make
             // a distinct one for the producer
             string forked_acquire = var->name + unique_name('_');
-            debug(0) << "Queueing up forked acquire: " << var->name << " -> " << forked_acquire << "\n";
             forked_acquires[var->name] = forked_acquire;
             stmt = Acquire::make(Variable::make(type_of<halide_semaphore_t *>(), forked_acquire), body);
         }
@@ -220,11 +218,6 @@ class ForkAsyncProducers : public IRMutator {
             Stmt body = op->body;
             Stmt producer = GenerateProducerBody(op->name, sema_var, forked_acquires).mutate(body);
             Stmt consumer = GenerateConsumerBody(op->name, sema_var).mutate(body);
-
-            debug(0) << "*****************\nForking on " << op->name << "\n";
-            debug(0) << "Producer:\n" << producer << "\n";
-            debug(0) << "Consumer:\n" << consumer << "\n";
-            debug(0) << "Done forking on " << op->name << "\n";
 
             // Recurse on both sides
             producer = mutate(producer);
