@@ -32,6 +32,19 @@ int main(int argc, char **argv) {
             });
     }
 
+    // Sliding and folding over a single variable
+    if (1) {
+        Func producer("async_producer"), consumer;
+        Var x, y;
+
+        producer(x) = x;
+        consumer(x) = producer(x) + producer(x-1);
+        consumer.compute_root();
+        producer.store_root().compute_at(consumer, x);
+
+        Buffer<int> out = consumer.realize(16);
+    }
+
     // Sliding and folding over y
     if (1) {
         Func producer("async_producer"), consumer;
@@ -180,8 +193,8 @@ int main(int argc, char **argv) {
         producer_1(x, y) = x;
         producer_2(x, y) = y;
         // Use different stencils to get different fold factors.
-        consumer(x, y) = (producer_1(x-1, y) + producer_1(x+1, y) +
-                          producer_2(x-2, y) + producer_2(x+2, y));
+        consumer(x, y) = expensive((producer_1(x-1, y) + producer_1(x+1, y) +
+                                    producer_2(x-2, y) + producer_2(x+2, y)));
 
         producer_1.compute_at(consumer, x).store_at(consumer, y);
         producer_2.compute_at(consumer, x).store_at(consumer, y);

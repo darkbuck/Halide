@@ -158,8 +158,8 @@ WEAK void halide_cond_destroy(struct halide_cond *cond);
 WEAK void halide_cond_broadcast(struct halide_cond *cond);
 WEAK void halide_cond_wait(struct halide_cond *cond, struct halide_mutex *mutex);
 
-WEAK bool halide_semaphore_try_acquire(volatile int *);
-    
+WEAK bool halide_semaphore_try_acquire(struct halide_semaphore_t *);
+
 WEAK int halide_trace_helper(void *user_context,
                              const char *func,
                              void *value, int *coords,

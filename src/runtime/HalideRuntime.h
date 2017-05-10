@@ -98,6 +98,11 @@ struct halide_mutex {
     uint64_t _private[8];
 };
 
+// TODO: docs, methods
+struct halide_semaphore_t {
+    uint64_t _private[2];
+};
+
 /** A basic set of mutex and condition variable functions, which call
  * platform specific code for mutual exclusion. Equivalent to posix
  * calls. Mutexes should initially be set to zero'd memory. Any
@@ -133,8 +138,9 @@ extern void halide_shutdown_thread_pool();
 typedef int (*halide_do_par_for_t)(void *, halide_task_t, int, int, uint8_t*);
 extern halide_do_par_for_t halide_set_custom_do_par_for(halide_do_par_for_t do_par_for);
 
-extern int halide_do_async_consumer(void *user_context, halide_task_t task, int *semaphore, uint8_t *closure);
-    
+extern int halide_do_acquire(void *user_context, halide_task_t task,
+                             halide_semaphore_t *semaphore, uint8_t *closure);
+
 /** If you use the default do_par_for, you can still set a custom
  * handler to perform each individual task. Returns the old handler. */
 //@{

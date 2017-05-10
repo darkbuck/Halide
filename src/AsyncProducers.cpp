@@ -102,12 +102,12 @@ class GenerateProducerBody : public IRMutator {
             // This is a storage-folding semaphore. Keep it.
             stmt = Acquire::make(op->semaphore, body);
         } else {
-            // Uh-oh, the consumer also has a copy of this await! Make
+            // Uh-oh, the consumer also has a copy of this acquire! Make
             // a distinct one for the producer
-            string forked_await = var->name + unique_name('_');
-            debug(0) << "Queueing up forked await: " << var->name << " -> " << forked_await << "\n";
-            forked_awaits[var->name] = forked_await;
-            stmt = Acquire::make(Variable::make(type_of<int *>(), forked_await), body);
+            string forked_acquire = var->name + unique_name('_');
+            debug(0) << "Queueing up forked acquire: " << var->name << " -> " << forked_acquire << "\n";
+            forked_acquires[var->name] = forked_acquire;
+            stmt = Acquire::make(Variable::make(type_of<halide_semaphore_t *>(), forked_acquire), body);
         }
     }
 
@@ -121,12 +121,12 @@ class GenerateProducerBody : public IRMutator {
         expr = op;
     }
 
-    map<string, string> &forked_awaits;
+    map<string, string> &forked_acquires;
     set<string> inner_semaphores;
 
 public:
     GenerateProducerBody(const string &f, Expr s, map<string, string> &a) :
-        func(f), sema(s), forked_awaits(a) {}
+        func(f), sema(s), forked_acquires(a) {}
 };
 
 class GenerateConsumerBody : public IRMutator {
@@ -165,7 +165,7 @@ public:
         func(f), sema(s) {}
 };
 
-class ForkAwait : public IRMutator {
+class ForkAcquire : public IRMutator {
     using IRMutator::visit;
 
     const string &old_name;
@@ -190,8 +190,8 @@ class ForkAwait : public IRMutator {
     }
 
 public:
-    ForkAwait(const string &o, const string &new_name) : old_name(o) {
-        new_var = Variable::make(type_of<int *>(), new_name);
+    ForkAcquire(const string &o, const string &new_name) : old_name(o) {
+        new_var = Variable::make(type_of<halide_semaphore_t *>(), new_name);
     }
 };
 
@@ -200,7 +200,7 @@ class ForkAsyncProducers : public IRMutator {
 
     const map<string, Function> &env;
 
-    map<string, string> forked_awaits;
+    map<string, string> forked_acquires;
 
     void visit(const Realize *op) {
         auto it = env.find(op->name);
@@ -218,7 +218,7 @@ class ForkAsyncProducers : public IRMutator {
             Expr sema_var = Variable::make(Handle(), sema_name);
 
             Stmt body = op->body;
-            Stmt producer = GenerateProducerBody(op->name, sema_var, forked_awaits).mutate(body);
+            Stmt producer = GenerateProducerBody(op->name, sema_var, forked_acquires).mutate(body);
             Stmt consumer = GenerateConsumerBody(op->name, sema_var).mutate(body);
 
             debug(0) << "*****************\nForking on " << op->name << "\n";
@@ -237,16 +237,18 @@ class ForkAsyncProducers : public IRMutator {
             body = For::make(task, 0, 2, ForType::Parallel, DeviceAPI::None, body);
 
             // The semaphore is just an int on the stack
-            Expr sema_space = Call::make(Handle(), Call::alloca, {4}, Call::Intrinsic);
-            Expr sema_init = Call::make(Handle(), "halide_semaphore_init", {sema_var, 0}, Call::Extern);
+            Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), Call::alloca,
+                                         {(int)sizeof(halide_semaphore_t)}, Call::Intrinsic);
+            Expr sema_init = Call::make(type_of<halide_semaphore_t *>(), "halide_semaphore_init",
+                                        {sema_var, 0}, Call::Extern);
             body = Block::make(Evaluate::make(sema_init), body);
 
             // If there's a nested async producer, we may have
             // recursively forked this semaphore inside the mutation
             // of the producer and consumer.
-            auto it = forked_awaits.find(sema_name);
-            if (it != forked_awaits.end()) {
-                body = ForkAwait(sema_name, it->second).mutate(body);
+            auto it = forked_acquires.find(sema_name);
+            if (it != forked_acquires.end()) {
+                body = ForkAcquire(sema_name, it->second).mutate(body);
                 body = LetStmt::make(it->second, sema_space, body);
             }
 
@@ -264,7 +266,8 @@ public:
 
 Stmt fork_async_producers(Stmt s, const map<string, Function> &env) {
     // TODO: tighten up the scope of consume nodes first
-    return ForkAsyncProducers(env).mutate(s);
+    s = ForkAsyncProducers(env).mutate(s);
+    return s;
 }
 
 }

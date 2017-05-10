@@ -136,7 +136,7 @@ public:
 std::pair<Stmt, Semaphore> inject_synchronization(Stmt body, const std::string &func, Expr slop) {
     Semaphore sema;
     sema.name = func + ".folding_semaphore" + unique_name('_');
-    sema.var = Variable::make(type_of<int *>(), sema.name);
+    sema.var = Variable::make(type_of<halide_semaphore_t *>(), sema.name);
     sema.slop = slop;
 
     InjectSynchronization injector(func, sema.var);
@@ -281,7 +281,7 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                     if (starts_with(func.name(), "async_")) {
                         Semaphore sema;
                         sema.name = func.name() + ".folding_semaphore." + unique_name('_');
-                        sema.var = Variable::make(type_of<int *>(), sema.name);
+                        sema.var = Variable::make(type_of<halide_semaphore_t *>(), sema.name);
                         sema.slop = slop;
                         Expr release_producer = Call::make(Int(32), "halide_semaphore_release", {sema.var}, Call::Extern);
                         body = Block::make(body, Evaluate::make(release_producer));
@@ -419,8 +419,9 @@ class StorageFolding : public IRMutator {
                 for (size_t i = 0; i < folder.dims_folded.size(); i++) {
                     auto sema = folder.dims_folded[i].semaphore;
                     if (sema.var.defined()) {
-                        Expr sema_space = Call::make(Handle(), Call::alloca, {4}, Call::Intrinsic);
-                        Expr sema_init = Call::make(Handle(), "halide_semaphore_init",
+                        Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), Call::alloca,
+                                                     {(int)sizeof(halide_semaphore_t)}, Call::Intrinsic);
+                        Expr sema_init = Call::make(type_of<halide_semaphore_t *>(), "halide_semaphore_init",
                                                     {sema.var, sema.slop + 1}, Call::Extern);
                         stmt = Block::make(Evaluate::make(sema_init), stmt);
                         stmt = LetStmt::make(sema.name, sema_space, stmt);

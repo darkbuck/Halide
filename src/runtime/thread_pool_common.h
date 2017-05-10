@@ -6,17 +6,16 @@ struct work {
     work *next_job;
     int (*f)(void *, int, uint8_t *);
     void *user_context;
-    uint64_t id;
     int next, max;
     uint8_t *closure;
     int active_workers;
     int exit_status;
-    int *semaphore;
+    halide_semaphore_t *semaphore;
     bool running() {
         return next < max || active_workers > 0;
     }
     bool make_runnable() {
-        return semaphore == NULL || halide_semaphore_try_acquire(semaphore);
+        return (semaphore == NULL) || halide_semaphore_try_acquire(semaphore);
     }
 };
 
@@ -60,9 +59,6 @@ struct work_queue_t {
     // whether the thread pool has been initialized.
     bool shutdown, initialized;
 
-    // Counts the number of tasks enqueued
-    uint64_t job_id_counter;
-
     bool running() {
         return !shutdown;
     }
@@ -94,6 +90,26 @@ WEAK int default_desired_num_threads() {
     return desired_num_threads;
 }
 
+
+WEAK void worker_thread(void *);
+
+WEAK void add_one_worker_thread_to_pool() {
+    if (work_queue.desired_num_threads < MAX_THREADS) {
+        work_queue.desired_num_threads++;
+    }
+    if (work_queue.threads_created < work_queue.desired_num_threads) {
+        int id = work_queue.threads_created++;
+        work_queue.threads[id] = halide_spawn_thread(worker_thread, NULL);
+    } else if (work_queue.target_a_team_size > work_queue.a_team_size) {
+        halide_cond_broadcast(&work_queue.wakeup_b_team);
+    }
+    halide_cond_broadcast(&work_queue.wakeup_a_team);
+}
+
+WEAK void suspend_one_worker_thread() {
+    work_queue.desired_num_threads--;
+}
+
 WEAK void worker_thread_already_locked(work *owned_job) {
     // If I'm a job owner, then I was the thread that called
     // do_par_for, and I should only stay in this function until my
@@ -106,7 +122,8 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         print(NULL) << "Work queue:\n";
         for (work *j = work_queue.jobs; j; j = j->next_job) {
             if (j->semaphore) {
-                print(NULL) << j << ", " << j->semaphore << ", " << *(j->semaphore) << "\n";
+                print(NULL) << j << ", "
+                            << j->semaphore << "\n";
             } else {
                 print(NULL) << j << "\n";
             }
@@ -115,55 +132,57 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         #endif
 
         // Grab the next runnable job.
-        int unrunnable_jobs = 0;
-        work **prev_ptr = &work_queue.jobs;
         work *job = work_queue.jobs;
-        while (job) {
-            if ((!owned_job || job->id >= owned_job->id) &&
-                job->make_runnable()) {
-                // We can run this job.
-                break;
+        work **prev_ptr = &work_queue.jobs;
+        if (owned_job) {
+            if (job != owned_job || !job->make_runnable()) {
+                // owners are not permitted to steal work, to avoid deadlock
+                job = NULL;
             }
-            unrunnable_jobs++;
-            prev_ptr = &job->next_job;
-            job = job->next_job;
+        } else {
+            while (job && !job->make_runnable()) {
+                prev_ptr = &job->next_job;
+                job = job->next_job;
+            }
         }
 
         #if 0
-        print(NULL) << "Next runnable job: " << job << "\n";
+        //print(NULL) << "Next runnable job: " << job << "\n";
         #endif
 
         if (job == NULL) {
             if (owned_job) {
                 // There are no runnable jobs pending. Wait for the last worker
                 // to signal that the job is finished.
-                print(NULL) << "WAIT: Master..."<< unrunnable_jobs << "\n";
-                if (unrunnable_jobs) {
-                    // Wake up the workers: TODO only if there are
-                    // jobs that are unrunnable due to ordering
-                    // concerns, not semaphore issues. And probably
-                    // not the b team.
-                    print(NULL) << "Waking up everyone\n";
-                    halide_cond_broadcast(&work_queue.wakeup_owners);
-                    halide_cond_broadcast(&work_queue.wakeup_a_team);
-                    halide_cond_broadcast(&work_queue.wakeup_b_team);
+                ////print(NULL) << "WAIT: Master...\n";
+                bool add_a_worker = work_queue.jobs;
+                if (add_a_worker) {
+                    // Leave the A team
+                    work_queue.a_team_size--;
+                    // Add a worker to replace me, maintaining the
+                    // total number of live threads.
+                    add_one_worker_thread_to_pool();
                 }
                 halide_cond_wait(&work_queue.wakeup_owners, &work_queue.mutex);
-                print(NULL) << "AWAKE: Master...\n";
+                if (add_a_worker) {
+                    suspend_one_worker_thread();
+                    work_queue.a_team_size++;
+                }
+                ////print(NULL) << "AWAKE: Master...\n";
             } else if (work_queue.a_team_size <= work_queue.target_a_team_size) {
                 // There are no jobs pending. Wait until more jobs are enqueued.
-                print(NULL) << "WAIT: Worker..." << unrunnable_jobs << "\n";
+                //print(NULL) << "WAIT: Worker...\n";
                 halide_cond_wait(&work_queue.wakeup_a_team, &work_queue.mutex);
-                print(NULL) << "AWAKE: Worker...\n";
+                //print(NULL) << "AWAKE: Worker...\n";
             } else {
                 // There are no jobs pending, and there are too many
                 // threads in the A team. Transition to the B team
                 // until the wakeup_b_team condition is fired.
-                print(NULL) << "WAIT: Worker..." << unrunnable_jobs << "\n";
+                //print(NULL) << "WAIT: Worker...\n";
                 work_queue.a_team_size--;
                 halide_cond_wait(&work_queue.wakeup_b_team, &work_queue.mutex);
                 work_queue.a_team_size++;
-                print(NULL) << "AWAKE: Worker...\n";
+                //print(NULL) << "AWAKE: Worker...\n";
             }
         } else {
             // Claim a task from it.
@@ -173,9 +192,6 @@ WEAK void worker_thread_already_locked(work *owned_job) {
             // If there were no more tasks pending for this job,
             // remove it from the stack.
             if (job->next == job->max) {
-                if (job != owned_job) {
-                    print(NULL) << "CLAIMING LAST TASK ON SOMEONE ELSE'S JOB!\n";
-                }
                 *prev_ptr = job->next_job;
             }
 
@@ -184,7 +200,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
             // though there are no outstanding tasks for it.
             job->active_workers++;
 
-            print(NULL) << "BEGIN: " << job << ": " << myjob.next << "\n";
+            //print(NULL) << "BEGIN: " << job << ": " << myjob.next << "\n";
 
             // Release the lock and do the task.
             halide_mutex_unlock(&work_queue.mutex);
@@ -192,7 +208,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
                                         myjob.closure);
             halide_mutex_lock(&work_queue.mutex);
 
-            print(NULL) << "END: " << job << ": " << myjob.next << "\n";
+            //print(NULL) << "END: " << job << ": " << myjob.next << "\n";
 
             // If this task failed, set the exit status on the job.
             if (result) {
@@ -205,7 +221,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
             // If the job is done and I'm not the owner of it, wake up
             // the owner.
             if (!job->running() && job != owned_job) {
-                print(NULL) << "WAKING MASTER: " << job << "\n";
+                //print(NULL) << "WAKING MASTER: " << job << "\n";
                 halide_cond_broadcast(&work_queue.wakeup_owners);
             }
         }
@@ -218,16 +234,15 @@ WEAK void worker_thread(void *) {
     halide_mutex_unlock(&work_queue.mutex);
 }
 
-
 WEAK int enqueue_work_and_enter_thread_pool(void *user_context, halide_task_t f,
-                                            int min, int size, int *semaphore, uint8_t *closure) {
-    print(NULL) << "Locking mutex...\n";
+                                            int min, int size, halide_semaphore_t *semaphore, uint8_t *closure) {
+    //print(NULL) << "Locking mutex...\n";
 
     // Grab the lock. If it hasn't been initialized yet, then the
     // field will be zero-initialized because it's a static global.
     halide_mutex_lock(&work_queue.mutex);
 
-    print(NULL) << "Enqueueing task: " << (void *)f << ", " << min << ", " << size << ", " << semaphore << "\n";
+    //print(NULL) << "Enqueueing task: " << (void *)f << ", " << min << ", " << size << ", " << semaphore << "\n";
 
     if (!work_queue.initialized) {
          work_queue.shutdown = false;
@@ -268,7 +283,6 @@ WEAK int enqueue_work_and_enter_thread_pool(void *user_context, halide_task_t f,
     job.exit_status = 0;     // The job hasn't failed yet
     job.active_workers = 0;  // Nobody is working on this yet
     job.semaphore = semaphore;  // The job can't start until this is > 0
-    job.id = work_queue.job_id_counter++; // Prevents work inversions that cause deadlocks
 
     if (!work_queue.jobs && size < work_queue.desired_num_threads) {
         // If there's no nested parallelism happening and there are
@@ -300,11 +314,13 @@ WEAK int enqueue_work_and_enter_thread_pool(void *user_context, halide_task_t f,
     }
 
     // Do some work myself.
-    print(NULL) << "Master entering worker pool\n";
+    //print(NULL) << "Master entering worker pool\n";
     worker_thread_already_locked(&job);
-    print(NULL) << "Master leaving worker pool\n";
+    //print(NULL) << "Master leaving worker pool\n";
 
     halide_mutex_unlock(&work_queue.mutex);
+
+    //print(NULL) << "Peak thread count: " << work_queue.threads_created << "\n";
 
     // Return zero if the job succeeded, otherwise return the exit
     // status of one of the failing jobs (whichever one failed last).
@@ -327,8 +343,8 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     return enqueue_work_and_enter_thread_pool(user_context, f, min, size, NULL, closure);
 }
 
-// TODO: Make this default_do_async and add the function pointer indirection junk
-WEAK int halide_do_async_consumer(void *user_context, halide_task_t f, int *semaphore, uint8_t *closure) {
+// TODO: Make this default_do_acquire and add the function pointer indirection junk
+WEAK int halide_do_acquire(void *user_context, halide_task_t f, halide_semaphore_t *semaphore, uint8_t *closure) {
     return enqueue_work_and_enter_thread_pool(user_context, f, 0, 1, semaphore, closure);
 }
 

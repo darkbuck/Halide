@@ -3094,7 +3094,7 @@ void CodeGen_LLVM::visit(const Acquire *op) {
     // Find every symbol that the body of this loop refers to
     // and dump it into a closure
     Closure closure(op->body);
-    
+
     // Allocate a closure
     StructType *closure_t = build_closure_type(closure, buffer_t_type, context);
     Value *ptr = create_alloca_at_entry(closure_t, 1);
@@ -3127,7 +3127,7 @@ void CodeGen_LLVM::visit(const Acquire *op) {
 
     // Grab the semaphore
     Value *semaphore = codegen(op->semaphore);
-    
+
     // Save the destructor block
     BasicBlock *parent_destructor_block = destructor_block;
     destructor_block = nullptr;
@@ -3165,18 +3165,18 @@ void CodeGen_LLVM::visit(const Acquire *op) {
 
     // Move the builder back to the main function and call do_async_consumer
     builder->restoreIP(call_site);
-    llvm::Function *do_async_consumer = module->getFunction("halide_do_async_consumer");
-    internal_assert(do_async_consumer) << "Could not find halide_do_async_consumer in initial module\n";
+    llvm::Function *do_acquire = module->getFunction("halide_do_acquire");
+    internal_assert(do_acquire) << "Could not find halide_do_acquire in initial module\n";
     #if LLVM_VERSION < 50
-    do_async_consumer->setDoesNotAlias(4);
+    do_acquire->setDoesNotAlias(4);
     #else
-    do_async_consumer->addParamAttr(3, Attribute::NoAlias);
+    do_acquire->addParamAttr(3, Attribute::NoAlias);
     #endif
     ptr = builder->CreatePointerCast(ptr, i8_t->getPointerTo());
-    semaphore = builder->CreatePointerCast(semaphore, i32_t->getPointerTo());
+    semaphore = builder->CreatePointerCast(semaphore, do_acquire->getFunctionType()->params()[2]);
     Value *args[] = {user_context, function, semaphore, ptr};
-    debug(4) << "Creating call to do_async_consumer\n";
-    Value *result = builder->CreateCall(do_async_consumer, args);
+    debug(4) << "Creating call to do_acquire\n";
+    Value *result = builder->CreateCall(do_acquire, args);
 
     // Now restore the scope
     symbol_table.swap(saved_symbol_table);
@@ -3187,7 +3187,7 @@ void CodeGen_LLVM::visit(const Acquire *op) {
 
     // Check for success
     Value *did_succeed = builder->CreateICmpEQ(result, ConstantInt::get(i32_t, 0));
-    create_assertion(did_succeed, Expr(), result);    
+    create_assertion(did_succeed, Expr(), result);
 }
 
 void CodeGen_LLVM::visit(const Store *op) {
@@ -3299,10 +3299,9 @@ void CodeGen_LLVM::visit(const Store *op) {
 
 }
 
-
 void CodeGen_LLVM::visit(const Block *op) {
     codegen(op->first);
-    if (op->rest.defined()) codegen(op->rest);
+    codegen(op->rest);
 }
 
 void CodeGen_LLVM::visit(const Realize *op) {
