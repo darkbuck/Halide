@@ -81,6 +81,28 @@ class GenerateProducerBody : public IRMutator {
         }
     }
 
+    void visit(const Fork *op) {
+        Stmt first = mutate(op->first);
+        Stmt rest = mutate(op->rest);
+        if (is_no_op(first)) {
+            stmt = rest;
+        } else if (is_no_op(rest)) {
+            stmt = first;
+        } else {
+            stmt = Fork::make(first, rest);
+        }
+    }
+
+    void visit(const Realize *op) {
+        Stmt body = mutate(op->body);
+        if (is_no_op(body)) {
+            stmt = body;
+        } else {
+            stmt = Realize::make(op->name, op->types, op->bounds,
+                                 op->condition, body);
+        }
+    }
+
     void visit(const IfThenElse *op) {
         Stmt then_case = mutate(op->then_case);
         Stmt else_case = mutate(op->else_case);
@@ -103,9 +125,9 @@ class GenerateProducerBody : public IRMutator {
         } else {
             // Uh-oh, the consumer also has a copy of this acquire! Make
             // a distinct one for the producer
-            string forked_acquire = var->name + unique_name('_');
-            forked_acquires[var->name] = forked_acquire;
-            stmt = Acquire::make(Variable::make(type_of<halide_semaphore_t *>(), forked_acquire), body);
+            string cloned_acquire = var->name + unique_name('_');
+            cloned_acquires[var->name] = cloned_acquire;
+            stmt = Acquire::make(Variable::make(type_of<halide_semaphore_t *>(), cloned_acquire), body);
         }
     }
 
@@ -119,12 +141,12 @@ class GenerateProducerBody : public IRMutator {
         expr = op;
     }
 
-    map<string, string> &forked_acquires;
+    map<string, string> &cloned_acquires;
     set<string> inner_semaphores;
 
 public:
     GenerateProducerBody(const string &f, Expr s, map<string, string> &a) :
-        func(f), sema(s), forked_acquires(a) {}
+        func(f), sema(s), cloned_acquires(a) {}
 };
 
 class GenerateConsumerBody : public IRMutator {
@@ -163,7 +185,7 @@ public:
         func(f), sema(s) {}
 };
 
-class ForkAcquire : public IRMutator {
+class CloneAcquire : public IRMutator {
     using IRMutator::visit;
 
     const string &old_name;
@@ -188,7 +210,7 @@ class ForkAcquire : public IRMutator {
     }
 
 public:
-    ForkAcquire(const string &o, const string &new_name) : old_name(o) {
+    CloneAcquire(const string &o, const string &new_name) : old_name(o) {
         new_var = Variable::make(type_of<halide_semaphore_t *>(), new_name);
     }
 };
@@ -198,7 +220,7 @@ class ForkAsyncProducers : public IRMutator {
 
     const map<string, Function> &env;
 
-    map<string, string> forked_acquires;
+    map<string, string> cloned_acquires;
 
     void visit(const Realize *op) {
         auto it = env.find(op->name);
@@ -216,20 +238,17 @@ class ForkAsyncProducers : public IRMutator {
             Expr sema_var = Variable::make(Handle(), sema_name);
 
             Stmt body = op->body;
-            Stmt producer = GenerateProducerBody(op->name, sema_var, forked_acquires).mutate(body);
+            Stmt producer = GenerateProducerBody(op->name, sema_var, cloned_acquires).mutate(body);
             Stmt consumer = GenerateConsumerBody(op->name, sema_var).mutate(body);
 
             // Recurse on both sides
             producer = mutate(producer);
             consumer = mutate(consumer);
 
-            // Poor man's task parallel block
-            string task = unique_name('t');
-            Expr task_var = Variable::make(Int(32), task);
-            body = IfThenElse::make(task_var == 0, producer, consumer);
-            body = For::make(task, 0, 2, ForType::Parallel, DeviceAPI::None, body);
+            // Run them concurrently
+            body = Fork::make(producer, consumer);
 
-            // The semaphore is just an int on the stack
+            // Make a semaphore on the stack
             Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), Call::alloca,
                                          {(int)sizeof(halide_semaphore_t)}, Call::Intrinsic);
             Expr sema_init = Call::make(type_of<halide_semaphore_t *>(), "halide_semaphore_init",
@@ -237,11 +256,11 @@ class ForkAsyncProducers : public IRMutator {
             body = Block::make(Evaluate::make(sema_init), body);
 
             // If there's a nested async producer, we may have
-            // recursively forked this semaphore inside the mutation
+            // recursively cloned this semaphore inside the mutation
             // of the producer and consumer.
-            auto it = forked_acquires.find(sema_name);
-            if (it != forked_acquires.end()) {
-                body = ForkAcquire(sema_name, it->second).mutate(body);
+            auto it = cloned_acquires.find(sema_name);
+            if (it != cloned_acquires.end()) {
+                body = CloneAcquire(sema_name, it->second).mutate(body);
                 body = LetStmt::make(it->second, sema_space, body);
             }
 

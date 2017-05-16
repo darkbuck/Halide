@@ -425,6 +425,17 @@ struct Block : public StmtNode<Block> {
     static const IRNodeType _type_info = IRNodeType::Block;
 };
 
+/** A pair of statements executed concurrently. Both statements are
+ * joined before the Stmt ends. This is the parallel equivalent to
+ * Block. */
+struct Fork : public StmtNode<Fork> {
+    Stmt first, rest;
+
+    EXPORT static Stmt make(const Stmt &first, const Stmt &rest);
+
+    static const IRNodeType _type_info = IRNodeType::Fork;
+};
+
 /** An if-then-else block. 'else' may be undefined. */
 struct IfThenElse : public StmtNode<IfThenElse> {
     Expr condition;

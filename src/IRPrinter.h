@@ -132,6 +132,7 @@ protected:
     void visit(const Free *);
     void visit(const Realize *);
     void visit(const Block *);
+    void visit(const Fork *);
     void visit(const IfThenElse *);
     void visit(const Evaluate *);
     void visit(const Shuffle *);

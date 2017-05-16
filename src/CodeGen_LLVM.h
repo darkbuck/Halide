@@ -185,7 +185,9 @@ protected:
         *metadata_t_type,
         *argument_t_type,
         *scalar_value_t_type,
-        *device_interface_t_type;
+        *device_interface_t_type,
+        *semaphore_t_type,
+        *parallel_task_t_type;
     // @}
 
     /** Some useful llvm types for subclasses */
@@ -264,6 +266,14 @@ protected:
     // @{
     void create_assertion(llvm::Value *condition, Expr message, llvm::Value *error_code = nullptr);
     // @}
+
+    /** Codegen a call to do_parallel_tasks */
+    struct ParallelTask {
+        Stmt body;
+        Expr semaphore;
+    };
+    void get_parallel_tasks(Stmt s, std::vector<ParallelTask> &tasks);
+    void do_parallel_tasks(const std::vector<ParallelTask> &tasks);
 
     /** Return the the pipeline with the given error code. Will run
      * the destructor block. */
@@ -353,6 +363,7 @@ protected:
     virtual void visit(const Acquire *);
     virtual void visit(const Store *);
     virtual void visit(const Block *);
+    virtual void visit(const Fork *);
     virtual void visit(const IfThenElse *);
     virtual void visit(const Evaluate *);
     virtual void visit(const Shuffle *);

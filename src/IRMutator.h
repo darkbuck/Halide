@@ -80,6 +80,7 @@ protected:
     EXPORT virtual void visit(const Free *);
     EXPORT virtual void visit(const Realize *);
     EXPORT virtual void visit(const Block *);
+    EXPORT virtual void visit(const Fork *);
     EXPORT virtual void visit(const IfThenElse *);
     EXPORT virtual void visit(const Evaluate *);
     EXPORT virtual void visit(const Shuffle *);

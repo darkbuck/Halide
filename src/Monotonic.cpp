@@ -374,6 +374,10 @@ class MonotonicVisitor : public IRVisitor {
         internal_error << "Monotonic of statement\n";
     }
 
+    void visit(const Fork *op) {
+        internal_error << "Monotonic of statement\n";
+    }
+
     void visit(const IfThenElse *op) {
         internal_error << "Monotonic of statement\n";
     }

@@ -530,6 +530,39 @@ private:
         visit_block_stmt(op->rest);
         stream << close_div();
     }
+
+    // We also flatten forks
+    void visit_fork_stmt(Stmt stmt) {
+        if (const Fork *f = stmt.as<Fork>()) {
+            visit_fork_stmt(f->first);
+            visit_fork_stmt(f->rest);
+        } else if (stmt.defined()) {
+            stream << open_div("ForkTask");
+            int id = unique_id();
+            stream << open_expand_button(id);
+            stream << matched("task {");
+            stream << close_expand_button();
+            stream << open_div("ForkTask Indent", id);
+            print(stmt);
+            stream << close_div();
+            stream << matched("}");
+            stream << close_div();
+        }
+    }
+    void visit(const Fork *op) {
+        stream << open_div("Fork");
+        int id = unique_id();
+        stream << open_expand_button(id);
+        stream << keyword("fork") << " " << matched("{");
+        stream << close_expand_button();
+        stream << open_div("Fork Indent", id);
+        visit_fork_stmt(op->first);
+        visit_fork_stmt(op->rest);
+        stream << close_div();
+        stream << matched("}");
+        stream << close_div();
+    }
+
     void visit(const IfThenElse *op) {
         stream << open_div("IfThenElse");
         int id = unique_id();

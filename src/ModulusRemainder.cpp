@@ -57,6 +57,7 @@ public:
     void visit(const Allocate *);
     void visit(const Realize *);
     void visit(const Block *);
+    void visit(const Fork *);
     void visit(const IfThenElse *);
     void visit(const Free *);
     void visit(const Evaluate *);
@@ -435,6 +436,10 @@ void ComputeModulusRemainder::visit(const Realize *) {
 }
 
 void ComputeModulusRemainder::visit(const Block *) {
+    internal_assert(false) << "modulus_remainder of statement\n";
+}
+
+void ComputeModulusRemainder::visit(const Fork *) {
     internal_assert(false) << "modulus_remainder of statement\n";
 }
 

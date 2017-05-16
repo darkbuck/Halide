@@ -93,33 +93,4 @@ WEAK void halide_cond_wait(struct halide_cond *cond, struct halide_mutex *mutex)
 }
 
 
-struct halide_semaphore_impl_t {
-    int value;
-};
-
-WEAK int halide_semaphore_init(halide_semaphore_t *s, int val) {
-    halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
-    sem->value = val;
-    return val;
-}
-
-WEAK int halide_semaphore_release(halide_semaphore_t *s) {
-    halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
-    int new_val = __sync_add_and_fetch(&(sem->value), 1);
-    return new_val;
-}
-
-WEAK bool halide_semaphore_try_acquire(halide_semaphore_t *s) {
-    halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
-    // Decrement and get new value
-    int new_val = __sync_add_and_fetch(&(sem->value), -1);
-    if (new_val < 0) {
-        // Oops, increment and return failure
-        __sync_add_and_fetch(&(sem->value), 1);
-        return false;
-    } else {
-        return true;
-    }
-}
-
 } // extern "C"

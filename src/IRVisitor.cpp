@@ -225,6 +225,13 @@ void IRVisitor::visit(const Block *op) {
     }
 }
 
+void IRVisitor::visit(const Fork *op) {
+    op->first.accept(this);
+    if (op->rest.defined()) {
+        op->rest.accept(this);
+    }
+}
+
 void IRVisitor::visit(const IfThenElse *op) {
     op->condition.accept(this);
     op->then_case.accept(this);
@@ -464,7 +471,12 @@ void IRGraphVisitor::visit(const Prefetch *op) {
 
 void IRGraphVisitor::visit(const Block *op) {
     include(op->first);
-    if (op->rest.defined()) include(op->rest);
+    include(op->rest);
+}
+
+void IRGraphVisitor::visit(const Fork *op) {
+    include(op->first);
+    include(op->rest);
 }
 
 void IRGraphVisitor::visit(const IfThenElse *op) {

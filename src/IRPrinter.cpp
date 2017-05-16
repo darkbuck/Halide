@@ -687,7 +687,22 @@ void IRPrinter::visit(const Prefetch *op) {
 
 void IRPrinter::visit(const Block *op) {
     print(op->first);
-    if (op->rest.defined()) print(op->rest);
+    print(op->rest);
+}
+
+void IRPrinter::visit(const Fork *op) {
+    do_indent();
+    stream << "fork {\n";
+    indent += 2;
+    print(op->first);
+    indent -= 2;
+    do_indent();
+    stream << "} {\n";
+    indent += 2;
+    print(op->rest);
+    indent -= 2;
+    do_indent();
+    stream << "}\n";
 }
 
 void IRPrinter::visit(const IfThenElse *op) {

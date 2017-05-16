@@ -4769,7 +4769,7 @@ private:
             // the warning, because the assertion is generated internally
             // by Halide and is expected to always fail.
             const Call *call = a->message.as<Call>();
-            const bool const_false_conditions_expected = 
+            const bool const_false_conditions_expected =
                 call && call->name == "halide_error_specialize_fail";
             if (!const_false_conditions_expected) {
                 user_warning << "This pipeline is guaranteed to fail an assertion at runtime: \n"
@@ -4978,6 +4978,21 @@ private:
             stmt = op;
         } else {
             stmt = Block::make(first, rest);
+        }
+    }
+
+    void visit(const Fork *op) {
+        Stmt first = mutate(op->first);
+        Stmt rest = mutate(op->rest);
+        if (is_no_op(first)) {
+            stmt = rest;
+        } else if (is_no_op(rest)) {
+            stmt = first;
+        } else if (op->first.same_as(first) &&
+                   op->rest.same_as(rest)) {
+            stmt = op;
+        } else {
+            stmt = Fork::make(first, rest);
         }
     }
 };

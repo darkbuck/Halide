@@ -515,6 +515,25 @@ Stmt Block::make(const std::vector<Stmt> &stmts) {
     return result;
 }
 
+Stmt Fork::make(const Stmt &first, const Stmt &rest) {
+    internal_assert(first.defined()) << "Fork of undefined\n";
+    internal_assert(rest.defined()) << "Fork of undefined\n";
+
+    Fork *node = new Fork;
+
+    if (const Fork *b = first.as<Fork>()) {
+        // Use a canonical fork nesting order
+        node->first = b->first;
+        node->rest  = Fork::make(b->rest, rest);
+    } else {
+        node->first = first;
+        node->rest = rest;
+    }
+
+    return node;
+}
+
+
 Stmt IfThenElse::make(const Expr &condition, const Stmt &then_case, const Stmt &else_case) {
     internal_assert(condition.defined() && then_case.defined()) << "IfThenElse of undefined\n";
     // else_case may be null.
@@ -783,6 +802,7 @@ template<> void StmtNode<Allocate>::accept(IRVisitor *v) const { v->visit((const
 template<> void StmtNode<Free>::accept(IRVisitor *v) const { v->visit((const Free *)this); }
 template<> void StmtNode<Realize>::accept(IRVisitor *v) const { v->visit((const Realize *)this); }
 template<> void StmtNode<Block>::accept(IRVisitor *v) const { v->visit((const Block *)this); }
+template<> void StmtNode<Fork>::accept(IRVisitor *v) const { v->visit((const Fork *)this); }
 template<> void StmtNode<IfThenElse>::accept(IRVisitor *v) const { v->visit((const IfThenElse *)this); }
 template<> void StmtNode<Evaluate>::accept(IRVisitor *v) const { v->visit((const Evaluate *)this); }
 template<> void StmtNode<Prefetch>::accept(IRVisitor *v) const { v->visit((const Prefetch *)this); }

@@ -519,6 +519,12 @@ std::unique_ptr<llvm::Module> CodeGen_LLVM::compile(const Module &input) {
     device_interface_t_type = module->getTypeByName("struct.halide_device_interface_t");
     internal_assert(scalar_value_t_type) << "Did not find halide_device_interface_t in initial module";
 
+    semaphore_t_type = module->getTypeByName("struct.halide_semaphore_t");
+    internal_assert(semaphore_t_type) << "Did not find halide_semaphore_t in initial module";
+
+    parallel_task_t_type = module->getTypeByName("struct.halide_parallel_task_t");
+    internal_assert(parallel_task_t_type) << "Did not find halide_parallel_task_t in initial module";
+
     add_external_code(input);
 
     // Generate the code for this module.
@@ -546,7 +552,8 @@ std::unique_ptr<llvm::Module> CodeGen_LLVM::compile(const Module &input) {
     debug(2) << module.get() << "\n";
 
     // Verify the module is ok
-    verifyModule(*module);
+    llvm::raw_os_ostream os(std::cerr);
+    verifyModule(*module, &os);
     debug(2) << "Done generating llvm bitcode\n";
 
     // Optimize
@@ -3088,106 +3095,176 @@ void CodeGen_LLVM::visit(const For *op) {
     }
 }
 
-void CodeGen_LLVM::visit(const Acquire *op) {
-    // TODO: factor out common code with do_par_for
-
-    // Find every symbol that the body of this loop refers to
-    // and dump it into a closure
-    Closure closure(op->body);
+void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
+    Closure closure;
+    for (const auto &t : tasks) {
+        t.body.accept(&closure);
+    }
 
     // Allocate a closure
     StructType *closure_t = build_closure_type(closure, buffer_t_type, context);
-    Value *ptr = create_alloca_at_entry(closure_t, 1);
+    Value *closure_ptr = create_alloca_at_entry(closure_t, 1);
 
     // Fill in the closure
-    pack_closure(closure_t, ptr, closure, symbol_table, buffer_t_type, builder);
+    pack_closure(closure_t, closure_ptr, closure, symbol_table, buffer_t_type, builder);
 
-    // Make a new function that does the body
-    llvm::Type *voidPointerType = (llvm::Type *)(i8_t->getPointerTo());
-    llvm::Type *args_t[] = {voidPointerType, i32_t, voidPointerType};
-    FunctionType *func_t = FunctionType::get(i32_t, args_t, false);
-    llvm::Function *containing_function = function;
-    function = llvm::Function::Create(func_t, llvm::Function::InternalLinkage,
-                                      "async_consumer_" + function->getName() + unique_name('_'), module.get());
+    closure_ptr = builder->CreatePointerCast(closure_ptr, i8_t->getPointerTo());
 
+    int num_tasks = (int)tasks.size();
+
+    // Make space on the stack for the tasks
+    llvm::Value *task_stack_ptr = create_alloca_at_entry(parallel_task_t_type, num_tasks);
+
+    llvm::Type *args_t[] = {i8_t->getPointerTo(), i32_t, i8_t->getPointerTo()};
+    FunctionType *task_t = FunctionType::get(i32_t, args_t, false);
+
+    for (int i = 0; i < num_tasks; i++) {
+        const ParallelTask &t = tasks[i];
+
+        // Grab the semaphore
+        Value *semaphore;
+        if (t.semaphore.defined()) {
+            semaphore = codegen(t.semaphore);
+            semaphore = builder->CreatePointerCast(semaphore, semaphore_t_type->getPointerTo());
+        } else {
+            semaphore = ConstantPointerNull::get(semaphore_t_type->getPointerTo());
+        }
+
+        // Make a new function that does the body
+        llvm::Function *containing_function = function;
+        function = llvm::Function::Create(task_t, llvm::Function::InternalLinkage,
+                                          function->getName() + "_task" + unique_name('_'), module.get());
+
+        llvm::Value *task_ptr = builder->CreatePointerCast(function, task_t->getPointerTo());
+
+        #if LLVM_VERSION < 50
+        function->setDoesNotAlias(3);
+        #else
+        function->addParamAttr(2, Attribute::NoAlias);
+        #endif
+
+        set_function_attributes_for_target(function, target);
+
+        // Make the initial basic block and jump the builder into the new function
+        IRBuilderBase::InsertPoint call_site = builder->saveIP();
+        BasicBlock *block = BasicBlock::Create(*context, "entry", function);
+        builder->SetInsertPoint(block);
+
+        // Save the destructor block
+        BasicBlock *parent_destructor_block = destructor_block;
+        destructor_block = nullptr;
+
+        // Make a new scope to use
+        Scope<Value *> saved_symbol_table;
+        symbol_table.swap(saved_symbol_table);
+
+        // Get the function arguments
+
+        // The user context is first argument of the function; it's
+        // important that we override the name to be "__user_context",
+        // since the LLVM function has a random auto-generated name for
+        // this argument.
+        llvm::Function::arg_iterator iter = function->arg_begin();
+        sym_push("__user_context", iterator_to_pointer(iter));
+
+        // Next is int task number argument. Unused here.
+        ++iter;
+
+        // The closure pointer is the third and last argument.
+        ++iter;
+        iter->setName("closure");
+        Value *closure_handle = builder->CreatePointerCast(iterator_to_pointer(iter),
+                                                           closure_t->getPointerTo());
+
+        // Load everything from the closure into the new scope
+        unpack_closure(closure, symbol_table, closure_t, closure_handle, builder);
+
+        // Generate the new function body
+        codegen(t.body);
+
+        // Return success
+        return_with_error_code(ConstantInt::get(i32_t, 0));
+
+        // Move the builder back to the main function.
+        builder->restoreIP(call_site);
+
+        // Now restore the scope
+        symbol_table.swap(saved_symbol_table);
+        function = containing_function;
+
+        // Restore the destructor block
+        destructor_block = parent_destructor_block;
+
+        class MayBlock : public IRVisitor {
+            using IRVisitor::visit;
+            void visit(const Fork *op) {
+                result = true;
+            }
+            void visit(const Acquire *op) {
+                result = true;
+            }
+        public:
+            bool result = false;
+        };
+        MayBlock may_block;
+        t.body.accept(&may_block);
+
+        // Populate the task struct
+        Value *slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 0);
+        builder->CreateStore(task_ptr, slot_ptr);
+        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 1);
+        builder->CreateStore(ConstantInt::get(i32_t, 0), slot_ptr); // min
+        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 2);
+        builder->CreateStore(ConstantInt::get(i32_t, 1), slot_ptr); // extent
+        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 3);
+        builder->CreateStore(semaphore, slot_ptr);
+        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 4);
+        builder->CreateStore(closure_ptr, slot_ptr);
+        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 5);
+        builder->CreateStore(ConstantInt::get(i8_t, may_block.result), slot_ptr);
+        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 6);
+        builder->CreateStore(ConstantInt::get(i8_t, 0), slot_ptr); // serial
+    }
+
+    llvm::Function *do_parallel_tasks = module->getFunction("halide_do_parallel_tasks");
+    internal_assert(do_parallel_tasks) << "Could not find halide_do_parallel_tasks in initial module\n";
     #if LLVM_VERSION < 50
-    function->setDoesNotAlias(3);
+    do_parallel_tasks->setDoesNotAlias(3);
     #else
-    function->addParamAttr(2, Attribute::NoAlias);
+    do_parallel_tasks->addParamAttr(2, Attribute::NoAlias);
     #endif
-    set_function_attributes_for_target(function, target);
-
-    // Make the initial basic block and jump the builder into the new function
-    IRBuilderBase::InsertPoint call_site = builder->saveIP();
-    BasicBlock *block = BasicBlock::Create(*context, "entry", function);
-    builder->SetInsertPoint(block);
-
-    // Get the user context value before swapping out the symbol table.
-    Value *user_context = get_user_context();
-
-    // Grab the semaphore
-    Value *semaphore = codegen(op->semaphore);
-
-    // Save the destructor block
-    BasicBlock *parent_destructor_block = destructor_block;
-    destructor_block = nullptr;
-
-    // Make a new scope to use
-    Scope<Value *> saved_symbol_table;
-    symbol_table.swap(saved_symbol_table);
-
-    // Get the function arguments
-
-    // The user context is first argument of the function; it's
-    // important that we override the name to be "__user_context",
-    // since the LLVM function has a random auto-generated name for
-    // this argument.
-    llvm::Function::arg_iterator iter = function->arg_begin();
-    sym_push("__user_context", iterator_to_pointer(iter));
-
-    // Next is int task number argument. Unused here.
-    ++iter;
-
-    // The closure pointer is the third and last argument.
-    ++iter;
-    iter->setName("closure");
-    Value *closure_handle = builder->CreatePointerCast(iterator_to_pointer(iter),
-                                                       closure_t->getPointerTo());
-
-    // Load everything from the closure into the new scope
-    unpack_closure(closure, symbol_table, closure_t, closure_handle, builder);
-
-    // Generate the new function body
-    codegen(op->body);
-
-    // Return success
-    return_with_error_code(ConstantInt::get(i32_t, 0));
-
-    // Move the builder back to the main function and call do_async_consumer
-    builder->restoreIP(call_site);
-    llvm::Function *do_acquire = module->getFunction("halide_do_acquire");
-    internal_assert(do_acquire) << "Could not find halide_do_acquire in initial module\n";
-    #if LLVM_VERSION < 50
-    do_acquire->setDoesNotAlias(4);
-    #else
-    do_acquire->addParamAttr(3, Attribute::NoAlias);
-    #endif
-    ptr = builder->CreatePointerCast(ptr, i8_t->getPointerTo());
-    semaphore = builder->CreatePointerCast(semaphore, do_acquire->getFunctionType()->params()[2]);
-    Value *args[] = {user_context, function, semaphore, ptr};
-    debug(4) << "Creating call to do_acquire\n";
-    Value *result = builder->CreateCall(do_acquire, args);
-
-    // Now restore the scope
-    symbol_table.swap(saved_symbol_table);
-    function = containing_function;
-
-    // Restore the destructor block
-    destructor_block = parent_destructor_block;
+    Value *args[] = {get_user_context(),
+                     ConstantInt::get(i32_t, num_tasks),
+                     task_stack_ptr};
+    Value *result = builder->CreateCall(do_parallel_tasks, args);
 
     // Check for success
     Value *did_succeed = builder->CreateICmpEQ(result, ConstantInt::get(i32_t, 0));
     create_assertion(did_succeed, Expr(), result);
+}
+
+void CodeGen_LLVM::visit(const Acquire *op) {
+    vector<ParallelTask> tasks(1);
+    tasks[0].body = op->body;
+    tasks[0].semaphore = op->semaphore;
+    do_parallel_tasks(tasks);
+}
+
+void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result) {
+    if (const Fork *f = s.as<Fork>()) {
+        get_parallel_tasks(f->first, result);
+        get_parallel_tasks(f->rest, result);
+    } else if (const Acquire *a = s.as<Acquire>()) {
+        result.push_back(ParallelTask {a->body, a->semaphore});
+    } else {
+        result.push_back(ParallelTask {s, Expr()});
+    }
+}
+
+void CodeGen_LLVM::visit(const Fork *op) {
+    vector<ParallelTask> tasks;
+    get_parallel_tasks(op, tasks);
+    do_parallel_tasks(tasks);
 }
 
 void CodeGen_LLVM::visit(const Store *op) {

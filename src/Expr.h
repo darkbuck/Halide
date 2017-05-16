@@ -61,6 +61,7 @@ enum class IRNodeType {
     Free,
     Realize,
     Block,
+    Fork,
     IfThenElse,
     Evaluate,
     Shuffle,

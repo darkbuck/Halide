@@ -334,6 +334,17 @@ void IRMutator::visit(const Block *op) {
     }
 }
 
+void IRMutator::visit(const Fork *op) {
+    Stmt first = mutate(op->first);
+    Stmt rest = mutate(op->rest);
+    if (first.same_as(op->first) &&
+        rest.same_as(op->rest)) {
+        stmt = op;
+    } else {
+        stmt = Fork::make(first, rest);
+    }
+}
+
 void IRMutator::visit(const IfThenElse *op) {
     Expr condition = mutate(op->condition);
     Stmt then_case = mutate(op->then_case);

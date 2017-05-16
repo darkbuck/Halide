@@ -87,6 +87,7 @@ private:
     void visit(const Free *);
     void visit(const Realize *);
     void visit(const Block *);
+    void visit(const Fork *);
     void visit(const IfThenElse *);
     void visit(const Evaluate *);
     void visit(const Shuffle *);
@@ -424,6 +425,13 @@ void IRComparer::visit(const Realize *op) {
 
 void IRComparer::visit(const Block *op) {
     const Block *s = stmt.as<Block>();
+
+    compare_stmt(s->first, op->first);
+    compare_stmt(s->rest, op->rest);
+}
+
+void IRComparer::visit(const Fork *op) {
+    const Fork *s = stmt.as<Fork>();
 
     compare_stmt(s->first, op->first);
     compare_stmt(s->rest, op->rest);

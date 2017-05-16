@@ -3,7 +3,11 @@
 using namespace Halide;
 
 extern "C" int expensive(int x) {
-    usleep(1000);
+    float f = 3.0f;
+    for (int i = 0; i < (1 << 20); i++) {
+        f = sqrtf(sinf(cosf(f)));
+    }
+    if (f < 0) return 3;
     return x;
 }
 HalideExtern_1(int, expensive, int);
@@ -37,12 +41,12 @@ int main(int argc, char **argv) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
-        producer(x) = x;
-        consumer(x) = producer(x) + producer(x-1);
+        producer(x) = expensive(x);
+        consumer(x) = expensive(producer(x) + producer(x-1));
         consumer.compute_root();
-        producer.store_root().compute_at(consumer, x);
+        producer.store_root().fold_storage(x, 8).compute_at(consumer, x);
 
-        Buffer<int> out = consumer.realize(1600);
+        Buffer<int> out = consumer.realize(16);
 
         out.for_each_element([&](int x) {
                 int correct = 2*x - 1;
@@ -193,7 +197,7 @@ int main(int argc, char **argv) {
 
     // Multiple async producers inside an outer parallel for loop
     // with sliding within the inner serial loop
-    if (2) {
+    if (1) {
         Func producer_1("async_producer_1");
         Func producer_2("async_producer_2");
         Func consumer;
@@ -220,7 +224,7 @@ int main(int argc, char **argv) {
             });
     }
 
-    // Nested asynchronous tasks. Currently deadlocks :(
+    // Nested asynchronous tasks.
     if (1) {
         Func f0("async_f0"), f1("async_f1"), f2;
         Var x, y;
@@ -236,6 +240,37 @@ int main(int argc, char **argv) {
         Buffer<int> out = f2.realize(16, 16);
         out.for_each_element([&](int x, int y) {
                 int correct = 4*(x + y);
+                if (out(x, y) != correct) {
+                    printf("out(%d, %d) = %d instead of %d\n",
+                           x, y, out(x, y), correct);
+                    exit(-1);
+                }
+            });
+    }
+
+    // Two async producer-consumer pairs over x in a producer-consumer
+    // relationship over y. TODO: Currently generates junk IR w.r.t. semaphores.
+    if (0) {
+        Func producer_1("async_producer_1");
+        Func consumer_1("async_consumer_1");
+        Func producer_2("async_producer_2");
+        Func consumer_2("consumer_2");
+
+        Var x, y;
+
+        producer_1(x, y) = x + y;
+        consumer_1(x, y) = producer_1(x-1, y) + producer_1(x+1, y);
+        producer_2(x, y) = consumer_1(x, y-1) + consumer_1(x, y+1);
+        consumer_2(x, y) = producer_2(x-1, y) + producer_2(x+1, y);
+
+        consumer_2.compute_root();
+        producer_2.store_at(consumer_2, y).compute_at(consumer_2, x);
+        consumer_1.store_root().compute_at(consumer_2, y);
+        producer_1.store_at(consumer_2, y).compute_at(consumer_1, x);
+
+        Buffer<int> out = consumer_2.realize(16, 16);
+        out.for_each_element([&](int x, int y) {
+                int correct = 8*(x + y);
                 if (out(x, y) != correct) {
                     printf("out(%d, %d) = %d instead of %d\n",
                            x, y, out(x, y), correct);
