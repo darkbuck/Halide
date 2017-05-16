@@ -308,15 +308,19 @@ WEAK void halide_shutdown_thread_pool() {
 WEAK struct halide_thread_pool *halide_get_default_thread_pool(void *user_context) {
     return &default_work_queue;
 }
-/** Allocate a new Halide thread pool. Not intended to be overridden by usre code. */
-extern struct halide_thread_pool *halide_make_new_thread_pool(void *user_context) {
+
+WEAK struct halide_thread_pool *halide_get_thread_pool(void *user_context) {
+    return halide_get_default_thread_pool(user_context);
+}
+
+WEAK extern struct halide_thread_pool *halide_make_new_thread_pool(void *user_context) {
     work_queue_t *result = (work_queue_t *)halide_malloc(user_context, sizeof(work_queue_t));
     memset(result, 0, sizeof(work_queue_t));
     return result;
 }
 
 /** Free a Halide thread pool. Not intended to be overridden by usre code. */
-extern void halide_free_thread_pool(void *user_context, struct halide_thread_pool *thread_pool) {
+WEAK extern void halide_free_thread_pool(void *user_context, struct halide_thread_pool *thread_pool) {
     work_queue_t *work_queue = (work_queue_t *)thread_pool;
     work_queue->finalize();
     halide_free(user_context, work_queue);

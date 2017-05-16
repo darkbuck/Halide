@@ -8,6 +8,7 @@ extern void dispatch_once_f(dispatch_once_t *, void *context, void (*initializer
 typedef struct dispatch_queue_s *dispatch_queue_t;
 typedef long dispatch_queue_priority_t;
 
+extern dispatch_queue_t dispatch_queue_create(const char *label, unsigned long attr);
 extern dispatch_queue_t dispatch_get_global_queue(
     dispatch_queue_priority_t priority, unsigned long flags);
 
@@ -154,6 +155,25 @@ WEAK void halide_mutex_unlock(halide_mutex *mutex_arg) {
 }
 
 WEAK void halide_shutdown_thread_pool() {
+}
+
+WEAK struct halide_thread_pool *halide_get_default_thread_pool(void *user_context) {
+    return (halide_thread_pool *)dispatch_get_global_queue(0, 0);
+}
+
+WEAK struct halide_thread_pool *halide_get_thread_pool(void *user_context) {
+    return halide_get_default_thread_pool(user_context);
+}
+
+WEAK struct halide_thread_pool *halide_make_new_thread_pool(void *user_context) {
+    halide_thread_pool *result = (halide_thread_pool *)dispatch_queue_create("halide pool", NULL); // serial queue
+    return result;
+}
+
+/** Free a Halide thread pool. Not intended to be overridden by usre code. */
+WEAK void halide_free_thread_pool(void *user_context, struct halide_thread_pool *thread_pool) {
+    dispatch_queue_t queue = (dispatch_queue_t)thread_pool;
+    dispatch_release(queue);
 }
 
 WEAK int halide_set_num_threads(void * /* user_context */, int n) {

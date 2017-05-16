@@ -976,6 +976,12 @@ $(FILTERS_DIR)/pyramid.a: $(BIN_DIR)/pyramid.generator
 	@-mkdir -p $(TMP_DIR)
 	cd $(TMP_DIR); $(CURDIR)/$< -f pyramid -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET) levels=10
 
+# multiple_thread_pool needs user_context in the target.
+$(FILTERS_DIR)/multiple_thread_pool.a: $(BIN_DIR)/multiple_thread_pool.generator
+	@mkdir -p $(FILTERS_DIR)
+	@-mkdir -p $(TMP_DIR)
+	cd $(TMP_DIR); $(CURDIR)/$< -f multiple_thread_pool -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-user_context
+
 METADATA_TESTER_GENERATOR_ARGS=\
 	input.type=uint8 input.dim=3 \
 	type_only_input_buffer.dim=3 \
