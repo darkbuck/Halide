@@ -157,10 +157,30 @@ struct halide_thread;
 /** Spawn a thread. Returns a handle to the thread for the purposes of
  * joining it. The thread must be joined in order to clean up any
  * resources associated with it. */
-extern struct halide_thread *halide_spawn_thread(void (*f)(void *), void *closure);
+extern struct halide_thread *halide_spawn_thread(void *user_context, 
+                                                 void (*f)(void *), void *closure);
 
 /** Join a thread. */
 extern void halide_join_thread(struct halide_thread *);
+
+/** Opaque type for a thread pool. */
+struct halide_thread_pool { int dummy; };
+
+/** Get a thread pool to use for a given user context. Intended to be overriden
+ * by users which want different thread pools per user context without overriding
+ * Halides thread pool implementation. One can use halide_make_new_thread_pool
+ * to make a thread pool and the threads will be made on this thread pool by
+ * calling halide_spawn_thread with the same user_context. */
+extern struct halide_thread_pool *halide_get_thread_pool(void *user_context);
+
+/** Returns Halide's default thread pool. Not intended to be overridden by usre code.
+ * Can be called from an override of halide_get_thread_pool when the user_context
+ * is nullptr or otherwise unrecognized. */
+extern struct halide_thread_pool *halide_get_default_thread_pool(void *user_context);
+/** Allocate a new Halide thread pool. Not intended to be overridden by usre code. */
+extern struct halide_thread_pool *halide_make_new_thread_pool(void *user_context);
+/** Free a Halide thread pool. Not intended to be overridden by usre code. */
+extern void halide_free_thread_pool(void *user_context, struct halide_thread_pool *thread_pool);
 
 /** Set the number of threads used by Halide's thread pool. Returns
  * the old number.
@@ -178,7 +198,7 @@ extern void halide_join_thread(struct halide_thread *);
  * of halide_do_par_for(); custom implementations may completely ignore values
  * passed to halide_set_num_threads().)
  */
-extern int halide_set_num_threads(int n);
+extern int halide_set_num_threads(void *user_context, int n);
 
 /** Halide calls these functions to allocate and free memory. To
  * replace in AOT code, use the halide_set_custom_malloc and

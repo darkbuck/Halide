@@ -57,7 +57,7 @@ WEAK void *spawn_thread_helper(void *arg) {
 
 extern "C" {
 
-WEAK halide_thread *halide_spawn_thread(void(*f)(void *), void *closure) {
+WEAK halide_thread *halide_spawn_thread(void * /* user_context */, void(*f)(void *), void *closure) {
     spawned_thread *t = (spawned_thread *)malloc(sizeof(spawned_thread));
     t->f = f;
     t->closure = closure;

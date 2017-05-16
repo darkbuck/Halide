@@ -29,9 +29,9 @@ WEAK halide_do_par_for_t custom_do_par_for = halide_default_do_par_for;
 
 extern "C" {
 
-WEAK halide_thread *halide_spawn_thread(void (*f)(void *), void *closure) {
+WEAK halide_thread *halide_spawn_thread(void *user_context, void (*f)(void *), void *closure) {
     // We can't fake spawning a thread. Emit an error.
-    halide_error(NULL, "halide_spawn_thread not implemented on this platform.");
+    halide_error(user_context, "halide_spawn_thread not implemented on this platform.");
     return NULL;
 }
 
@@ -47,7 +47,7 @@ WEAK void halide_mutex_unlock(halide_mutex *mutex) {
 WEAK void halide_shutdown_thread_pool() {
 }
 
-WEAK int halide_set_num_threads(int n) {
+  WEAK int halide_set_num_threads(void * /* user_context */,int n) {
     if (n < 0) {
         halide_error(NULL, "halide_set_num_threads: must be >= 0.");
     }

@@ -182,7 +182,10 @@ WEAK int halide_profiler_pipeline_start(void *user_context,
 
     if (!s->started) {
         halide_start_clock(user_context);
-        halide_spawn_thread(sampling_profiler_thread, NULL);
+
+        // TODO: Should the user_context here be nullptr or should the
+        // thread type be signified in some way?
+        halide_spawn_thread(user_context, sampling_profiler_thread, NULL);
         s->started = true;
     }
 

@@ -40,7 +40,7 @@ WEAK void spawn_thread_helper(void *arg) {
 }}} // namespace Halide::Runtime::Internal
 
 
-WEAK halide_thread *halide_spawn_thread(void (*f)(void *), void *closure) {
+WEAK halide_thread *halide_spawn_thread(void * /* user_context */, void (*f)(void *), void *closure) {
     spawned_thread *thread = (spawned_thread *)malloc(sizeof(spawned_thread));
     thread->f = f;
     thread->closure = closure;
@@ -156,7 +156,7 @@ WEAK void halide_mutex_unlock(halide_mutex *mutex_arg) {
 WEAK void halide_shutdown_thread_pool() {
 }
 
-WEAK int halide_set_num_threads(int n) {
+WEAK int halide_set_num_threads(void * /* user_context */, int n) {
     if (n < 0) {
         halide_error(NULL, "halide_set_num_threads: must be >= 0.");
     }

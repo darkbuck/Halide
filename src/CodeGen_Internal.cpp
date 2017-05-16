@@ -197,6 +197,11 @@ bool function_takes_user_context(const std::string &name) {
         "halide_upgrade_buffer_t",
         "halide_downgrade_buffer_t",
         "halide_downgrade_buffer_t_device_fields",
+        "halide_spawn_thread",
+        "halide_free_thread_pool",
+        "halide_make_new_thread_pool",
+        "halide_get_default_thread_pool",
+        "halide_set_num_threads",
     };
     const int num_funcs = sizeof(user_context_runtime_funcs) /
         sizeof(user_context_runtime_funcs[0]);
