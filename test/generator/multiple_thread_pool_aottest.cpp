@@ -1,3 +1,4 @@
+#include <iostream>
 #include <thread>
 
 #include "HalideRuntime.h"
@@ -62,7 +63,7 @@ int32_t check_thread(void *user_context) {
         custom_context *uc = (custom_context *)user_context;
         uc_id = uc->uc_id;
     }  
-    //    assert(thread_pool_uc_id == uc_id);
+    assert(thread_pool_uc_id == uc_id);
     return uc_id;
 }
 
@@ -78,24 +79,28 @@ int main(int argc, char **argv) {
         p = 21;
     }
 
+    thread_pool_uc_id = 0;
     multiple_thread_pool(nullptr, in_buf.raw_buffer(), 0, out_buf.raw_buffer());
-    for (const auto &p : in_buf) {
+    for (const auto &p : out_buf) {
         assert(p == 21);
     }
 
+    thread_pool_uc_id = 1;
     multiple_thread_pool(&contexts[0], in_buf.raw_buffer(), 1, out_buf.raw_buffer());
-    for (const auto &p : in_buf) {
+    for (const auto &p : out_buf) {
         assert(p == 23);
     }
 
+    thread_pool_uc_id = 2;
     multiple_thread_pool(&contexts[1], in_buf.raw_buffer(), 2, out_buf.raw_buffer());
-    for (const auto &p : in_buf) {
-        assert(p == 26);
+    for (const auto &p : out_buf) {
+        assert(p == 25);
     }
 
+    thread_pool_uc_id = 3;
     multiple_thread_pool(&contexts[2], in_buf.raw_buffer(), 3, out_buf.raw_buffer());
-    for (const auto &p : in_buf) {
-        assert(p == 31);
+    for (const auto &p : out_buf) {
+        assert(p == 27);
     }
 
     printf("Success!\n");
