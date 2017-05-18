@@ -1,18 +1,26 @@
 #include "printer.h"
 
+extern "C" int pthread_self();
+
 namespace Halide { namespace Runtime { namespace Internal {
 
 struct work {
     halide_parallel_task_t task;
-    work *next_job;
-    void *user_context;
+    work *next_job; void *user_context;
     int active_workers;
     int exit_status;
+    bool owner_is_on_b_team;
+    bool owner_is_sleeping;
+    bool make_runnable() {
+        return !task.semaphore || halide_semaphore_try_acquire(task.semaphore);
+    }
+    void release() {
+        if (task.semaphore) {
+            halide_semaphore_release(task.semaphore);
+        }
+    }
     bool running() {
         return task.extent || active_workers;
-    }
-    bool make_runnable() {
-        return (task.semaphore == NULL) || halide_semaphore_try_acquire(task.semaphore);
     }
 };
 
@@ -31,7 +39,12 @@ struct work_queue_t {
     // up and find that a_team_size > target_a_team_size.  Threads
     // move into the A team whenever they wake up and find that
     // a_team_size < target_a_team_size.
-    int a_team_size, target_a_team_size;
+    int a_team_size, b_team_size, target_a_team_size;
+
+    // The number of top-level threads currently sleeping due to lack of work
+    int idle_a_team_workers, idle_b_team_workers;
+
+    int sleeping_a_team_owners, sleeping_b_team_owners;
 
     // Broadcast when a job completes.
     halide_cond wakeup_owners;
@@ -89,110 +102,225 @@ WEAK int default_desired_num_threads() {
 
 WEAK void worker_thread(void *);
 
-WEAK void add_one_worker_thread_to_pool() {
-    if (work_queue.desired_num_threads < MAX_THREADS) {
-        work_queue.desired_num_threads++;
-    } else {
-        print(NULL) << "Warning! Out of threads!\n";
-    }
-    if (work_queue.threads_created < work_queue.desired_num_threads) {
+WEAK bool add_one_worker_thread_to_pool() {
+    if (work_queue.target_a_team_size > work_queue.a_team_size) {
+        // Just wake up the B team
+        halide_cond_broadcast(&work_queue.wakeup_b_team);
+    } else if (work_queue.threads_created < MAX_THREADS) {
         int id = work_queue.threads_created++;
         work_queue.threads[id] = halide_spawn_thread(worker_thread, NULL);
-    } else if (work_queue.target_a_team_size > work_queue.a_team_size) {
-        halide_cond_broadcast(&work_queue.wakeup_b_team);
+        print(NULL) << "Created thread: " << id << "\n";
+    } else {
+        return false;
     }
-    halide_cond_broadcast(&work_queue.wakeup_a_team);
+    return true;
 }
 
-WEAK void suspend_one_worker_thread() {
-    work_queue.desired_num_threads--;
-    if (work_queue.target_a_team_size > work_queue.desired_num_threads) {
-        work_queue.target_a_team_size--;
+WEAK void sleep_on_b_team(work *owned_job) {
+    work_queue.a_team_size--;
+    work_queue.b_team_size++;
+    if (owned_job) {
+        work_queue.sleeping_b_team_owners++;
+        owned_job->owner_is_on_b_team = true;
+        owned_job->owner_is_sleeping = true;
+        halide_cond_wait(&work_queue.wakeup_owners, &work_queue.mutex);
+        owned_job->owner_is_sleeping = false;
+        owned_job->owner_is_on_b_team = false;
+        work_queue.sleeping_b_team_owners--;
+    } else {
+        work_queue.idle_b_team_workers++;
+        halide_cond_wait(&work_queue.wakeup_b_team, &work_queue.mutex);
+        work_queue.idle_b_team_workers--;
+    }
+    work_queue.b_team_size--;
+    work_queue.a_team_size++;
+}
+
+WEAK void sleep_on_a_team(work *owned_job) {
+    if (owned_job) {
+        work_queue.sleeping_a_team_owners++;
+        owned_job->owner_is_sleeping = true;
+        halide_cond_wait(&work_queue.wakeup_owners, &work_queue.mutex);
+        owned_job->owner_is_sleeping = false;
+        work_queue.sleeping_a_team_owners--;
+    } else {
+        work_queue.idle_a_team_workers++;
+        halide_cond_wait(&work_queue.wakeup_a_team, &work_queue.mutex);
+        work_queue.idle_a_team_workers--;
     }
 }
 
 WEAK void worker_thread_already_locked(work *owned_job) {
+    if (!owned_job) {
+        work_queue.idle_a_team_workers--;
+    }
+
     while (owned_job ? owned_job->running() : work_queue.running()) {
 
-        // Transition workers that aren't supposed to be awake to the b team
-        if (!owned_job && work_queue.a_team_size > work_queue.target_a_team_size) {
-            work_queue.a_team_size--;
-            halide_cond_wait(&work_queue.wakeup_b_team, &work_queue.mutex);
-            work_queue.a_team_size++;
+        print(NULL) << "\n"
+                    << "TID: " << pthread_self() << "\n"
+                    << "threads created: " << work_queue.threads_created << "\n"
+                    << "threads desired: " << work_queue.desired_num_threads << "\n"
+                    << "a team size: " << work_queue.a_team_size << "\n"
+                    << "target a team size: " << work_queue.target_a_team_size << "\n"
+                    << "idle a team workers: " << work_queue.idle_a_team_workers << "\n"
+                    << "sleeping a team owners: " << work_queue.sleeping_a_team_owners << "\n"
+                    << "b team size: " << work_queue.b_team_size << "\n"
+                    << "idle b team workers: " << work_queue.idle_b_team_workers << "\n"
+                    << "sleeping b team owners: " << work_queue.sleeping_b_team_owners << "\n";
+
+        print(NULL) << "Task queue:\n";
+        for (work *job = work_queue.jobs; job; job = job->next_job) {
+            print(NULL) << job->task.depth << ": " <<
+                (job ?
+                 (job->task.name ? job->task.name : "unnamed") :
+                 "none") << "\n";
+        }
+
+        // Check invariants
+        halide_assert(NULL,
+                      work_queue.a_team_size + work_queue.b_team_size == work_queue.threads_created + 1);
+
+        halide_assert(NULL, !owned_job || !owned_job->owner_is_sleeping);
+
+        print(NULL) << "Owned job: "
+                    << (owned_job ?
+                        (owned_job->task.name ? owned_job->task.name : "unnamed") :
+                        "none") << "\n";
+
+        // Transition threads that aren't supposed to be awake to the b team
+        if (work_queue.a_team_size > work_queue.target_a_team_size) {
+            print(NULL) << "Worker should not be awake. Joining B team\n";
+            sleep_on_b_team(owned_job);
             continue;
         }
 
-        // Grab the next runnable job, favoring jobs near the top of
-        // the stack so that we run breadth-first.
+        // 1) Figure out which job should be scheduled next: The deepest runnable job.
         work *job = work_queue.jobs;
         work **prev_ptr = &work_queue.jobs;
-        while (job &&
-               ((owned_job && job->task.may_block) ||
-                !job->make_runnable())) {
-            prev_ptr = &job->next_job;
+        while (job && !job->make_runnable()) {
+            print(NULL) << "Unrunnable job: "
+                        << (job ?
+                            (job->task.name ? job->task.name : "unnamed") :
+                            "none") << "\n";
+            prev_ptr = &(job->next_job);
             job = job->next_job;
         }
 
+        print(NULL) << "Next runnable job: "
+                    << (job ?
+                        (job->task.name ? job->task.name : "unnamed") :
+                        "none") << "\n";
+
+        // 2) Figure out which thread should run it, wake them up, and figure out what this thread should do.
+        bool should_join_b_team = work_queue.a_team_size > work_queue.target_a_team_size;
+        bool should_run_job = false;
         if (job == NULL) {
-            if (owned_job) {
-                bool should_join_b_team = work_queue.jobs; // TODO: Should only be if there are *runnable* jobs I can't do
-                if (should_join_b_team) {
-                    // There are jobs pending, but I'm not permitted
-                    // to run them to avoid deadlock issues.
-                    // Leave the A team
-                    work_queue.a_team_size--;
-
-                    // Add a worker to replace me, maintaining the
-                    // total number of live threads.
-                    add_one_worker_thread_to_pool();
-                }
-                halide_cond_wait(&work_queue.wakeup_owners, &work_queue.mutex);
-                if (should_join_b_team) {
-                    suspend_one_worker_thread();
-                    work_queue.a_team_size++;
-                }
-                continue;
-            } else {
-                // There are no runnable jobs pending. Wait until more
-                // jobs are enqueued, or someone releases a semaphore (TODO: How can the latter happen?).
-                halide_cond_wait(&work_queue.wakeup_a_team, &work_queue.mutex);
-                continue;
-            }
-        }
-
-        // Claim a task from it.
-        work myjob = *job;
-        job->task.min++;
-        job->task.extent--;
-
-        // If there were no more tasks pending for this job,
-        // remove it from the stack.
-        if (job->task.extent == 0) {
-            *prev_ptr = job->next_job;
-        }
-
-        // Increment the active_worker count so that other threads
-        // are aware that this job is still in progress even
-        // though there are no outstanding tasks for it.
-        job->active_workers++;
-
-        // Release the lock and do the task.
-        halide_mutex_unlock(&work_queue.mutex);
-        int result = halide_do_task(myjob.user_context, myjob.task.fn, myjob.task.min,
-                                    myjob.task.closure);
-        halide_mutex_lock(&work_queue.mutex);
-
-        // If this task failed, set the exit status on the job.
-        if (result) {
-            job->exit_status = result;
-        }
-
-        // We are no longer active on this job
-        job->active_workers--;
-
-        // Wake up the owner if the job is done.
-        if (job != owned_job && !job->running()) {
+            print(NULL) << "No runnable jobs\n";
+            // There is no job. Go to sleep.
+        } else if (job == owned_job) {
+            should_run_job = true;
+            print(NULL) << "Working on my own job\n";
+        } else if (owned_job && job->task.depth == owned_job->task.depth && owned_job->make_runnable()) {
+            // I am permitted to work on my own job, as it has the same depth as the deepest runnable task
+            job->release();
+            job = owned_job;
+            should_run_job = true;
+            print(NULL) << "Working on my own job instead\n";
+        } else if (job->owner_is_sleeping) {
+            // The job's owner should run it. Wake them up and go to sleep.
+            should_join_b_team = job->owner_is_on_b_team;
             halide_cond_broadcast(&work_queue.wakeup_owners);
+            print(NULL) << "Waking owner to run it\n";
+        } else if (!owned_job || !job->task.may_block) {
+            should_run_job = true;
+            // I should run it
+            print(NULL) << "Stealing job\n";
+        } else if (work_queue.idle_a_team_workers) {
+            // An idle A-team worker should run it.
+            halide_cond_broadcast(&work_queue.wakeup_a_team);
+            print(NULL) << "Waking an A team worker to run it\n";
+        } else if (work_queue.sleeping_a_team_owners && !job->task.may_block) {
+            // A sleeping A-team owner could run it
+            halide_cond_broadcast(&work_queue.wakeup_owners);
+            print(NULL) << "Waking an A team owner to run it\n";
+        } else if (work_queue.idle_b_team_workers) {
+            // An idle B-team worker could run it
+            halide_cond_broadcast(&work_queue.wakeup_b_team);
+            should_join_b_team = true;
+            print(NULL) << "Waking a B team worker to run it\n";
+        } else if (work_queue.sleeping_b_team_owners && !job->task.may_block) {
+            // A sleeping B-team owner could run it
+            halide_cond_broadcast(&work_queue.wakeup_owners);
+            should_join_b_team = true;
+            print(NULL) << "Waking a B team owner to run it\n";
+        } else if (work_queue.threads_created < 2) {
+            // Nobody can run it, but we're allowed to add a new worker
+            int id = work_queue.threads_created++;
+            work_queue.a_team_size++;
+            work_queue.idle_a_team_workers++;
+            work_queue.threads[id] = halide_spawn_thread(worker_thread, NULL);
+            should_join_b_team = true;
+            print(NULL) << "Making a new thread to run it\n";
+        } else {
+            // Uh...
+            print(NULL) << "***** Out of threads!\n";
+            abort();
+        }
+
+        // 3) If I should run it, do so, otherwise sleep on the appropriate condition variable.
+        if (job && should_run_job) {
+            // Claim a task from it.
+            work myjob = *job;
+            job->task.min++;
+            job->task.extent--;
+
+            // If there were no more tasks pending for this job,
+            // remove it from the stack.
+            if (job->task.extent == 0) {
+                *prev_ptr = job->next_job;
+            }
+
+            // Increment the active_worker count so that other threads
+            // are aware that this job is still in progress even
+            // though there are no outstanding tasks for it.
+            job->active_workers++;
+
+            // Release the lock and do the task.
+            halide_mutex_unlock(&work_queue.mutex);
+            int result = halide_do_task(myjob.user_context, myjob.task.fn, myjob.task.min,
+                                        myjob.task.closure);
+            halide_mutex_lock(&work_queue.mutex);
+
+            // If this task failed, set the exit status on the job.
+            if (result) {
+                job->exit_status = result;
+            }
+
+            // We are no longer active on this job
+            job->active_workers--;
+
+            // Wake up the owner if the job is done.
+            if (job != owned_job && !job->running()) {
+                print(NULL) << "Finished " << (job ?
+                                               (job->task.name ? job->task.name : "unnamed") :
+                                               "none") << "\n";
+                halide_cond_broadcast(&work_queue.wakeup_owners);
+                if (job->owner_is_on_b_team) {
+                    // Take the owner's place on the B team to preserve the active thread count.
+                    sleep_on_b_team(owned_job);
+                }
+            }
+        } else {
+            if (job) {
+                // We can't run it. Give up our claim on it.
+                job->release();
+            }
+            if (should_join_b_team) {
+                sleep_on_b_team(owned_job);
+            } else {
+                sleep_on_a_team(owned_job);
+            }
         }
     }
 }
@@ -222,6 +350,11 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
 
         // Everyone starts on the a team.
         work_queue.a_team_size = work_queue.desired_num_threads;
+        work_queue.b_team_size = 0;
+        work_queue.idle_a_team_workers = 0;
+        work_queue.idle_b_team_workers = 0;
+        work_queue.sleeping_a_team_owners = 0;
+        work_queue.sleeping_b_team_owners = 0;
 
         work_queue.initialized = true;
     }
@@ -231,6 +364,7 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
         // increased.
         work_queue.threads[work_queue.threads_created++] =
             halide_spawn_thread(worker_thread, NULL);
+        work_queue.idle_a_team_workers++;
     }
 
     int size = 0;
@@ -253,18 +387,21 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     }
 
     // Push the jobs onto the stack.
-    for (int i = 0; i < num_jobs; i++) {
-        jobs[i].next_job = work_queue.jobs;
-        work_queue.jobs = jobs + i;
+    for (int i = num_jobs - 1; i >= 0; i--) {
+        // Bubble it downwards to the appropriate level given its depth.
+        work **prev_ptr = &work_queue.jobs;
+        work *job = work_queue.jobs;
+        int my_depth = jobs[i].task.depth;
+        while (job && job->task.depth > my_depth) {
+            prev_ptr = &(job->next_job);
+            job = job->next_job;
+        }
+        *prev_ptr = jobs + i;
+        jobs[i].next_job = job;
     }
 
     // Wake up our A team.
     halide_cond_broadcast(&work_queue.wakeup_a_team);
-
-    // Sleeping owners are also A-team threads, technically, though
-    // they'll probably just look at this job and add a worker to do
-    // it for them.
-    halide_cond_broadcast(&work_queue.wakeup_owners);
 
     // If there are fewer threads than we would like on the a team,
     // wake up the b team too.
@@ -272,6 +409,7 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
         halide_cond_broadcast(&work_queue.wakeup_b_team);
     }
 
+    // TODO: What if all threads are owners sleeping on runnable jobs?
 }
 
 }}}  // namespace Halide::Runtime::Internal
@@ -295,9 +433,13 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     job.task.serial = false;
     job.task.semaphore = NULL;
     job.task.closure = closure;
+    job.task.depth = 0; // TODO: We actually need this information!
+    job.task.name = NULL;
     job.user_context = user_context;
     job.exit_status = 0;
     job.active_workers = 0;
+    job.owner_is_on_b_team = false;
+    job.owner_is_sleeping = false;
     halide_mutex_lock(&work_queue.mutex);
     enqueue_work_already_locked(1, &job);
     worker_thread_already_locked(&job);
@@ -308,12 +450,14 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
 WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
                                   halide_parallel_task_t *tasks) {
     // Avoid entering the task system if possible
+    /* Disabled while debugging the task system
     if (num_tasks == 1 &&
         tasks->extent == 1 &&
         (tasks->semaphore == NULL ||
          halide_semaphore_try_acquire(tasks->semaphore))) {
         return tasks->fn(user_context, tasks->min, tasks->closure);
     }
+    */
 
     work *jobs = (work *)__builtin_alloca(sizeof(work) * num_tasks);
 
@@ -322,6 +466,8 @@ WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
         jobs[i].user_context = user_context;
         jobs[i].exit_status = 0;
         jobs[i].active_workers = 0;
+        jobs[i].owner_is_on_b_team = false;
+        jobs[i].owner_is_sleeping = false;
     }
 
     halide_mutex_lock(&work_queue.mutex);
@@ -396,11 +542,6 @@ WEAK int halide_semaphore_init(halide_semaphore_t *s, int val) {
 WEAK int halide_semaphore_release(halide_semaphore_t *s) {
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
     int new_val = __sync_add_and_fetch(&(sem->value), 1);
-    if (new_val == 1) {
-        halide_cond_broadcast(&work_queue.wakeup_owners);
-        halide_cond_broadcast(&work_queue.wakeup_a_team);
-        halide_cond_broadcast(&work_queue.wakeup_b_team);
-    }
     return new_val;
 }
 

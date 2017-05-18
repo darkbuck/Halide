@@ -271,8 +271,10 @@ protected:
     struct ParallelTask {
         Stmt body;
         Expr semaphore;
+        std::string name;
     };
-    void get_parallel_tasks(Stmt s, std::vector<ParallelTask> &tasks);
+    int task_depth;
+    void get_parallel_tasks(Stmt s, std::vector<ParallelTask> &tasks, std::string prefix);
     void do_parallel_tasks(const std::vector<ParallelTask> &tasks);
 
     /** Return the the pipeline with the given error code. Will run

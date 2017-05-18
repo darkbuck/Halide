@@ -15,7 +15,7 @@ HalideExtern_1(int, expensive, int);
 int main(int argc, char **argv) {
 
     // Basic compute-root async producer
-    if (1) {
+    if (0) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
     }
 
     // Sliding and folding over a single variable
-    if (1) {
+    if (0) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
     }
 
     // Sliding and folding over y
-    if (1) {
+    if (0) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
     }
 
     // Sliding over x and y, folding over y
-    if (1) {
+    if (0) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
     // folded to prevent clobbering along each axis. The outer
     // semaphore never actually does anything, because the inner
     // semaphore stops it from getting that far ahead.
-    if (1) {
+    if (0) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
     // Multiple async producers at root. This doesn't currently get
     // the producers running at the same time, because one is nested
     // inside the other's consume node. Need to tighten this up.
-    if (1) {
+    if (0) {
         Func producer_1("async_producer_1");
         Func producer_2("async_producer_2");
         Func consumer;
@@ -169,7 +169,7 @@ int main(int argc, char **argv) {
     }
 
     // Multiple async producers inside an outer parallel for loop
-    if (1) {
+    if (0) {
         Func producer_1("async_producer_1");
         Func producer_2("async_producer_2");
         Func consumer;
@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
     }
 
     // Nested asynchronous tasks.
-    if (1) {
+    if (0) {
         Func f0("async_f0"), f1("async_f1"), f2;
         Var x, y;
 

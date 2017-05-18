@@ -147,6 +147,9 @@ struct halide_parallel_task_t {
     // more static metadata about a task, this should be a pointer to
     // static task info instead.
     bool may_block, serial;
+    int depth;
+    // The symbol name of the called function, to help debugging parallel runtimes.
+    const char *name;
 };
 
 extern int halide_do_parallel_tasks(void *user_context, int num_tasks, halide_parallel_task_t *tasks);

@@ -647,6 +647,8 @@ void CodeGen_LLVM::begin_func(LoweredFunc::LinkageType linkage, const std::strin
             i++;
         }
     }
+
+    task_depth = 0;
 }
 
 void CodeGen_LLVM::end_func(const std::vector<LoweredArgument>& args) {
@@ -3056,8 +3058,13 @@ void CodeGen_LLVM::visit(const For *op) {
         // Load everything from the closure into the new scope
         unpack_closure(closure, symbol_table, closure_t, closure_handle, builder);
 
+        // We're descending into a parallel task
+        task_depth++;
+
         // Generate the new function body
         codegen(op->body);
+
+        task_depth--;
 
         // Return success
         return_with_error_code(ConstantInt::get(i32_t, 0));
@@ -3131,9 +3138,10 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         }
 
         // Make a new function that does the body
+        string name = t.name; // unique_name(t.name);
         llvm::Function *containing_function = function;
         function = llvm::Function::Create(task_t, llvm::Function::InternalLinkage,
-                                          function->getName() + "_task" + unique_name('_'), module.get());
+                                          name, module.get());
 
         llvm::Value *task_ptr = builder->CreatePointerCast(function, task_t->getPointerTo());
 
@@ -3179,8 +3187,13 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         // Load everything from the closure into the new scope
         unpack_closure(closure, symbol_table, closure_t, closure_handle, builder);
 
+        // We're descending into a parallel task
+        task_depth++;
+
         // Generate the new function body
         codegen(t.body);
+
+        task_depth--;
 
         // Return success
         return_with_error_code(ConstantInt::get(i32_t, 0));
@@ -3209,6 +3222,8 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         MayBlock may_block;
         t.body.accept(&may_block);
 
+        debug(0) << name << " may block " << may_block.result << "\n";
+
         // Populate the task struct
         Value *slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 0);
         builder->CreateStore(task_ptr, slot_ptr);
@@ -3224,6 +3239,10 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         builder->CreateStore(ConstantInt::get(i8_t, may_block.result), slot_ptr);
         slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 6);
         builder->CreateStore(ConstantInt::get(i8_t, 0), slot_ptr); // serial
+        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 7);
+        builder->CreateStore(ConstantInt::get(i32_t, task_depth), slot_ptr);
+        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 8);
+        builder->CreateStore(create_string_constant(name), slot_ptr);
     }
 
     llvm::Function *do_parallel_tasks = module->getFunction("halide_do_parallel_tasks");
@@ -3247,23 +3266,29 @@ void CodeGen_LLVM::visit(const Acquire *op) {
     vector<ParallelTask> tasks(1);
     tasks[0].body = op->body;
     tasks[0].semaphore = op->semaphore;
+    const Variable *v = op->semaphore.as<Variable>();
+    internal_assert(v);
+    tasks[0].name = function->getName().str() + "." + v->name;
     do_parallel_tasks(tasks);
 }
 
-void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result) {
+void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result, string prefix) {
     if (const Fork *f = s.as<Fork>()) {
-        get_parallel_tasks(f->first, result);
-        get_parallel_tasks(f->rest, result);
+        prefix += ".fork";
+        get_parallel_tasks(f->first, result, prefix);
+        get_parallel_tasks(f->rest, result, prefix);
     } else if (const Acquire *a = s.as<Acquire>()) {
-        result.push_back(ParallelTask {a->body, a->semaphore});
+        const Variable *v = a->semaphore.as<Variable>();
+        internal_assert(v);
+        result.push_back(ParallelTask {a->body, a->semaphore, prefix + "." + v->name});
     } else {
-        result.push_back(ParallelTask {s, Expr()});
+        result.push_back(ParallelTask {s, Expr(), prefix + "." + std::to_string(result.size())});
     }
 }
 
 void CodeGen_LLVM::visit(const Fork *op) {
     vector<ParallelTask> tasks;
-    get_parallel_tasks(op, tasks);
+    get_parallel_tasks(op, tasks, function->getName().str());
     do_parallel_tasks(tasks);
 }
 
