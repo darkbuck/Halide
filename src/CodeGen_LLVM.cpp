@@ -3222,6 +3222,21 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         MayBlock may_block;
         t.body.accept(&may_block);
 
+        class MinThreads : public IRVisitor {
+            using IRVisitor::visit;
+            void visit(const Fork *op) {
+                IRVisitor::visit(op);
+                // Conservatively assume there's a producer-consumer
+                // dependence in both directions across this edge
+                // (there may not be!).
+                result++;
+            }
+        public:
+            int result = 1;
+        };
+        MinThreads min_threads;
+        t.body.accept(&min_threads);
+
         debug(0) << name << " may block " << may_block.result << "\n";
 
         // Populate the task struct
@@ -3242,6 +3257,8 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 7);
         builder->CreateStore(ConstantInt::get(i32_t, task_depth), slot_ptr);
         slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 8);
+        builder->CreateStore(ConstantInt::get(i32_t, min_threads.result), slot_ptr);
+        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 9);
         builder->CreateStore(create_string_constant(name), slot_ptr);
     }
 

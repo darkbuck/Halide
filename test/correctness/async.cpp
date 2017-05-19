@@ -203,14 +203,14 @@ int main(int argc, char **argv) {
         Func consumer;
         Var x, y;
 
-        producer_1(x, y) = x;
-        producer_2(x, y) = y;
+        producer_1(x, y) = expensive(x);
+        producer_2(x, y) = expensive(y);
         // Use different stencils to get different fold factors.
         consumer(x, y) = expensive((producer_1(x-1, y) + producer_1(x+1, y) +
                                     producer_2(x-2, y) + producer_2(x+2, y)));
 
-        producer_1.compute_at(consumer, x).store_at(consumer, y);
-        producer_2.compute_at(consumer, x).store_at(consumer, y);
+        producer_1.compute_at(consumer, x).store_at(consumer, y).fold_storage(x, 8);
+        producer_2.compute_at(consumer, x).store_at(consumer, y).fold_storage(x, 8);
         consumer.parallel(y);
 
         Buffer<int> out = consumer.realize(16, 16);
@@ -223,6 +223,7 @@ int main(int argc, char **argv) {
                 }
             });
     }
+    return 0;
 
     // Nested asynchronous tasks.
     if (0) {
