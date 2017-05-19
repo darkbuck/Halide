@@ -4,7 +4,7 @@ using namespace Halide;
 
 extern "C" int expensive(int x) {
     float f = 3.0f;
-    for (int i = 0; i < (1 << 20); i++) {
+    for (int i = 0; i < (1 << 10); i++) {
         f = sqrtf(sinf(cosf(f)));
     }
     if (f < 0) return 3;
@@ -15,7 +15,7 @@ HalideExtern_1(int, expensive, int);
 int main(int argc, char **argv) {
 
     // Basic compute-root async producer
-    if (0) {
+    if (1) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
     }
 
     // Sliding and folding over a single variable
-    if (0) {
+    if (1) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
     }
 
     // Sliding and folding over y
-    if (0) {
+    if (1) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
     }
 
     // Sliding over x and y, folding over y
-    if (0) {
+    if (1) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
     // folded to prevent clobbering along each axis. The outer
     // semaphore never actually does anything, because the inner
     // semaphore stops it from getting that far ahead.
-    if (0) {
+    if (1) {
         Func producer("async_producer"), consumer;
         Var x, y;
 
@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
     // Multiple async producers at root. This doesn't currently get
     // the producers running at the same time, because one is nested
     // inside the other's consume node. Need to tighten this up.
-    if (0) {
+    if (1) {
         Func producer_1("async_producer_1");
         Func producer_2("async_producer_2");
         Func consumer;
@@ -169,7 +169,7 @@ int main(int argc, char **argv) {
     }
 
     // Multiple async producers inside an outer parallel for loop
-    if (0) {
+    if (1) {
         Func producer_1("async_producer_1");
         Func producer_2("async_producer_2");
         Func consumer;
@@ -209,8 +209,8 @@ int main(int argc, char **argv) {
         consumer(x, y) = expensive((producer_1(x-1, y) + producer_1(x+1, y) +
                                     producer_2(x-2, y) + producer_2(x+2, y)));
 
-        producer_1.compute_at(consumer, x).store_at(consumer, y).fold_storage(x, 8);
-        producer_2.compute_at(consumer, x).store_at(consumer, y).fold_storage(x, 8);
+        producer_1.compute_at(consumer, x).store_at(consumer, y);
+        producer_2.compute_at(consumer, x).store_at(consumer, y);
         consumer.parallel(y);
 
         Buffer<int> out = consumer.realize(16, 16);
@@ -223,10 +223,9 @@ int main(int argc, char **argv) {
                 }
             });
     }
-    return 0;
 
     // Nested asynchronous tasks.
-    if (0) {
+    if (1) {
         Func f0("async_f0"), f1("async_f1"), f2;
         Var x, y;
 

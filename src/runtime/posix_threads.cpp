@@ -24,6 +24,7 @@ extern int pthread_join(pthread_t thread, void **retval);
 extern int pthread_cond_init(halide_cond *cond, const void *attr);
 extern int pthread_cond_wait(halide_cond *cond, halide_mutex *mutex);
 extern int pthread_cond_broadcast(halide_cond *cond);
+extern int pthread_cond_signal(halide_cond *cond);
 extern int pthread_cond_destroy(halide_cond *cond);
 extern int pthread_mutex_init(halide_mutex *mutex, const void *attr);
 extern int pthread_mutex_lock(halide_mutex *mutex);
@@ -88,9 +89,15 @@ WEAK void halide_cond_broadcast(struct halide_cond *cond) {
     pthread_cond_broadcast(cond);
 }
 
+WEAK void halide_cond_signal(struct halide_cond *cond) {
+    pthread_cond_signal(cond);
+}
+
 WEAK void halide_cond_wait(struct halide_cond *cond, struct halide_mutex *mutex) {
     pthread_cond_wait(cond, mutex);
 }
+
+
 
 
 } // extern "C"

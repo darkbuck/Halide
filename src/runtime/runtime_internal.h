@@ -156,10 +156,11 @@ struct halide_cond {
 WEAK void halide_cond_init(struct halide_cond *cond);
 WEAK void halide_cond_destroy(struct halide_cond *cond);
 WEAK void halide_cond_broadcast(struct halide_cond *cond);
+WEAK void halide_cond_signal(struct halide_cond *cond);
 WEAK void halide_cond_wait(struct halide_cond *cond, struct halide_mutex *mutex);
 
 WEAK int halide_semaphore_release(struct halide_semaphore_t *);
-WEAK bool halide_semaphore_try_acquire(struct halide_semaphore_t *);
+WEAK int halide_semaphore_try_acquire(struct halide_semaphore_t *);
 
 WEAK int halide_trace_helper(void *user_context,
                              const char *func,
