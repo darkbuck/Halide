@@ -4,27 +4,6 @@ extern "C" int pthread_self();
 
 namespace Halide { namespace Runtime { namespace Internal {
 
-struct work;
-
-struct work_queue_cond {
-    halide_cond cond_var;
-    int sleepers;
-    void init() {
-        sleepers = 0;
-        halide_cond_init(&cond_var);
-    }
-    void destroy() {
-        halide_cond_destroy(&cond_var);
-    }
-    void broadcast() {
-        halide_cond_broadcast(&cond_var);
-    }
-    void signal() {
-        halide_cond_signal(&cond_var);
-    }
-    void sleep(work *);
-};
-
 struct work {
     halide_parallel_task_t task;
     work *next_job;
@@ -32,7 +11,7 @@ struct work {
     int active_workers;
     int exit_status;
     // which condition variable is the owner sleeping on. NULL if it isn't sleeping.
-    work_queue_cond *owner_sleeping_on;
+    bool owner_is_sleeping;
     int make_runnable() {
         if (task.semaphore == NULL) {
             return 0x7fffffff;
@@ -67,41 +46,15 @@ struct work_queue_t {
     // The desired number threads doing work (HL_NUM_THREADS).
     int desired_threads_working;
 
-    // Below is a list of all the reasons a thread might sleep inside
-    // the task system. These get broadcast or signalled whenever
-    // something happens that might change the corresponding
-    // condition. There are points where we need to count the number
-    // of threads in various states, so we we also track the number of
-    // threads waiting on each condition. Note that a thread where the
-    // condition variable was signalled but hasn't yet been scheduled
-    // still counts as sleeping for the purposes of the sleepers
-    // field.
+    // The condition variables that workers and owners sleep on. We
+    // may want to wake them up independently. Any code that may
+    // invalidate any of the reasons a worker or owner may have slept
+    // must signal or broadcast the appropriate condition variable.
+    halide_cond worker_cond_var, owner_cond_var;
 
-    // A thread is ready to work, but there's no work to do.
-    struct work_queue_cond worker_no_runnable_jobs;
-
-    // A thread is ready to work, but threads_working >= desired_threads_working.
-    //struct work_queue_cond too_many_threads_awake;
-
-    // There aren't enough other uncommited threads to assist for it
-    // to be safe to start with a guarantee of completion.
-    struct work_queue_cond worker_not_enough_threads_for_next_job;
-
-    // The next runnable job can't safely be stolen by this thread,
-    // due to deadlock-avoidance checks.
-    struct work_queue_cond worker_may_not_steal_next_job;
-
-    // Same as above, plus I own a piece of work, so I may not be able
-    // to assist with any old job.
-    struct work_queue_cond owner_not_enough_threads_for_next_job;
-
-    // The next runnable job can't safely be stolen by this thread,
-    // due to deadlock-avoidance checks.
-    struct work_queue_cond owner_may_not_steal_next_job;
-
-    // A thread's own job is has been stolen or is not runnable, and
-    // there are no other runnable jobs.
-    struct work_queue_cond owner_no_runnable_jobs;
+    // The number of sleeping workers and owners. An over-estimate - a
+    // waking-up thread may not have decremented this yet.
+    int workers_sleeping, owners_sleeping;
 
     // Keep track of threads so they can be joined at shutdown
     halide_thread *threads[MAX_THREADS];
@@ -113,20 +66,36 @@ struct work_queue_t {
     bool running() {
         return !shutdown;
     }
+
+    void wake_owners() {
+        halide_cond_broadcast(&owner_cond_var);
+    }
+
+    void wake_workers() {
+        halide_cond_broadcast(&worker_cond_var);
+    }
+
+    void wake_all() {
+        wake_workers();
+        wake_owners();
+    }
+
+    void sleep(work *owned_job) {
+        if (owned_job) {
+            owners_sleeping++;
+            owned_job->owner_is_sleeping = true;
+            halide_cond_wait(&owner_cond_var, &mutex);
+            owned_job->owner_is_sleeping = false;
+            owners_sleeping--;
+        } else {
+            workers_sleeping++;
+            halide_cond_wait(&worker_cond_var, &mutex);
+            workers_sleeping--;
+        }
+    }
+
 };
 WEAK work_queue_t work_queue;
-
-void work_queue_cond::sleep(work *owned_job) {
-    sleepers++;
-    if (owned_job) {
-        owned_job->owner_sleeping_on = this;
-        halide_cond_wait(&cond_var, &work_queue.mutex);
-        owned_job->owner_sleeping_on = NULL;
-    } else {
-        halide_cond_wait(&cond_var, &work_queue.mutex);
-    }
-    sleepers--;
-}
 
 WEAK int clamp_num_threads(int threads) {
     if (threads > MAX_THREADS) {
@@ -162,12 +131,8 @@ WEAK void worker_thread_already_locked(work *owned_job) {
                     << "threads created: " << work_queue.threads_created << "\n"
                     << "threads working: " << work_queue.threads_working << "\n"
                     << "desired threads working: " << work_queue.desired_threads_working << "\n"
-                    << "worker no runnable jobs: " << work_queue.worker_no_runnable_jobs.sleepers << "\n"
-                    << "owner no runnable jobs: " << work_queue.owner_no_runnable_jobs.sleepers << "\n"
-                    << "worker not enough threads: " << work_queue.worker_not_enough_threads_for_next_job.sleepers << "\n"
-                    << "owner not enough threads: " << work_queue.owner_not_enough_threads_for_next_job.sleepers << "\n"
-                    << "worker may not steal: " << work_queue.worker_may_not_steal_next_job.sleepers << "\n"
-                    << "owner may not steal: " << work_queue.owner_may_not_steal_next_job.sleepers << "\n";
+                    << "workers sleeping: " << work_queue.workers_sleeping << "\n"
+                    << "owners sleeping: " << work_queue.owners_sleeping << "\n";
         print(NULL) << "Task queue:\n";
         for (work *job = work_queue.jobs; job; job = job->next_job) {
             print(NULL) << job->task.depth << ": " <<
@@ -202,57 +167,41 @@ WEAK void worker_thread_already_locked(work *owned_job) {
                             "none") << " (" << job->task.min_threads << ")\n";
         }
 
-        // Count the number of threads that could assist with this job
-        // if no other work was scheduled in the meantime.
-        int threads_that_could_assist =
-            (work_queue.worker_no_runnable_jobs.sleepers +
-             work_queue.worker_not_enough_threads_for_next_job.sleepers +
-             work_queue.worker_may_not_steal_next_job.sleepers);
-
-        if (job) {
-            if (!job->task.may_block) {
-                threads_that_could_assist += work_queue.owner_may_not_steal_next_job.sleepers;
-                threads_that_could_assist += work_queue.owner_no_runnable_jobs.sleepers;
-                threads_that_could_assist += work_queue.owner_not_enough_threads_for_next_job.sleepers;
-            } else if (job->owner_sleeping_on) {
-                threads_that_could_assist++;
-            }
-        }
-
         // Determine if I can run it, if not sleep on the appropriate condition variable.
         if (job == NULL) {
             print(NULL) << "No runnable jobs\n";
             // There is no runnable job. Go to sleep.
-            if (owned_job) {
-                work_queue.owner_no_runnable_jobs.sleep(owned_job);
-            } else {
-                work_queue.worker_no_runnable_jobs.sleep(NULL);
-            }
+            work_queue.sleep(owned_job);
             continue;
-        } else if (job != owned_job && job->owner_sleeping_on) {
+        }
+
+        if (job->owner_is_sleeping) {
             print(NULL) << "Not running it because the owner is sleeping\n";
             job->release();
-            job->owner_sleeping_on->broadcast();
-            if (owned_job) {
-                work_queue.owner_may_not_steal_next_job.sleep(owned_job);
-            } else {
-                work_queue.worker_may_not_steal_next_job.sleep(NULL);
-            }
+            work_queue.wake_owners(); // Necessary?
+            work_queue.sleep(owned_job);
             continue;
-        } else if (owned_job && job != owned_job && job->task.may_block) {
+        }
+
+        if (owned_job && job != owned_job && job->task.may_block) {
             print(NULL) << "Can't steal blocking task\n";
             job->release();
-            work_queue.owner_may_not_steal_next_job.sleep(owned_job);
+            work_queue.sleep(owned_job);
             continue;
-        } else if (job->task.min_threads > threads_that_could_assist + 1) {
+        }
+
+        // Count the number of threads that could assist with this job
+        // if no other work was scheduled in the meantime.
+        int threads_that_could_assist = 1 + work_queue.workers_sleeping;
+        if (!job->task.may_block) {
+            threads_that_could_assist += work_queue.owners_sleeping;
+        }
+
+        if (job->task.min_threads > threads_that_could_assist) {
             print(NULL) << "Not running it because there aren't enough threads to safely start ("
-                << (threads_that_could_assist + 1) << "/" << job->task.min_threads << ")\n";
+                << (threads_that_could_assist) << "/" << job->task.min_threads << ")\n";
             job->release();
-            if (owned_job) {
-                work_queue.owner_not_enough_threads_for_next_job.sleep(owned_job);
-            } else {
-                work_queue.worker_not_enough_threads_for_next_job.sleep(NULL);
-            }
+            work_queue.sleep(owned_job);
             continue;
         }
         print(NULL) << "Running it!\n";
@@ -268,12 +217,9 @@ WEAK void worker_thread_already_locked(work *owned_job) {
             *prev_ptr = job->next_job;
         }
 
-        // Check if we may have changed what counts as the next runnable job
-        if (old_semaphore_value == 1 || job->task.extent == 0) {
-            work_queue.owner_not_enough_threads_for_next_job.broadcast();
-            work_queue.worker_not_enough_threads_for_next_job.broadcast();
-            work_queue.owner_may_not_steal_next_job.broadcast();
-            work_queue.worker_may_not_steal_next_job.broadcast();
+        // By removing this job, we may have unblocked more work.
+        if (job->next_job && (old_semaphore_value == 1 || job->task.extent == 0)) {
+            work_queue.wake_all();
         }
 
         // Increment the active_worker count so that other threads
@@ -301,8 +247,8 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         job->active_workers--;
 
         // Wake up the owner if the job is done.
-        if (!job->running() && job->owner_sleeping_on) {
-            job->owner_sleeping_on->broadcast();
+        if (!job->running() && job->owner_is_sleeping) {
+            work_queue.wake_owners();
             print(NULL) << "Finished someone else's task " << (job ?
                                            (job->task.name ? job->task.name : "unnamed") :
                                            "none") << "\n";
@@ -319,12 +265,8 @@ WEAK void worker_thread(void *arg) {
 WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     if (!work_queue.initialized) {
         work_queue.shutdown = false;
-        work_queue.worker_no_runnable_jobs.init();
-        work_queue.worker_not_enough_threads_for_next_job.init();
-        work_queue.worker_may_not_steal_next_job.init();
-        work_queue.owner_not_enough_threads_for_next_job.init();
-        work_queue.owner_may_not_steal_next_job.init();
-        work_queue.owner_no_runnable_jobs.init();
+        halide_cond_init(&work_queue.worker_cond_var);
+        halide_cond_init(&work_queue.owner_cond_var);
         work_queue.jobs = NULL;
 
         // Compute the desired number of threads to use. Other code
@@ -336,6 +278,8 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
         work_queue.desired_threads_working = clamp_num_threads(work_queue.desired_threads_working);
         work_queue.threads_created = 0;
         work_queue.threads_working = 1;
+        work_queue.workers_sleeping = 0;
+        work_queue.owners_sleeping = 0;
         work_queue.initialized = true;
     }
 
@@ -383,13 +327,9 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
 
     // Wake up all threads that care about there potentially being a
     // new runnable job (TODO: Don't wake up too many threads)
-    work_queue.worker_no_runnable_jobs.broadcast();
-    work_queue.worker_not_enough_threads_for_next_job.broadcast();
-    work_queue.worker_may_not_steal_next_job.broadcast();
+    work_queue.wake_workers();
     if (stealable_jobs) {
-        work_queue.owner_not_enough_threads_for_next_job.broadcast();
-        work_queue.owner_may_not_steal_next_job.broadcast();
-        work_queue.owner_no_runnable_jobs.broadcast();
+        work_queue.wake_owners();
     }
 }
 
@@ -420,7 +360,7 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     job.user_context = user_context;
     job.exit_status = 0;
     job.active_workers = 0;
-    job.owner_sleeping_on = NULL;
+    job.owner_is_sleeping = false;
     halide_mutex_lock(&work_queue.mutex);
     enqueue_work_already_locked(1, &job);
     worker_thread_already_locked(&job);
@@ -447,7 +387,7 @@ WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
         jobs[i].user_context = user_context;
         jobs[i].exit_status = 0;
         jobs[i].active_workers = 0;
-        jobs[i].owner_sleeping_on = NULL;
+        jobs[i].owner_is_sleeping = false;
     }
 
     halide_mutex_lock(&work_queue.mutex);
@@ -492,12 +432,7 @@ WEAK void halide_shutdown_thread_pool() {
     halide_mutex_lock(&work_queue.mutex);
     work_queue.shutdown = true;
 
-    work_queue.worker_no_runnable_jobs.broadcast();
-    work_queue.worker_not_enough_threads_for_next_job.broadcast();
-    work_queue.worker_may_not_steal_next_job.broadcast();
-    work_queue.owner_not_enough_threads_for_next_job.broadcast();
-    work_queue.owner_may_not_steal_next_job.broadcast();
-    work_queue.owner_no_runnable_jobs.broadcast();
+    work_queue.wake_all();
     halide_mutex_unlock(&work_queue.mutex);
 
     // Wait until they leave
@@ -507,12 +442,8 @@ WEAK void halide_shutdown_thread_pool() {
 
     // Tidy up
     halide_mutex_destroy(&work_queue.mutex);
-    work_queue.worker_no_runnable_jobs.destroy();
-    work_queue.worker_not_enough_threads_for_next_job.destroy();
-    work_queue.worker_may_not_steal_next_job.destroy();
-    work_queue.owner_not_enough_threads_for_next_job.destroy();
-    work_queue.owner_may_not_steal_next_job.destroy();
-    work_queue.owner_no_runnable_jobs.destroy();
+    halide_cond_destroy(&work_queue.worker_cond_var);
+    halide_cond_destroy(&work_queue.owner_cond_var);
     work_queue.initialized = false;
 }
 
@@ -531,12 +462,7 @@ WEAK int halide_semaphore_release(halide_semaphore_t *s) {
     int new_val = __sync_add_and_fetch(&(sem->value), 1);
     if (new_val == 1) {
         // We may have just made a job runnable
-        work_queue.worker_no_runnable_jobs.broadcast();
-        work_queue.worker_not_enough_threads_for_next_job.broadcast();
-        work_queue.worker_may_not_steal_next_job.broadcast();
-        work_queue.owner_not_enough_threads_for_next_job.broadcast();
-        work_queue.owner_may_not_steal_next_job.broadcast();
-        work_queue.owner_no_runnable_jobs.broadcast();
+        work_queue.wake_all();
     }
     return new_val;
 }
