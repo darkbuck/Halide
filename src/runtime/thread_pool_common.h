@@ -71,6 +71,10 @@ struct work_queue_t {
         halide_cond_broadcast(&owner_cond_var);
     }
 
+    void wake_one_worker() {
+        halide_cond_signal(&worker_cond_var);
+    }
+
     void wake_workers() {
         halide_cond_broadcast(&worker_cond_var);
     }
@@ -125,7 +129,7 @@ WEAK void worker_thread(void *);
 
 WEAK void worker_thread_already_locked(work *owned_job) {
     while (owned_job ? owned_job->running() : work_queue.running()) {
-
+/*
         print(NULL) << "\n"
                     << "TID: " << pthread_self() << "\n"
                     << "threads created: " << work_queue.threads_created << "\n"
@@ -145,6 +149,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
                     << (owned_job ?
                         (owned_job->task.name ? owned_job->task.name : "unnamed") :
                         "none") << "\n";
+*/
 
         // Figure out which job should be scheduled next: The deepest
         // runnable job. The stack is already in order of task depth.
@@ -152,31 +157,31 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         work **prev_ptr = &work_queue.jobs;
         int old_semaphore_value = 0;
         while (job && !(old_semaphore_value = job->make_runnable())) {
-            print(NULL) << "Unrunnable job "
-                        << (job ?
-                            (job->task.name ? job->task.name : "unnamed") :
-                            "none") << "\n";
+            //print(NULL) << "Unrunnable job "
+            //            << (job ?
+            //                (job->task.name ? job->task.name : "unnamed") :
+            //                "none") << "\n";
             prev_ptr = &(job->next_job);
             job = job->next_job;
         }
 
         if (job) {
-            print(NULL) << "Next runnable job: "
-                        << (job ?
-                            (job->task.name ? job->task.name : "unnamed") :
-                            "none") << " (" << job->task.min_threads << ")\n";
+            //print(NULL) << "Next runnable job: "
+            //            << (job ?
+            //                (job->task.name ? job->task.name : "unnamed") :
+            //                "none") << " (" << job->task.min_threads << ")\n";
         }
 
         // Determine if I can run it, if not sleep on the appropriate condition variable.
         if (job == NULL) {
-            print(NULL) << "No runnable jobs\n";
+            //print(NULL) << "No runnable jobs\n";
             // There is no runnable job. Go to sleep.
             work_queue.sleep(owned_job);
             continue;
         }
 
         if (job->owner_is_sleeping) {
-            print(NULL) << "Not running it because the owner is sleeping\n";
+            //print(NULL) << "Not running it because the owner is sleeping\n";
             job->release();
             work_queue.wake_owners(); // Necessary?
             work_queue.sleep(owned_job);
@@ -184,7 +189,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         }
 
         if (owned_job && job != owned_job && job->task.may_block) {
-            print(NULL) << "Can't steal blocking task\n";
+            //print(NULL) << "Can't steal blocking task\n";
             job->release();
             work_queue.sleep(owned_job);
             continue;
@@ -198,13 +203,13 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         }
 
         if (job->task.min_threads > threads_that_could_assist) {
-            print(NULL) << "Not running it because there aren't enough threads to safely start ("
-                << (threads_that_could_assist) << "/" << job->task.min_threads << ")\n";
+            //print(NULL) << "Not running it because there aren't enough threads to safely start ("
+            //    << (threads_that_could_assist) << "/" << job->task.min_threads << ")\n";
             job->release();
             work_queue.sleep(owned_job);
             continue;
         }
-        print(NULL) << "Running it!\n";
+        //print(NULL) << "Running it!\n";
 
         // Claim a task from it.
         work myjob = *job;
@@ -232,12 +237,13 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         int result = halide_do_task(myjob.user_context, myjob.task.fn, myjob.task.min,
                                     myjob.task.closure);
         halide_mutex_lock(&work_queue.mutex);
+        /*
         print(NULL) << "\nTID: " << pthread_self() << "\n"
                     << "Done with task: "
                     << (job ?
                         (job->task.name ? job->task.name : "unnamed") :
                         "none") << "\n";
-
+        */
         // If this task failed, set the exit status on the job.
         if (result) {
             job->exit_status = result;
@@ -249,9 +255,11 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         // Wake up the owner if the job is done.
         if (!job->running() && job->owner_is_sleeping) {
             work_queue.wake_owners();
+            /*
             print(NULL) << "Finished someone else's task " << (job ?
                                            (job->task.name ? job->task.name : "unnamed") :
                                            "none") << "\n";
+            */
         }
     }
 }
@@ -325,11 +333,17 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
         jobs[i].next_job = job;
     }
 
-    // Wake up all threads that care about there potentially being a
-    // new runnable job (TODO: Don't wake up too many threads)
-    work_queue.wake_workers();
-    if (stealable_jobs) {
-        work_queue.wake_owners();
+    if (size < work_queue.workers_sleeping) {
+        // Wake up enough workers
+        for (int i = 0; i < size; i++) {
+            work_queue.wake_one_worker();
+        }
+    } else {
+        // Wake up everyone
+        work_queue.wake_workers();
+        if (stealable_jobs) {
+            work_queue.wake_owners();
+        }
     }
 }
 
@@ -350,12 +364,12 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     job.task.fn = f;
     job.task.min = min;
     job.task.extent = size;
-    job.task.may_block = true; // May only call do_par_for if it there are no inner forks or acquires.
+    job.task.may_block = true; // May only call do_par_for if it there are no inner forks or acquires, so TODO: set this to false
     job.task.serial = false;
     job.task.semaphore = NULL;
     job.task.closure = closure;
-    job.task.depth = 0; // TODO: We actually need this information!
-    job.task.min_threads = 3; // TODO: We need this information too!
+    job.task.depth = 0; // TODO: We actually need this information! If there are no inner forks or acquires, maybe set it to int max? It'll have the same priority as any parallel loops it spawns.
+    job.task.min_threads = 3; // TODO: We need this information too! 3 is enough to make correctness_async run. 1 would be the correct value here.
     job.task.name = NULL;
     job.user_context = user_context;
     job.exit_status = 0;
@@ -391,7 +405,7 @@ WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
     }
 
     halide_mutex_lock(&work_queue.mutex);
-    //print(NULL) << (void *)(&jobs) << " Enqueuing " << num_tasks << " jobs\n";
+    ////print(NULL) << (void *)(&jobs) << " Enqueuing " << num_tasks << " jobs\n";
     enqueue_work_already_locked(num_tasks, jobs);
     int exit_status = 0;
     for (int i = 0; i < num_tasks; i++) {
