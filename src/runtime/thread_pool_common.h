@@ -183,7 +183,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         if (job->owner_is_sleeping) {
             //print(NULL) << "Not running it because the owner is sleeping\n";
             job->release();
-            work_queue.wake_owners(); // Necessary?
+            work_queue.wake_owners(); // By sleeping we may invalidate one of the reasons the owner slept - lack of threads.
             work_queue.sleep(owned_job);
             continue;
         }
