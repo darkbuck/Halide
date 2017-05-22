@@ -647,8 +647,6 @@ void CodeGen_LLVM::begin_func(LoweredFunc::LinkageType linkage, const std::strin
             i++;
         }
     }
-
-    task_depth = 0;
 }
 
 void CodeGen_LLVM::end_func(const std::vector<LoweredArgument>& args) {
@@ -2954,6 +2952,8 @@ void CodeGen_LLVM::visit(const For *op) {
     Value *extent = codegen(op->extent);
 
     if (op->for_type == ForType::Serial) {
+        // TODO: If the body is just an acquire node, treat as a parallel task
+
         Value *max = builder->CreateNSWAdd(min, extent);
 
         BasicBlock *preheader_bb = builder->GetInsertBlock();
@@ -2993,110 +2993,9 @@ void CodeGen_LLVM::visit(const For *op) {
         // Pop the loop variable from the scope
         sym_pop(op->name);
     } else if (op->for_type == ForType::Parallel) {
-
-        debug(3) << "Entering parallel for loop over " << op->name << "\n";
-
-        // Find every symbol that the body of this loop refers to
-        // and dump it into a closure
-        Closure closure(op->body, op->name);
-
-        // Allocate a closure
-        StructType *closure_t = build_closure_type(closure, buffer_t_type, context);
-        Value *ptr = create_alloca_at_entry(closure_t, 1);
-
-        // Fill in the closure
-        pack_closure(closure_t, ptr, closure, symbol_table, buffer_t_type, builder);
-
-        // Make a new function that does one iteration of the body of the loop
-        llvm::Type *voidPointerType = (llvm::Type *)(i8_t->getPointerTo());
-        llvm::Type *args_t[] = {voidPointerType, i32_t, voidPointerType};
-        FunctionType *func_t = FunctionType::get(i32_t, args_t, false);
-        llvm::Function *containing_function = function;
-        function = llvm::Function::Create(func_t, llvm::Function::InternalLinkage,
-                                          "par_for_" + function->getName() + "_" + op->name, module.get());
-        #if LLVM_VERSION < 50
-        function->setDoesNotAlias(3);
-        #else
-        function->addParamAttr(2, Attribute::NoAlias);
-        #endif
-        set_function_attributes_for_target(function, target);
-
-        // Make the initial basic block and jump the builder into the new function
-        IRBuilderBase::InsertPoint call_site = builder->saveIP();
-        BasicBlock *block = BasicBlock::Create(*context, "entry", function);
-        builder->SetInsertPoint(block);
-
-        // Get the user context value before swapping out the symbol table.
-        Value *user_context = get_user_context();
-
-        // Save the destructor block
-        BasicBlock *parent_destructor_block = destructor_block;
-        destructor_block = nullptr;
-
-        // Make a new scope to use
-        Scope<Value *> saved_symbol_table;
-        symbol_table.swap(saved_symbol_table);
-
-        // Get the function arguments
-
-        // The user context is first argument of the function; it's
-        // important that we override the name to be "__user_context",
-        // since the LLVM function has a random auto-generated name for
-        // this argument.
-        llvm::Function::arg_iterator iter = function->arg_begin();
-        sym_push("__user_context", iterator_to_pointer(iter));
-
-        // Next is the loop variable.
-        ++iter;
-        sym_push(op->name, iterator_to_pointer(iter));
-
-        // The closure pointer is the third and last argument.
-        ++iter;
-        iter->setName("closure");
-        Value *closure_handle = builder->CreatePointerCast(iterator_to_pointer(iter),
-                                                           closure_t->getPointerTo());
-        // Load everything from the closure into the new scope
-        unpack_closure(closure, symbol_table, closure_t, closure_handle, builder);
-
-        // We're descending into a parallel task
-        task_depth++;
-
-        // Generate the new function body
-        codegen(op->body);
-
-        task_depth--;
-
-        // Return success
-        return_with_error_code(ConstantInt::get(i32_t, 0));
-
-        // Move the builder back to the main function and call do_par_for
-        builder->restoreIP(call_site);
-        llvm::Function *do_par_for = module->getFunction("halide_do_par_for");
-        internal_assert(do_par_for) << "Could not find halide_do_par_for in initial module\n";
-        #if LLVM_VERSION < 50
-        do_par_for->setDoesNotAlias(5);
-        #else
-        do_par_for->addParamAttr(4, Attribute::NoAlias);
-        #endif
-        //do_par_for->setDoesNotCapture(5);
-        ptr = builder->CreatePointerCast(ptr, i8_t->getPointerTo());
-        Value *args[] = {user_context, function, min, extent, ptr};
-        debug(4) << "Creating call to do_par_for\n";
-        Value *result = builder->CreateCall(do_par_for, args);
-
-        debug(3) << "Leaving parallel for loop over " << op->name << "\n";
-
-        // Now restore the scope
-        symbol_table.swap(saved_symbol_table);
-        function = containing_function;
-
-        // Restore the destructor block
-        destructor_block = parent_destructor_block;
-
-        // Check for success
-        Value *did_succeed = builder->CreateICmpEQ(result, ConstantInt::get(i32_t, 0));
-        create_assertion(did_succeed, Expr(), result);
-
+        vector<ParallelTask> tasks;
+        get_parallel_tasks(op, tasks, function->getName().str());
+        do_parallel_tasks(tasks);
     } else {
         internal_error << "Unknown type of For node. Only Serial and Parallel For nodes should survive down to codegen.\n";
     }
@@ -3105,6 +3004,9 @@ void CodeGen_LLVM::visit(const For *op) {
 void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
     Closure closure;
     for (const auto &t : tasks) {
+        if (!t.loop_var.empty()) {
+            closure.ignore(t.loop_var);
+        }
         t.body.accept(&closure);
     }
 
@@ -3125,6 +3027,8 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
     llvm::Type *args_t[] = {i8_t->getPointerTo(), i32_t, i8_t->getPointerTo()};
     FunctionType *task_t = FunctionType::get(i32_t, args_t, false);
 
+    Value *result = nullptr;
+
     for (int i = 0; i < num_tasks; i++) {
         const ParallelTask &t = tasks[i];
 
@@ -3138,10 +3042,9 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         }
 
         // Make a new function that does the body
-        string name = t.name; // unique_name(t.name);
         llvm::Function *containing_function = function;
         function = llvm::Function::Create(task_t, llvm::Function::InternalLinkage,
-                                          name, module.get());
+                                          t.name, module.get());
 
         llvm::Value *task_ptr = builder->CreatePointerCast(function, task_t->getPointerTo());
 
@@ -3175,8 +3078,11 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         llvm::Function::arg_iterator iter = function->arg_begin();
         sym_push("__user_context", iterator_to_pointer(iter));
 
-        // Next is int task number argument. Unused here.
+        // Next is the loop variable.
         ++iter;
+        if (!t.loop_var.empty()) {
+            sym_push(t.loop_var, iterator_to_pointer(iter));
+        }
 
         // The closure pointer is the third and last argument.
         ++iter;
@@ -3187,13 +3093,8 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         // Load everything from the closure into the new scope
         unpack_closure(closure, symbol_table, closure_t, closure_handle, builder);
 
-        // We're descending into a parallel task
-        task_depth++;
-
         // Generate the new function body
         codegen(t.body);
-
-        task_depth--;
 
         // Return success
         return_with_error_code(ConstantInt::get(i32_t, 0));
@@ -3237,42 +3138,59 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         MinThreads min_threads;
         t.body.accept(&min_threads);
 
-        debug(0) << name << " may block " << may_block.result << "\n";
+        Value *min = codegen(t.min);
+        Value *extent = codegen(t.extent);
 
-        // Populate the task struct
-        Value *slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 0);
-        builder->CreateStore(task_ptr, slot_ptr);
-        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 1);
-        builder->CreateStore(ConstantInt::get(i32_t, 0), slot_ptr); // min
-        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 2);
-        builder->CreateStore(ConstantInt::get(i32_t, 1), slot_ptr); // extent
-        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 3);
-        builder->CreateStore(semaphore, slot_ptr);
-        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 4);
-        builder->CreateStore(closure_ptr, slot_ptr);
-        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 5);
-        builder->CreateStore(ConstantInt::get(i8_t, may_block.result), slot_ptr);
-        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 6);
-        builder->CreateStore(ConstantInt::get(i8_t, 0), slot_ptr); // serial
-        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 7);
-        builder->CreateStore(ConstantInt::get(i32_t, task_depth), slot_ptr);
-        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 8);
-        builder->CreateStore(ConstantInt::get(i32_t, min_threads.result), slot_ptr);
-        slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 9);
-        builder->CreateStore(create_string_constant(name), slot_ptr);
+        if (num_tasks == 1 && min_threads.result == 1 &&
+            !t.semaphore.defined() && !may_block.result) {
+            // We can go into the task system through
+            // halide_do_par_for, which assumes these conditions.
+            llvm::Function *do_par_for = module->getFunction("halide_do_par_for");
+            internal_assert(do_par_for) << "Could not find halide_do_par_for in initial module\n";
+            #if LLVM_VERSION < 50
+            do_par_for->setDoesNotAlias(5);
+            #else
+            do_par_for->addParamAttr(4, Attribute::NoAlias);
+            #endif
+            Value *args[] = {get_user_context(), task_ptr, min, extent, closure_ptr};
+            debug(4) << "Creating call to do_par_for\n";
+            result = builder->CreateCall(do_par_for, args);
+        } else {
+            // Populate the task struct
+            Value *slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 0);
+            builder->CreateStore(task_ptr, slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 1);
+            builder->CreateStore(min, slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 2);
+            builder->CreateStore(extent, slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 3);
+            builder->CreateStore(semaphore, slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 4);
+            builder->CreateStore(closure_ptr, slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 5);
+            builder->CreateStore(ConstantInt::get(i8_t, may_block.result), slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 6);
+            builder->CreateStore(ConstantInt::get(i8_t, 0), slot_ptr); // serial
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 7);
+            builder->CreateStore(ConstantInt::get(i32_t, min_threads.result), slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 8);
+            builder->CreateStore(create_string_constant(t.name), slot_ptr);
+        }
     }
 
-    llvm::Function *do_parallel_tasks = module->getFunction("halide_do_parallel_tasks");
-    internal_assert(do_parallel_tasks) << "Could not find halide_do_parallel_tasks in initial module\n";
-    #if LLVM_VERSION < 50
-    do_parallel_tasks->setDoesNotAlias(3);
-    #else
-    do_parallel_tasks->addParamAttr(2, Attribute::NoAlias);
-    #endif
-    Value *args[] = {get_user_context(),
-                     ConstantInt::get(i32_t, num_tasks),
-                     task_stack_ptr};
-    Value *result = builder->CreateCall(do_parallel_tasks, args);
+    if (!result) {
+        llvm::Function *do_parallel_tasks = module->getFunction("halide_do_parallel_tasks");
+        internal_assert(do_parallel_tasks) << "Could not find halide_do_parallel_tasks in initial module\n";
+        #if LLVM_VERSION < 50
+        do_parallel_tasks->setDoesNotAlias(3);
+        #else
+        do_parallel_tasks->addParamAttr(2, Attribute::NoAlias);
+        #endif
+        Value *args[] = {get_user_context(),
+                         ConstantInt::get(i32_t, num_tasks),
+                         task_stack_ptr};
+        result = builder->CreateCall(do_parallel_tasks, args);
+    }
 
     // Check for success
     Value *did_succeed = builder->CreateICmpEQ(result, ConstantInt::get(i32_t, 0));
@@ -3280,16 +3198,13 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
 }
 
 void CodeGen_LLVM::visit(const Acquire *op) {
-    vector<ParallelTask> tasks(1);
-    tasks[0].body = op->body;
-    tasks[0].semaphore = op->semaphore;
-    const Variable *v = op->semaphore.as<Variable>();
-    internal_assert(v);
-    tasks[0].name = function->getName().str() + "." + v->name;
+    vector<ParallelTask> tasks;
+    get_parallel_tasks(op, tasks, function->getName().str());
     do_parallel_tasks(tasks);
 }
 
 void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result, string prefix) {
+    const For *loop = s.as<For>();
     if (const Fork *f = s.as<Fork>()) {
         prefix += ".fork";
         get_parallel_tasks(f->first, result, prefix);
@@ -3297,10 +3212,16 @@ void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result, stri
     } else if (const Acquire *a = s.as<Acquire>()) {
         const Variable *v = a->semaphore.as<Variable>();
         internal_assert(v);
-        result.push_back(ParallelTask {a->body, a->semaphore, prefix + "." + v->name});
+        prefix += "." + v->name;
+        result.push_back(ParallelTask {a->body, a->semaphore, "", 0, 1, prefix});
+    } else if (loop && loop->for_type == ForType::Parallel) {
+        prefix += ".par_for." + loop->name;
+        result.push_back(ParallelTask {loop->body, Expr(), loop->name, loop->min, loop->extent, prefix});
     } else {
-        result.push_back(ParallelTask {s, Expr(), prefix + "." + std::to_string(result.size())});
+        prefix += "." + std::to_string(result.size());
+        result.push_back(ParallelTask {s, Expr(), "", 0, 1, prefix});
     }
+    // TODO: Serial for loops whose body is just an acquire
 }
 
 void CodeGen_LLVM::visit(const Fork *op) {

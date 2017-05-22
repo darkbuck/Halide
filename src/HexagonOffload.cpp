@@ -669,7 +669,8 @@ class InjectHexagonRpc : public IRMutator {
         // Build a closure for the device code.
         // TODO: Should this move the body of the loop to Hexagon,
         // or the loop itself? Currently, this moves the loop itself.
-        Closure c(body);
+        Closure c;
+        body.accept(&c);
 
         // Make an argument list, and generate a function in the
         // device_code module. The hexagon runtime code expects

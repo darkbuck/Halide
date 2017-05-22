@@ -276,12 +276,10 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     }
 
     // Some tasks require a minimum number of threads to make forward
-    // progress.
-    int min_threads = 1;
+    // progress. Also assume the tasks need to run concurrently.
+    int min_threads = 0;
     for (int i = 0; i < num_jobs; i++) {
-        if (jobs[i].task.min_threads > min_threads) {
-            min_threads = jobs[i].task.min_threads;
-        }
+        min_threads += jobs[i].task.min_threads;
     }
 
     while ((work_queue.threads_created < work_queue.desired_threads_working - 1) ||
@@ -334,8 +332,7 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     job.task.serial = false;
     job.task.semaphore = NULL;
     job.task.closure = closure;
-    job.task.depth = 0; // TODO: We actually need this information! If there are no inner forks or acquires, maybe set it to int max? It'll have the same priority as any parallel loops it spawns.
-    job.task.min_threads = 1; // TODO: We need this information too! 3 is enough to make correctness_async run. 1 would be the correct value here.
+    job.task.min_threads = 1;
     job.task.name = NULL;
     job.user_context = user_context;
     job.exit_status = 0;
@@ -369,7 +366,7 @@ WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
     }
 
     halide_mutex_lock(&work_queue.mutex);
-    ////print(NULL) << (void *)(&jobs) << " Enqueuing " << num_tasks << " jobs\n";
+    //print(NULL) << (void *)(&jobs) << " Enqueuing " << num_tasks << " jobs\n";
     enqueue_work_already_locked(num_tasks, jobs);
     int exit_status = 0;
     for (int i = 0; i < num_tasks; i++) {
