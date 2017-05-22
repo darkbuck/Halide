@@ -28,78 +28,7 @@ struct work {
     }
 };
 
-// The work queue and thread pool is weak, so one big work queue is shared by all halide functions
-#define MAX_THREADS 64
-struct work_queue_t {
-    // all fields are protected by this mutex.
-    halide_mutex mutex;
-
-    // Singly linked list for job stack
-    work *jobs;
-
-    // The number threads created
-    int threads_created;
-
-    // The number of threads doing work
-    int threads_working;
-
-    // The desired number threads doing work (HL_NUM_THREADS).
-    int desired_threads_working;
-
-    // The condition variables that workers and owners sleep on. We
-    // may want to wake them up independently. Any code that may
-    // invalidate any of the reasons a worker or owner may have slept
-    // must signal or broadcast the appropriate condition variable.
-    halide_cond worker_cond_var, owner_cond_var;
-
-    // The number of sleeping workers and owners. An over-estimate - a
-    // waking-up thread may not have decremented this yet.
-    int workers_sleeping, owners_sleeping;
-
-    // Keep track of threads so they can be joined at shutdown
-    halide_thread *threads[MAX_THREADS];
-
-    // Global flags indicating the threadpool should shut down, and
-    // whether the thread pool has been initialized.
-    bool shutdown, initialized;
-
-    bool running() {
-        return !shutdown;
-    }
-
-    void wake_owners() {
-        halide_cond_broadcast(&owner_cond_var);
-    }
-
-    void wake_one_worker() {
-        halide_cond_signal(&worker_cond_var);
-    }
-
-    void wake_workers() {
-        halide_cond_broadcast(&worker_cond_var);
-    }
-
-    void wake_all() {
-        wake_workers();
-        wake_owners();
-    }
-
-    void sleep(work *owned_job) {
-        if (owned_job) {
-            owners_sleeping++;
-            owned_job->owner_is_sleeping = true;
-            halide_cond_wait(&owner_cond_var, &mutex);
-            owned_job->owner_is_sleeping = false;
-            owners_sleeping--;
-        } else {
-            workers_sleeping++;
-            halide_cond_wait(&worker_cond_var, &mutex);
-            workers_sleeping--;
-        }
-    }
-
-};
-WEAK work_queue_t work_queue;
+#define MAX_THREADS 256
 
 WEAK int clamp_num_threads(int threads) {
     if (threads > MAX_THREADS) {
@@ -125,35 +54,158 @@ WEAK int default_desired_num_threads() {
     return desired_num_threads;
 }
 
+// The work queue and thread pool is weak, so one big work queue is shared by all halide functions
+struct work_queue_t {
+    // all fields are protected by this mutex.
+    halide_mutex mutex;
+
+    // Singly linked list for job stack
+    work *jobs;
+
+    // The number threads created
+    int threads_created;
+
+    // The desired number threads doing work (HL_NUM_THREADS).
+    int desired_threads_working;
+
+    // Workers sleep on one of two condition variables, to make it
+    // easier to wake up the right number if a small number of tasks
+    // are enqueued. There are A-team workers and B-team workers. The
+    // following variables track the current size and the desired size
+    // of the A team.
+    int a_team_size, target_a_team_size;
+
+    // The condition variables that workers and owners sleep on. We
+    // may want to wake them up independently. Any code that may
+    // invalidate any of the reasons a worker or owner may have slept
+    // must signal or broadcast the appropriate condition variable.
+    halide_cond worker_cond_var_a, worker_cond_var_b, owner_cond_var;
+
+    // The number of sleeping workers and owners. An over-estimate - a
+    // waking-up thread may not have decremented this yet.
+    int workers_sleeping, owners_sleeping;
+
+    // Keep track of threads so they can be joined at shutdown
+    halide_thread *threads[MAX_THREADS];
+
+    // Global flags indicating the threadpool should shut down, and
+    // whether the thread pool has been initialized.
+    bool shutdown, initialized;
+
+    // Initialize the thread pool state. The requirement that the
+    // thread pool is already locked means that the mutex must be
+    // statically initialized, or this must be called in some
+    // guaranteed-single-threaded context.
+    void init_already_locked() {
+        shutdown = false;
+        halide_cond_init(&worker_cond_var_a);
+        halide_cond_init(&worker_cond_var_b);
+        halide_cond_init(&owner_cond_var);
+        jobs = NULL;
+
+        // Compute the desired number of threads to use. Other code
+        // can also mess with this value, but only when the work queue
+        // is locked.
+        if (!desired_threads_working) {
+            desired_threads_working = default_desired_num_threads();
+        }
+        desired_threads_working = clamp_num_threads(desired_threads_working);
+        a_team_size = 0;
+        target_a_team_size = 0;
+        threads_created = 0;
+        workers_sleeping = 0;
+        owners_sleeping = 0;
+        initialized = true;
+    }
+
+    void deinit() {
+        // Wake everyone up and tell them the party's over and it's time
+        // to go home
+        halide_mutex_lock(&mutex);
+        shutdown = true;
+
+        wake_all();
+        halide_mutex_unlock(&mutex);
+
+        // Wait until they leave
+        for (int i = 0; i < threads_created; i++) {
+            halide_join_thread(threads[i]);
+        }
+
+        // Tidy up
+        halide_mutex_destroy(&mutex);
+        halide_cond_destroy(&worker_cond_var_a);
+        halide_cond_destroy(&worker_cond_var_b);
+        halide_cond_destroy(&owner_cond_var);
+        initialized = false;
+    }
+
+    bool running() {
+        return !shutdown;
+    }
+
+    void wake_owners() {
+        halide_cond_broadcast(&owner_cond_var);
+    }
+
+    void wake_some_threads(int how_many, bool include_owners) {
+        if (jobs->next_job || how_many > desired_threads_working) {
+            target_a_team_size = desired_threads_working;
+        } else {
+            target_a_team_size = how_many;
+        }
+        halide_cond_broadcast(&worker_cond_var_a);
+        if (target_a_team_size > a_team_size) {
+            halide_cond_broadcast(&worker_cond_var_b);
+            if (include_owners) {
+                halide_cond_broadcast(&owner_cond_var);
+            }
+        }
+    }
+
+    void wake_all() {
+        halide_cond_broadcast(&worker_cond_var_a);
+        halide_cond_broadcast(&worker_cond_var_b);
+        wake_owners();
+    }
+
+    void sleep(work *owned_job) {
+        if (owned_job) {
+            owners_sleeping++;
+            owned_job->owner_is_sleeping = true;
+            halide_cond_wait(&owner_cond_var, &mutex);
+            owned_job->owner_is_sleeping = false;
+            owners_sleeping--;
+        } else {
+            workers_sleeping++;
+            if (a_team_size > target_a_team_size) {
+                // Transition to B team
+                a_team_size--;
+                halide_cond_wait(&worker_cond_var_b, &mutex);
+                a_team_size++;
+            } else {
+                halide_cond_wait(&worker_cond_var_a, &mutex);
+            }
+            workers_sleeping--;
+        }
+    }
+
+};
+WEAK work_queue_t work_queue;
+
 WEAK void worker_thread(void *);
 
 WEAK void worker_thread_already_locked(work *owned_job) {
     while (owned_job ? owned_job->running() : work_queue.running()) {
 
-        print(NULL) << "\n"
-                    << "TID: " << pthread_self() << "\n"
-                    << "threads created: " << work_queue.threads_created << "\n"
-                    << "threads working: " << work_queue.threads_working << "\n"
-                    << "desired threads working: " << work_queue.desired_threads_working << "\n"
-                    << "workers sleeping: " << work_queue.workers_sleeping << "\n"
-                    << "owners sleeping: " << work_queue.owners_sleeping << "\n";
-        print(NULL) << "Task queue:\n";
-        for (work *job = work_queue.jobs; job; job = job->next_job) {
-            print(NULL) << job->task.depth << ": " <<
-                (job ?
-                 (job->task.name ? job->task.name : "unnamed") :
-                 "none") << "\n";
-        }
-
-        print(NULL) << "Owned job: "
-                    << (owned_job ?
-                        (owned_job->task.name ? owned_job->task.name : "unnamed") :
-                        "none") << "\n";
-
         // Find a job to run, prefering things near the top of the stack.
         work *job = work_queue.jobs;
         work **prev_ptr = &work_queue.jobs;
         while (job) {
+            // Only schedule tasks with enough free worker threads
+            // around to complete. They may get stolen later, but only
+            // by tasks which can themselves use them to complete
+            // work, so forward progress is made.
             int threads_that_could_assist = 1 + work_queue.workers_sleeping;
             if (!job->task.may_block) {
                 threads_that_could_assist += work_queue.owners_sleeping;
@@ -162,30 +214,18 @@ WEAK void worker_thread_already_locked(work *owned_job) {
             }
             bool enough_threads = job->task.min_threads <= threads_that_could_assist;
             bool may_try = (job == owned_job || !owned_job || !job->task.may_block);
-            if (may_try && enough_threads) {
-                if (job->make_runnable()) break;
+            if (may_try && enough_threads && job->make_runnable()) {
+                break;
             }
-
-            print(NULL) << "Unrunnable job "
-                        << (job ?
-                            (job->task.name ? job->task.name : "unnamed") :
-                            "none") << "\n";
             prev_ptr = &(job->next_job);
             job = job->next_job;
         }
 
-        // Determine if I can run it, if not sleep on the appropriate condition variable.
-        if (job == NULL) {
-            print(NULL) << "No runnable jobs\n";
+        if (!job) {
             // There is no runnable job. Go to sleep.
             work_queue.sleep(owned_job);
             continue;
         }
-
-        print(NULL) << "Running job: "
-                    << (job ?
-                        (job->task.name ? job->task.name : "unnamed") :
-                        "none") << " (" << job->task.min_threads << ")\n";
 
         // Claim a task from it.
         work myjob = *job;
@@ -232,29 +272,12 @@ WEAK void worker_thread(void *arg) {
 
 WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     if (!work_queue.initialized) {
-        work_queue.shutdown = false;
-        halide_cond_init(&work_queue.worker_cond_var);
-        halide_cond_init(&work_queue.owner_cond_var);
-        work_queue.jobs = NULL;
-
-        // Compute the desired number of threads to use. Other code
-        // can also mess with this value, but only when the work queue
-        // is locked.
-        if (!work_queue.desired_threads_working) {
-            work_queue.desired_threads_working = default_desired_num_threads();
-        }
-        work_queue.desired_threads_working = clamp_num_threads(work_queue.desired_threads_working);
-        work_queue.threads_created = 0;
-        work_queue.threads_working = 1;
-        work_queue.workers_sleeping = 0;
-        work_queue.owners_sleeping = 0;
-        work_queue.initialized = true;
+        work_queue.init_already_locked();
     }
 
     // Some tasks require a minimum number of threads to make forward
-    // progress. They won't influence the size of the A team, so
-    // they'll take turns running.
-    int min_threads = 0;
+    // progress.
+    int min_threads = 1;
     for (int i = 0; i < num_jobs; i++) {
         if (jobs[i].task.min_threads > min_threads) {
             min_threads = jobs[i].task.min_threads;
@@ -264,18 +287,19 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     while ((work_queue.threads_created < work_queue.desired_threads_working - 1) ||
            (work_queue.threads_created < min_threads - 1)) {
         // We might need to make some new threads, if work_queue.desired_threads_working has
-        // increased.
+        // increased, or if there aren't enough threads to complete this new task.
+        work_queue.a_team_size++;
         work_queue.threads[work_queue.threads_created++] =
             halide_spawn_thread(worker_thread, NULL);
     }
 
-    int size = 0;
+    int workers_to_wake = -1; // I'm going to do one of the tasks myself
     bool stealable_jobs = false;
     for (int i = 0; i < num_jobs; i++) {
         if (!jobs[i].task.may_block) {
             stealable_jobs = true;
         }
-        size += jobs[i].task.extent;
+        workers_to_wake += jobs[i].task.extent;
     }
 
     // Push the jobs onto the stack.
@@ -286,18 +310,7 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
         work_queue.jobs = jobs + i;
     }
 
-    if (size < work_queue.workers_sleeping) {
-        // Wake up enough workers
-        for (int i = 0; i < size; i++) {
-            work_queue.wake_one_worker();
-        }
-    } else {
-        // Wake up everyone
-        work_queue.wake_workers();
-        if (stealable_jobs) {
-            work_queue.wake_owners();
-        }
-    }
+    work_queue.wake_some_threads(workers_to_wake, stealable_jobs);
 }
 
 }}}  // namespace Halide::Runtime::Internal
@@ -317,12 +330,12 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     job.task.fn = f;
     job.task.min = min;
     job.task.extent = size;
-    job.task.may_block = true; // May only call do_par_for if it there are no inner forks or acquires, so TODO: set this to false
+    job.task.may_block = false; // May only call do_par_for if it there are no inner forks or acquires, so TODO: set this to false
     job.task.serial = false;
     job.task.semaphore = NULL;
     job.task.closure = closure;
     job.task.depth = 0; // TODO: We actually need this information! If there are no inner forks or acquires, maybe set it to int max? It'll have the same priority as any parallel loops it spawns.
-    job.task.min_threads = 3; // TODO: We need this information too! 3 is enough to make correctness_async run. 1 would be the correct value here.
+    job.task.min_threads = 1; // TODO: We need this information too! 3 is enough to make correctness_async run. 1 would be the correct value here.
     job.task.name = NULL;
     job.user_context = user_context;
     job.exit_status = 0;
@@ -390,26 +403,9 @@ WEAK int halide_set_num_threads(int n) {
 }
 
 WEAK void halide_shutdown_thread_pool() {
-    if (!work_queue.initialized) return;
-
-    // Wake everyone up and tell them the party's over and it's time
-    // to go home
-    halide_mutex_lock(&work_queue.mutex);
-    work_queue.shutdown = true;
-
-    work_queue.wake_all();
-    halide_mutex_unlock(&work_queue.mutex);
-
-    // Wait until they leave
-    for (int i = 0; i < work_queue.threads_created; i++) {
-        halide_join_thread(work_queue.threads[i]);
+    if (work_queue.initialized) {
+        work_queue.deinit();
     }
-
-    // Tidy up
-    halide_mutex_destroy(&work_queue.mutex);
-    halide_cond_destroy(&work_queue.worker_cond_var);
-    halide_cond_destroy(&work_queue.owner_cond_var);
-    work_queue.initialized = false;
 }
 
 struct halide_semaphore_impl_t {
