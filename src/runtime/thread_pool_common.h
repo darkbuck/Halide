@@ -129,7 +129,7 @@ WEAK void worker_thread(void *);
 
 WEAK void worker_thread_already_locked(work *owned_job) {
     while (owned_job ? owned_job->running() : work_queue.running()) {
-/*
+
         print(NULL) << "\n"
                     << "TID: " << pthread_self() << "\n"
                     << "threads created: " << work_queue.threads_created << "\n"
@@ -149,67 +149,43 @@ WEAK void worker_thread_already_locked(work *owned_job) {
                     << (owned_job ?
                         (owned_job->task.name ? owned_job->task.name : "unnamed") :
                         "none") << "\n";
-*/
 
-        // Figure out which job should be scheduled next: The deepest
-        // runnable job. The stack is already in order of task depth.
+        // Find a job to run, prefering things near the top of the stack.
         work *job = work_queue.jobs;
         work **prev_ptr = &work_queue.jobs;
-        int old_semaphore_value = 0;
-        while (job && !(old_semaphore_value = job->make_runnable())) {
-            //print(NULL) << "Unrunnable job "
-            //            << (job ?
-            //                (job->task.name ? job->task.name : "unnamed") :
-            //                "none") << "\n";
+        while (job) {
+            int threads_that_could_assist = 1 + work_queue.workers_sleeping;
+            if (!job->task.may_block) {
+                threads_that_could_assist += work_queue.owners_sleeping;
+            } else if (job->owner_is_sleeping) {
+                threads_that_could_assist++;
+            }
+            bool enough_threads = job->task.min_threads <= threads_that_could_assist;
+            bool may_try = (job == owned_job || !owned_job || !job->task.may_block);
+            if (may_try && enough_threads) {
+                if (job->make_runnable()) break;
+            }
+
+            print(NULL) << "Unrunnable job "
+                        << (job ?
+                            (job->task.name ? job->task.name : "unnamed") :
+                            "none") << "\n";
             prev_ptr = &(job->next_job);
             job = job->next_job;
         }
 
-        if (job) {
-            //print(NULL) << "Next runnable job: "
-            //            << (job ?
-            //                (job->task.name ? job->task.name : "unnamed") :
-            //                "none") << " (" << job->task.min_threads << ")\n";
-        }
-
         // Determine if I can run it, if not sleep on the appropriate condition variable.
         if (job == NULL) {
-            //print(NULL) << "No runnable jobs\n";
+            print(NULL) << "No runnable jobs\n";
             // There is no runnable job. Go to sleep.
             work_queue.sleep(owned_job);
             continue;
         }
 
-        if (job->owner_is_sleeping) {
-            //print(NULL) << "Not running it because the owner is sleeping\n";
-            job->release();
-            work_queue.wake_owners(); // By sleeping we may invalidate one of the reasons the owner slept - lack of threads.
-            work_queue.sleep(owned_job);
-            continue;
-        }
-
-        if (owned_job && job != owned_job && job->task.may_block) {
-            //print(NULL) << "Can't steal blocking task\n";
-            job->release();
-            work_queue.sleep(owned_job);
-            continue;
-        }
-
-        // Count the number of threads that could assist with this job
-        // if no other work was scheduled in the meantime.
-        int threads_that_could_assist = 1 + work_queue.workers_sleeping;
-        if (!job->task.may_block) {
-            threads_that_could_assist += work_queue.owners_sleeping;
-        }
-
-        if (job->task.min_threads > threads_that_could_assist) {
-            //print(NULL) << "Not running it because there aren't enough threads to safely start ("
-            //    << (threads_that_could_assist) << "/" << job->task.min_threads << ")\n";
-            job->release();
-            work_queue.sleep(owned_job);
-            continue;
-        }
-        //print(NULL) << "Running it!\n";
+        print(NULL) << "Running job: "
+                    << (job ?
+                        (job->task.name ? job->task.name : "unnamed") :
+                        "none") << " (" << job->task.min_threads << ")\n";
 
         // Claim a task from it.
         work myjob = *job;
@@ -222,11 +198,6 @@ WEAK void worker_thread_already_locked(work *owned_job) {
             *prev_ptr = job->next_job;
         }
 
-        // By removing this job, we may have unblocked more work.
-        if (job->next_job && (old_semaphore_value == 1 || job->task.extent == 0)) {
-            work_queue.wake_all();
-        }
-
         // Increment the active_worker count so that other threads
         // are aware that this job is still in progress even
         // though there are no outstanding tasks for it.
@@ -237,13 +208,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         int result = halide_do_task(myjob.user_context, myjob.task.fn, myjob.task.min,
                                     myjob.task.closure);
         halide_mutex_lock(&work_queue.mutex);
-        /*
-        print(NULL) << "\nTID: " << pthread_self() << "\n"
-                    << "Done with task: "
-                    << (job ?
-                        (job->task.name ? job->task.name : "unnamed") :
-                        "none") << "\n";
-        */
+
         // If this task failed, set the exit status on the job.
         if (result) {
             job->exit_status = result;
@@ -255,11 +220,6 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         // Wake up the owner if the job is done.
         if (!job->running() && job->owner_is_sleeping) {
             work_queue.wake_owners();
-            /*
-            print(NULL) << "Finished someone else's task " << (job ?
-                                           (job->task.name ? job->task.name : "unnamed") :
-                                           "none") << "\n";
-            */
         }
     }
 }
@@ -319,18 +279,11 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     }
 
     // Push the jobs onto the stack.
-
     for (int i = num_jobs - 1; i >= 0; i--) {
-        // Bubble it downwards to the appropriate level given its depth.
-        work **prev_ptr = &work_queue.jobs;
-        work *job = work_queue.jobs;
-        int my_depth = jobs[i].task.depth;
-        while (job && job->task.depth > my_depth) {
-            prev_ptr = &(job->next_job);
-            job = job->next_job;
-        }
-        *prev_ptr = jobs + i;
-        jobs[i].next_job = job;
+        // We could bubble it downwards based on some heuristics, but
+        // it's not strictly necessary to do so.
+        jobs[i].next_job = work_queue.jobs;
+        work_queue.jobs = jobs + i;
     }
 
     if (size < work_queue.workers_sleeping) {
@@ -385,14 +338,12 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
 WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
                                   halide_parallel_task_t *tasks) {
     // Avoid entering the task system if possible
-    /* Disabled while debugging the task system
     if (num_tasks == 1 &&
         tasks->extent == 1 &&
         (tasks->semaphore == NULL ||
          halide_semaphore_try_acquire(tasks->semaphore))) {
         return tasks->fn(user_context, tasks->min, tasks->closure);
     }
-    */
 
     work *jobs = (work *)__builtin_alloca(sizeof(work) * num_tasks);
 
