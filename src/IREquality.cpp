@@ -138,7 +138,7 @@ IRComparer::CmpResult IRComparer::compare_expr(const Expr &a, const Expr &b) {
     //   return result;
     // }
 
-    if (compare_scalar(a->type_info(), b->type_info()) != Equal) {
+    if (compare_scalar(a->node_type, b->node_type) != Equal) {
         return result;
     }
 
@@ -187,7 +187,7 @@ IRComparer::CmpResult IRComparer::compare_stmt(const Stmt &a, const Stmt &b) {
         return result;
     }
 
-    if (compare_scalar(a->type_info(), b->type_info()) != Equal) {
+    if (compare_scalar(a->node_type, b->node_type) != Equal) {
         return result;
     }
 

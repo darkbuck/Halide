@@ -1045,6 +1045,13 @@ void CodeGen_LLVM::optimize_module() {
 #endif
     b.LoopVectorize = true;
     b.SLPVectorize = true;
+
+#if LLVM_VERSION >= 50
+    if (TM) {
+        TM->adjustPassManager(b);
+    }
+#endif
+
     b.populateFunctionPassManager(function_pass_manager);
     b.populateModulePassManager(module_pass_manager);
 
