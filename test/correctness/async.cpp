@@ -250,7 +250,7 @@ int main(int argc, char **argv) {
 
     // Two async producer-consumer pairs over x in a producer-consumer
     // relationship over y. TODO: Currently generates junk IR w.r.t. semaphores.
-    if (0) {
+    if (1) {
         Func producer_1("async_producer_1");
         Func consumer_1("async_consumer_1");
         Func producer_2("async_producer_2");

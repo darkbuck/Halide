@@ -419,11 +419,8 @@ class StorageFolding : public IRMutator {
                 for (size_t i = 0; i < folder.dims_folded.size(); i++) {
                     auto sema = folder.dims_folded[i].semaphore;
                     if (sema.var.defined()) {
-                        Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), Call::alloca,
-                                                     {(int)sizeof(halide_semaphore_t)}, Call::Intrinsic);
-                        Expr sema_init = Call::make(type_of<halide_semaphore_t *>(), "halide_semaphore_init",
-                                                    {sema.var, sema.slop + 1}, Call::Extern);
-                        stmt = Block::make(Evaluate::make(sema_init), stmt);
+                        Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), "halide_make_semaphore",
+                                                     {sema.slop + 1}, Call::Extern);
                         stmt = LetStmt::make(sema.name, sema_space, stmt);
                     }
                 }

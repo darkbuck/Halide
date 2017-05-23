@@ -249,11 +249,8 @@ class ForkAsyncProducers : public IRMutator {
             body = Fork::make(producer, consumer);
 
             // Make a semaphore on the stack
-            Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), Call::alloca,
-                                         {(int)sizeof(halide_semaphore_t)}, Call::Intrinsic);
-            Expr sema_init = Call::make(type_of<halide_semaphore_t *>(), "halide_semaphore_init",
-                                        {sema_var, 0}, Call::Extern);
-            body = Block::make(Evaluate::make(sema_init), body);
+            Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), "halide_make_semaphore",
+                                         {0}, Call::Extern);
 
             // If there's a nested async producer, we may have
             // recursively cloned this semaphore inside the mutation
@@ -276,9 +273,58 @@ public:
     ForkAsyncProducers(const map<string, Function> &e) : env(e) {}
 };
 
+// Lowers semaphore initialization from a call to
+// "halide_make_semaphore" to an alloca followed by a call into the
+// runtime to initialize. TODO: what if something crashes before
+// releasing a semaphore. Do we need a destructor? The acquire task
+// needs to leave the task queue somehow without running. We need a
+// destructor that unblocks all waiters somewhere.
+class InitializeSemaphores : public IRMutator {
+    using IRMutator::visit;
+
+    void visit(const LetStmt *op) {
+        Stmt body = mutate(op->body);
+        if (op->value.type() == type_of<halide_semaphore_t *>()) {
+            vector<pair<string, Expr>> lets;
+            // Peel off any enclosing lets
+            Expr value = op->value;
+            while (const Let *l = value.as<Let>()) {
+                lets.emplace_back(l->name, l->value);
+                value = l->body;
+            }
+            const Call *call = value.as<Call>();
+            if (call && call->name == "halide_make_semaphore") {
+                internal_assert(call->args.size() == 1);
+
+                Expr sema_var = Variable::make(type_of<halide_semaphore_t *>(), op->name);
+                Expr sema_init = Call::make(Int(32), "halide_semaphore_init",
+                                            {sema_var, call->args[0]}, Call::Extern);
+                Expr sema_allocate = Call::make(type_of<halide_semaphore_t *>(), Call::alloca,
+                                                {(int)sizeof(halide_semaphore_t)}, Call::Intrinsic);
+                stmt = Block::make(Evaluate::make(sema_init), body);
+                stmt = LetStmt::make(op->name, sema_allocate, stmt);
+
+                // Re-wrap any other lets
+                while (lets.size()) {
+                    stmt = LetStmt::make(lets.back().first, lets.back().second, stmt);
+                }
+                return;
+            }
+        }
+        stmt = LetStmt::make(op->name, op->value, body);
+    }
+
+    void visit(const Call *op) {
+        internal_assert(op->name != "halide_make_semaphore")
+            << "Call to halide_make_semaphore in unexpected place\n";
+        expr = op;
+    }
+};
+
 Stmt fork_async_producers(Stmt s, const map<string, Function> &env) {
     // TODO: tighten up the scope of consume nodes first
     s = ForkAsyncProducers(env).mutate(s);
+    s = InitializeSemaphores().mutate(s);
     return s;
 }
 
