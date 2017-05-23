@@ -2951,8 +2951,10 @@ void CodeGen_LLVM::visit(const For *op) {
     Value *min = codegen(op->min);
     Value *extent = codegen(op->extent);
 
-    if (op->for_type == ForType::Serial) {
-        // TODO: If the body is just an acquire node, treat as a parallel task
+    if (op->for_type == ForType::Parallel ||
+        (op->for_type == ForType::Serial && op->body.as<Acquire>())) {
+        do_as_parallel_task(op);
+    } else if (op->for_type == ForType::Serial) {
 
         Value *max = builder->CreateNSWAdd(min, extent);
 
@@ -2992,10 +2994,6 @@ void CodeGen_LLVM::visit(const For *op) {
 
         // Pop the loop variable from the scope
         sym_pop(op->name);
-    } else if (op->for_type == ForType::Parallel) {
-        vector<ParallelTask> tasks;
-        get_parallel_tasks(op, tasks, function->getName().str());
-        do_parallel_tasks(tasks);
     } else {
         internal_error << "Unknown type of For node. Only Serial and Parallel For nodes should survive down to codegen.\n";
     }
@@ -3140,6 +3138,7 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
 
         Value *min = codegen(t.min);
         Value *extent = codegen(t.extent);
+        Value *serial = codegen(cast(UInt(8), t.serial));
 
         if (num_tasks == 1 && min_threads.result == 1 &&
             !t.semaphore.defined() && !may_block.result) {
@@ -3170,7 +3169,7 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 5);
             builder->CreateStore(ConstantInt::get(i8_t, may_block.result), slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 6);
-            builder->CreateStore(ConstantInt::get(i8_t, 0), slot_ptr); // serial
+            builder->CreateStore(serial, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 7);
             builder->CreateStore(ConstantInt::get(i32_t, min_threads.result), slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 8);
@@ -3197,12 +3196,6 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
     create_assertion(did_succeed, Expr(), result);
 }
 
-void CodeGen_LLVM::visit(const Acquire *op) {
-    vector<ParallelTask> tasks;
-    get_parallel_tasks(op, tasks, function->getName().str());
-    do_parallel_tasks(tasks);
-}
-
 void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result, string prefix) {
     const For *loop = s.as<For>();
     if (const Fork *f = s.as<Fork>()) {
@@ -3213,21 +3206,34 @@ void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result, stri
         const Variable *v = a->semaphore.as<Variable>();
         internal_assert(v);
         prefix += "." + v->name;
-        result.push_back(ParallelTask {a->body, a->semaphore, "", 0, 1, prefix});
+        result.push_back(ParallelTask {a->body, a->semaphore, "", 0, 1, const_false(), prefix});
     } else if (loop && loop->for_type == ForType::Parallel) {
         prefix += ".par_for." + loop->name;
-        result.push_back(ParallelTask {loop->body, Expr(), loop->name, loop->min, loop->extent, prefix});
+        result.push_back(ParallelTask {loop->body, Expr(), loop->name, loop->min, loop->extent, const_false(), prefix});
+    } else if (loop && loop->for_type == ForType::Serial && loop->body.as<Acquire>()) {
+        const Acquire *a = loop->body.as<Acquire>();
+        const Variable *v = a->semaphore.as<Variable>();
+        internal_assert(v);
+        prefix += ".for." + v->name;
+        result.push_back(ParallelTask {a->body, a->semaphore, loop->name, loop->min, loop->extent, const_true(), prefix});
     } else {
         prefix += "." + std::to_string(result.size());
-        result.push_back(ParallelTask {s, Expr(), "", 0, 1, prefix});
+        result.push_back(ParallelTask {s, Expr(), "", 0, 1, const_false(), prefix});
     }
-    // TODO: Serial for loops whose body is just an acquire
+}
+
+void CodeGen_LLVM::do_as_parallel_task(Stmt s) {
+    vector<ParallelTask> tasks;
+    get_parallel_tasks(s, tasks, function->getName().str());
+    do_parallel_tasks(tasks);
+}
+
+void CodeGen_LLVM::visit(const Acquire *op) {
+    do_as_parallel_task(op);
 }
 
 void CodeGen_LLVM::visit(const Fork *op) {
-    vector<ParallelTask> tasks;
-    get_parallel_tasks(op, tasks, function->getName().str());
-    do_parallel_tasks(tasks);
+    do_as_parallel_task(op);
 }
 
 void CodeGen_LLVM::visit(const Store *op) {

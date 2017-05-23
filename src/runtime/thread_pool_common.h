@@ -213,7 +213,8 @@ WEAK void worker_thread_already_locked(work *owned_job) {
                 threads_that_could_assist++;
             }
             bool enough_threads = job->task.min_threads <= threads_that_could_assist;
-            bool may_try = (job == owned_job || !owned_job || !job->task.may_block);
+            bool may_try = ((job == owned_job || !owned_job || !job->task.may_block) &&
+                            (!job->task.serial || (job->active_workers == 0)));
             if (may_try && enough_threads && job->make_runnable()) {
                 break;
             }
@@ -232,8 +233,8 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         job->task.min++;
         job->task.extent--;
 
-        // If there were no more tasks pending for this job,
-        // remove it from the stack.
+        // If there were no more tasks pending for this job, remove it
+        // from the stack.
         if (job->task.extent == 0) {
             *prev_ptr = job->next_job;
         }
@@ -257,8 +258,8 @@ WEAK void worker_thread_already_locked(work *owned_job) {
         // We are no longer active on this job
         job->active_workers--;
 
-        // Wake up the owner if the job is done.
         if (!job->running() && job->owner_is_sleeping) {
+            // The job is done. Wake up the owner.
             work_queue.wake_owners();
         }
     }
@@ -366,7 +367,7 @@ WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
     }
 
     halide_mutex_lock(&work_queue.mutex);
-    //print(NULL) << (void *)(&jobs) << " Enqueuing " << num_tasks << " jobs\n";
+    // print(NULL) << (void *)(&jobs) << " Enqueuing " << num_tasks << " jobs\n";
     enqueue_work_already_locked(num_tasks, jobs);
     int exit_status = 0;
     for (int i = 0; i < num_tasks; i++) {

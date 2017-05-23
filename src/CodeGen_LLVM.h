@@ -273,11 +273,13 @@ protected:
         Expr semaphore;
         std::string loop_var;
         Expr min, extent;
+        Expr serial;
         std::string name;
     };
     int task_depth;
     void get_parallel_tasks(Stmt s, std::vector<ParallelTask> &tasks, std::string prefix);
     void do_parallel_tasks(const std::vector<ParallelTask> &tasks);
+    void do_as_parallel_task(Stmt s);
 
     /** Return the the pipeline with the given error code. Will run
      * the destructor block. */
