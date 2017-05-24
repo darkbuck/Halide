@@ -1699,9 +1699,10 @@ Stmt optimize_hexagon_instructions(Stmt s, Target t) {
     // interleaves and deinterleaves alongside the HVX intrinsics.
     s = OptimizePatterns(t).mutate(s);
 
+    debug(2) << "before elminating interleaves: " << s << "\n\n";
     // Try to eliminate any redundant interleave/deinterleave pairs.
     s = EliminateInterleaves(t.natural_vector_size(Int(8))*8).mutate(s);
-
+    debug(2) << "after elminating interleaves: " << s << "\n\n";
     // There may be interleaves left over that we can fuse with other
     // operations.
     s = FuseInterleaves().mutate(s);
