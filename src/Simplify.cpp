@@ -708,6 +708,17 @@ private:
                 vectors.push_back(v + bc);
             }
             expr = mutate(Shuffle::make(vectors, shuffle_a->indices));
+        } else if (shuffle_a &&
+                   (shuffle_a->is_slice() || shuffle_a->is_concat()) &&
+                   broadcast_b) {
+            internal_assert(op->type.is_vector());
+            vector<Expr> vectors;
+            for (Expr v : shuffle_a->vectors) {
+                int lanes = v.type().lanes();
+                Expr bc = Broadcast::make(broadcast_b->value, lanes);
+                vectors.push_back(v + bc);
+            }
+            expr = mutate(Shuffle::make(vectors, shuffle_a->indices));
         } else if (ramp_a &&
                    ramp_b) {
             // Ramp + Ramp
@@ -1533,6 +1544,17 @@ private:
                    (shuffle_a->is_slice() || shuffle_a->is_concat()) &&
                    is_simple_const(b)) {
             internal_assert(op->type.is_vector() && broadcast_b);
+            vector<Expr> vectors;
+            for (Expr v : shuffle_a->vectors) {
+                int lanes = v.type().lanes();
+                Expr bc = Broadcast::make(broadcast_b->value, lanes);
+                vectors.push_back(v * bc);
+            }
+            expr = mutate(Shuffle::make(vectors, shuffle_a->indices));
+        } else if (shuffle_a &&
+                   (shuffle_a->is_slice() || shuffle_a->is_concat()) &&
+                   broadcast_b) {
+            internal_assert(op->type.is_vector());
             vector<Expr> vectors;
             for (Expr v : shuffle_a->vectors) {
                 int lanes = v.type().lanes();
