@@ -3179,23 +3179,23 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
             Value *slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 0);
             builder->CreateStore(task_ptr, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 1);
-            builder->CreateStore(min, slot_ptr);
-            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 2);
-            builder->CreateStore(extent, slot_ptr);
-            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 3);
             builder->CreateStore(semaphore, slot_ptr);
-            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 4);
-            builder->CreateStore(semaphore_count, slot_ptr);
-            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 5);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 2);
             builder->CreateStore(closure_ptr, slot_ptr);
-            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 6);
-            builder->CreateStore(ConstantInt::get(i8_t, may_block.result), slot_ptr);
-            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 7);
-            builder->CreateStore(serial, slot_ptr);
-            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 8);
-            builder->CreateStore(ConstantInt::get(i32_t, min_threads.result), slot_ptr);
-            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 9);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 3);
             builder->CreateStore(create_string_constant(t.name), slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 4);
+            builder->CreateStore(min, slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 5);
+            builder->CreateStore(extent, slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 6);
+            builder->CreateStore(semaphore_count, slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 7);
+            builder->CreateStore(ConstantInt::get(i32_t, min_threads.result), slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 8);
+            builder->CreateStore(ConstantInt::get(i8_t, may_block.result), slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 9);
+            builder->CreateStore(serial, slot_ptr);
         }
     }
 

@@ -139,18 +139,17 @@ typedef int (*halide_do_par_for_t)(void *, halide_task_t, int, int, uint8_t*);
 extern halide_do_par_for_t halide_set_custom_do_par_for(halide_do_par_for_t do_par_for);
 
 struct halide_parallel_task_t {
-    halide_task_t fn;
-    int min, extent;
-    halide_semaphore_t *semaphore;
-    int count;
-    uint8_t *closure;
-    // The fields below will be compile-time constants. Once we have
-    // more static metadata about a task, this should be a pointer to
+    // Many of the fields below will be compile-time constants. Once we have
+    // more static metadata about a task, there should be a pointer to
     // static task info instead.
-    bool may_block, serial;
-    int min_threads;
-    // The symbol name of the called function, to help debugging parallel runtimes.
+    halide_task_t fn;
+    halide_semaphore_t *semaphore;
+    uint8_t *closure;
     const char *name;
+    int min, extent;
+    int count;
+    int min_threads;
+    bool may_block, serial;
 };
 
 extern int halide_do_parallel_tasks(void *user_context, int num_tasks, halide_parallel_task_t *tasks);

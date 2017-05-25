@@ -79,7 +79,7 @@ struct work_queue_t {
     // may want to wake them up independently. Any code that may
     // invalidate any of the reasons a worker or owner may have slept
     // must signal or broadcast the appropriate condition variable.
-    halide_cond worker_cond_var_a, worker_cond_var_b, owner_cond_var;
+    halide_cond wake_a_team, wake_b_team, wake_owners;
 
     // The number of sleeping workers and owners. An over-estimate - a
     // waking-up thread may not have decremented this yet.
@@ -91,112 +91,13 @@ struct work_queue_t {
     // Global flags indicating the threadpool should shut down, and
     // whether the thread pool has been initialized.
     bool shutdown, initialized;
-
-    // Initialize the thread pool state. The requirement that the
-    // thread pool is already locked means that the mutex must be
-    // statically initialized, or this must be called in some
-    // guaranteed-single-threaded context.
-    void init_already_locked() {
-        shutdown = false;
-        halide_cond_init(&worker_cond_var_a);
-        halide_cond_init(&worker_cond_var_b);
-        halide_cond_init(&owner_cond_var);
-        jobs = NULL;
-
-        // Compute the desired number of threads to use. Other code
-        // can also mess with this value, but only when the work queue
-        // is locked.
-        if (!desired_threads_working) {
-            desired_threads_working = default_desired_num_threads();
-        }
-        desired_threads_working = clamp_num_threads(desired_threads_working);
-        a_team_size = 0;
-        target_a_team_size = 0;
-        threads_created = 0;
-        workers_sleeping = 0;
-        owners_sleeping = 0;
-        initialized = true;
-    }
-
-    void deinit() {
-        // Wake everyone up and tell them the party's over and it's time
-        // to go home
-        halide_mutex_lock(&mutex);
-        shutdown = true;
-
-        wake_all();
-        halide_mutex_unlock(&mutex);
-
-        // Wait until they leave
-        for (int i = 0; i < threads_created; i++) {
-            halide_join_thread(threads[i]);
-        }
-
-        // Tidy up
-        halide_mutex_destroy(&mutex);
-        halide_cond_destroy(&worker_cond_var_a);
-        halide_cond_destroy(&worker_cond_var_b);
-        halide_cond_destroy(&owner_cond_var);
-        initialized = false;
-    }
-
-    bool running() {
-        return !shutdown;
-    }
-
-    void wake_owners() {
-        halide_cond_broadcast(&owner_cond_var);
-    }
-
-    void wake_some_threads(int how_many, bool include_owners) {
-        if (jobs->next_job || how_many > desired_threads_working) {
-            target_a_team_size = desired_threads_working;
-        } else {
-            target_a_team_size = how_many;
-        }
-        halide_cond_broadcast(&worker_cond_var_a);
-        if (target_a_team_size > a_team_size) {
-            halide_cond_broadcast(&worker_cond_var_b);
-            if (include_owners) {
-                halide_cond_broadcast(&owner_cond_var);
-            }
-        }
-    }
-
-    void wake_all() {
-        halide_cond_broadcast(&worker_cond_var_a);
-        halide_cond_broadcast(&worker_cond_var_b);
-        wake_owners();
-    }
-
-    void sleep(work *owned_job) {
-        if (owned_job) {
-            owners_sleeping++;
-            owned_job->owner_is_sleeping = true;
-            halide_cond_wait(&owner_cond_var, &mutex);
-            owned_job->owner_is_sleeping = false;
-            owners_sleeping--;
-        } else {
-            workers_sleeping++;
-            if (a_team_size > target_a_team_size) {
-                // Transition to B team
-                a_team_size--;
-                halide_cond_wait(&worker_cond_var_b, &mutex);
-                a_team_size++;
-            } else {
-                halide_cond_wait(&worker_cond_var_a, &mutex);
-            }
-            workers_sleeping--;
-        }
-    }
-
 };
 WEAK work_queue_t work_queue;
 
 WEAK void worker_thread(void *);
 
 WEAK void worker_thread_already_locked(work *owned_job) {
-    while (owned_job ? owned_job->running() : work_queue.running()) {
+    while (owned_job ? owned_job->running() : !work_queue.shutdown) {
 
         // Find a job to run, prefering things near the top of the stack.
         work *job = work_queue.jobs;
@@ -224,7 +125,24 @@ WEAK void worker_thread_already_locked(work *owned_job) {
 
         if (!job) {
             // There is no runnable job. Go to sleep.
-            work_queue.sleep(owned_job);
+            if (owned_job) {
+                work_queue.owners_sleeping++;
+                owned_job->owner_is_sleeping = true;
+                halide_cond_wait(&work_queue.wake_owners, &work_queue.mutex);
+                owned_job->owner_is_sleeping = false;
+                work_queue.owners_sleeping--;
+            } else {
+                work_queue.workers_sleeping++;
+                if (work_queue.a_team_size > work_queue.target_a_team_size) {
+                    // Transition to B team
+                    work_queue.a_team_size--;
+                    halide_cond_wait(&work_queue.wake_b_team, &work_queue.mutex);
+                    work_queue.a_team_size++;
+                } else {
+                    halide_cond_wait(&work_queue.wake_a_team, &work_queue.mutex);
+                }
+                work_queue.workers_sleeping--;
+            }
             continue;
         }
 
@@ -260,7 +178,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
 
         if (!job->running() && job->owner_is_sleeping) {
             // The job is done. Wake up the owner.
-            work_queue.wake_owners();
+            halide_cond_broadcast(&work_queue.wake_owners);
         }
     }
 }
@@ -273,7 +191,25 @@ WEAK void worker_thread(void *arg) {
 
 WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     if (!work_queue.initialized) {
-        work_queue.init_already_locked();
+        work_queue.shutdown = false;
+        halide_cond_init(&work_queue.wake_a_team);
+        halide_cond_init(&work_queue.wake_b_team);
+        halide_cond_init(&work_queue.wake_owners);
+        work_queue.jobs = NULL;
+        
+        // Compute the desired number of threads to use. Other code
+        // can also mess with this value, but only when the work queue
+        // is locked.
+        if (!work_queue.desired_threads_working) {
+            work_queue.desired_threads_working = default_desired_num_threads();
+        }
+        work_queue.desired_threads_working = clamp_num_threads(work_queue.desired_threads_working);
+        work_queue.a_team_size = 0;
+        work_queue.target_a_team_size = 0;
+        work_queue.threads_created = 0;
+        work_queue.workers_sleeping = 0;
+        work_queue.owners_sleeping = 0;
+        work_queue.initialized = true;
     }
 
     // Some tasks require a minimum number of threads to make forward
@@ -309,7 +245,19 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
         work_queue.jobs = jobs + i;
     }
 
-    work_queue.wake_some_threads(workers_to_wake, stealable_jobs);
+    // Wake up an appropriate number of threads
+    if (jobs->next_job || workers_to_wake > work_queue.desired_threads_working) {
+        work_queue.target_a_team_size = work_queue.desired_threads_working;
+    } else {
+        work_queue.target_a_team_size = workers_to_wake;
+    }
+    halide_cond_broadcast(&work_queue.wake_a_team);
+    if (work_queue.target_a_team_size > work_queue.a_team_size) {
+        halide_cond_broadcast(&work_queue.wake_b_team);
+        if (stealable_jobs) {
+            halide_cond_broadcast(&work_queue.wake_owners);
+        }
+    }
 }
 
 }}}  // namespace Halide::Runtime::Internal
@@ -402,7 +350,27 @@ WEAK int halide_set_num_threads(int n) {
 
 WEAK void halide_shutdown_thread_pool() {
     if (work_queue.initialized) {
-        work_queue.deinit();
+        // Wake everyone up and tell them the party's over and it's time
+        // to go home
+        halide_mutex_lock(&work_queue.mutex);
+        work_queue.shutdown = true;
+        
+        halide_cond_broadcast(&work_queue.wake_a_team);
+        halide_cond_broadcast(&work_queue.wake_b_team);
+        halide_cond_broadcast(&work_queue.wake_owners);
+        halide_mutex_unlock(&work_queue.mutex);
+        
+        // Wait until they leave
+        for (int i = 0; i < work_queue.threads_created; i++) {
+            halide_join_thread(work_queue.threads[i]);
+        }
+        
+        // Tidy up
+        halide_mutex_destroy(&work_queue.mutex);
+        halide_cond_destroy(&work_queue.wake_a_team);
+        halide_cond_destroy(&work_queue.wake_b_team);
+        halide_cond_destroy(&work_queue.wake_owners);
+        work_queue.initialized = false;
     }
 }
 
@@ -421,7 +389,9 @@ WEAK int halide_semaphore_release(halide_semaphore_t *s, int n) {
     int new_val = __sync_add_and_fetch(&(sem->value), n);
     if (new_val == n) {
         // We may have just made a job runnable
-        work_queue.wake_all();
+        halide_cond_broadcast(&work_queue.wake_a_team);
+        halide_cond_broadcast(&work_queue.wake_b_team);
+        halide_cond_broadcast(&work_queue.wake_owners);
     }
     return new_val;
 }
