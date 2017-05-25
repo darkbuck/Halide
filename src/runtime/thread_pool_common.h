@@ -16,11 +16,11 @@ struct work {
         if (task.semaphore == NULL) {
             return 0x7fffffff;
         }
-        return halide_semaphore_try_acquire(task.semaphore);
+        return halide_semaphore_try_acquire(task.semaphore, task.count);
     }
     void release() {
         if (task.semaphore) {
-            halide_semaphore_release(task.semaphore);
+            halide_semaphore_release(task.semaphore, task.count);
         }
     }
     bool running() {
@@ -352,7 +352,7 @@ WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
     if (num_tasks == 1 &&
         tasks->extent == 1 &&
         (tasks->semaphore == NULL ||
-         halide_semaphore_try_acquire(tasks->semaphore))) {
+         halide_semaphore_try_acquire(tasks->semaphore, tasks->count))) {
         return tasks->fn(user_context, tasks->min, tasks->closure);
     }
 
@@ -410,32 +410,32 @@ struct halide_semaphore_impl_t {
     int value;
 };
 
-WEAK int halide_semaphore_init(halide_semaphore_t *s, int val) {
+WEAK int halide_semaphore_init(halide_semaphore_t *s, int n) {
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
-    sem->value = val;
-    return val;
+    sem->value = n;
+    return n;
 }
 
-WEAK int halide_semaphore_release(halide_semaphore_t *s) {
+WEAK int halide_semaphore_release(halide_semaphore_t *s, int n) {
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
-    int new_val = __sync_add_and_fetch(&(sem->value), 1);
-    if (new_val == 1) {
+    int new_val = __sync_add_and_fetch(&(sem->value), n);
+    if (new_val == n) {
         // We may have just made a job runnable
         work_queue.wake_all();
     }
     return new_val;
 }
 
-WEAK int halide_semaphore_try_acquire(halide_semaphore_t *s) {
+WEAK bool halide_semaphore_try_acquire(halide_semaphore_t *s, int n) {
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
     // Decrement and get new value
-    int old_val = __sync_fetch_and_add(&(sem->value), -1);
-    if (old_val < 1) {
+    int new_val = __sync_add_and_fetch(&(sem->value), -n);
+    if (new_val < 0) {
         // Oops, increment and return failure
-        __sync_add_and_fetch(&(sem->value), 1);
-        old_val = 0;
+        __sync_add_and_fetch(&(sem->value), n);
+        return false;
     }
-    return old_val;
+    return true;
 }
 
 }

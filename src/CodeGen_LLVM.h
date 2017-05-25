@@ -271,6 +271,7 @@ protected:
     struct ParallelTask {
         Stmt body;
         Expr semaphore;
+        Expr count;
         std::string loop_var;
         Expr min, extent;
         Expr serial;

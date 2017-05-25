@@ -98,22 +98,22 @@ WEAK int halide_semaphore_init(halide_semaphore_t *s, int val) {
     return val;
 }
 
-WEAK int halide_semaphore_release(halide_semaphore_t *s) {
+WEAK int halide_semaphore_release(halide_semaphore_t *s, int n) {
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
-    int new_val = __sync_add_and_fetch(&(sem->value), 1);
+    int new_val = __sync_add_and_fetch(&(sem->value), n);
     return new_val;
 }
 
-WEAK int halide_semaphore_try_acquire(halide_semaphore_t *s) {
+WEAK bool halide_semaphore_try_acquire(halide_semaphore_t *s, int n) {
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
     // Decrement and get new value
-    int old_val = __sync_fetch_and_add(&(sem->value), -1);
-    if (old_val < 1) {
+    int new_val = __sync_add_and_fetch(&(sem->value), -n);
+    if (new_val < 0) {
         // Oops, increment and return failure
-        __sync_add_and_fetch(&(sem->value), 1);
-        old_val = 0;
+        __sync_add_and_fetch(&(sem->value), n);
+        return false;
     }
-    return old_val;
+    return true;
 }
 
 } // extern "C"

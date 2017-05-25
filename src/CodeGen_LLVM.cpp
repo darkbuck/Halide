@@ -3,28 +3,28 @@
 #include <sstream>
 #include <mutex>
 
-#include "IRPrinter.h"
-#include "CodeGen_LLVM.h"
-#include "CPlusPlusMangle.h"
-#include "IROperator.h"
-#include "Debug.h"
-#include "Deinterleave.h"
-#include "Simplify.h"
-#include "JITModule.h"
-#include "CodeGen_Internal.h"
-#include "Lerp.h"
-#include "Util.h"
-#include "LLVM_Runtime_Linker.h"
-#include "MatlabWrapper.h"
-#include "IntegerDivisionTable.h"
-#include "CSE.h"
-
-#include "CodeGen_X86.h"
-#include "CodeGen_GPU_Host.h"
 #include "CodeGen_ARM.h"
+#include "CodeGen_GPU_Host.h"
+#include "CodeGen_Hexagon.h"
+#include "CodeGen_Internal.h"
+#include "CodeGen_LLVM.h"
 #include "CodeGen_MIPS.h"
 #include "CodeGen_PowerPC.h"
-#include "CodeGen_Hexagon.h"
+#include "CodeGen_X86.h"
+#include "CPlusPlusMangle.h"
+#include "CSE.h"
+#include "Debug.h"
+#include "Deinterleave.h"
+#include "ExprUsesVar.h"
+#include "IntegerDivisionTable.h"
+#include "IROperator.h"
+#include "IRPrinter.h"
+#include "JITModule.h"
+#include "Lerp.h"
+#include "LLVM_Runtime_Linker.h"
+#include "MatlabWrapper.h"
+#include "Simplify.h"
+#include "Util.h"
 
 #if !(__cplusplus > 199711L || _MSC_VER >= 1800)
 
@@ -2957,9 +2957,13 @@ void CodeGen_LLVM::visit(const ProducerConsumer *op) {
 void CodeGen_LLVM::visit(const For *op) {
     Value *min = codegen(op->min);
     Value *extent = codegen(op->extent);
+    const Acquire *acquire = op->body.as<Acquire>();
 
     if (op->for_type == ForType::Parallel ||
-        (op->for_type == ForType::Serial && op->body.as<Acquire>())) {
+        (op->for_type == ForType::Serial &&
+         acquire &&
+         !expr_uses_var(acquire->count, op->name))) {
+        debug(0) << "Doing serial for as parallel task...\n";
         do_as_parallel_task(op);
     } else if (op->for_type == ForType::Serial) {
 
@@ -3154,6 +3158,7 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         Value *min = codegen(t.min);
         Value *extent = codegen(t.extent);
         Value *serial = codegen(cast(UInt(8), t.serial));
+        Value *semaphore_count = codegen(t.count);
 
         if (num_tasks == 1 && min_threads.result == 1 &&
             !t.semaphore.defined() && !may_block.result) {
@@ -3180,14 +3185,16 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 3);
             builder->CreateStore(semaphore, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 4);
-            builder->CreateStore(closure_ptr, slot_ptr);
+            builder->CreateStore(semaphore_count, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 5);
-            builder->CreateStore(ConstantInt::get(i8_t, may_block.result), slot_ptr);
+            builder->CreateStore(closure_ptr, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 6);
-            builder->CreateStore(serial, slot_ptr);
+            builder->CreateStore(ConstantInt::get(i8_t, may_block.result), slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 7);
-            builder->CreateStore(ConstantInt::get(i32_t, min_threads.result), slot_ptr);
+            builder->CreateStore(serial, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 8);
+            builder->CreateStore(ConstantInt::get(i32_t, min_threads.result), slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 9);
             builder->CreateStore(create_string_constant(t.name), slot_ptr);
         }
     }
@@ -3213,27 +3220,33 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
 
 void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result, string prefix) {
     const For *loop = s.as<For>();
+    const Acquire *acquire = loop ? loop->body.as<Acquire>() : s.as<Acquire>();
     if (const Fork *f = s.as<Fork>()) {
         prefix += ".fork";
         get_parallel_tasks(f->first, result, prefix);
         get_parallel_tasks(f->rest, result, prefix);
-    } else if (const Acquire *a = s.as<Acquire>()) {
-        const Variable *v = a->semaphore.as<Variable>();
+    } else if (!loop && acquire) {
+        const Variable *v = acquire->semaphore.as<Variable>();
         internal_assert(v);
         prefix += "." + v->name;
-        result.push_back(ParallelTask {a->body, a->semaphore, "", 0, 1, const_false(), prefix});
+        result.push_back(ParallelTask {acquire->body, acquire->semaphore, acquire->count, "", 0, 1, const_false(), prefix});
     } else if (loop && loop->for_type == ForType::Parallel) {
         prefix += ".par_for." + loop->name;
-        result.push_back(ParallelTask {loop->body, Expr(), loop->name, loop->min, loop->extent, const_false(), prefix});
-    } else if (loop && loop->for_type == ForType::Serial && loop->body.as<Acquire>()) {
-        const Acquire *a = loop->body.as<Acquire>();
-        const Variable *v = a->semaphore.as<Variable>();
+        result.push_back(ParallelTask {loop->body, Expr(), 0, loop->name, loop->min, loop->extent, const_false(), prefix});
+    } else if (loop &&
+               loop->for_type == ForType::Serial &&
+               acquire &&
+               !expr_uses_var(acquire->count, loop->name)) {
+        const Variable *v = acquire->semaphore.as<Variable>();
         internal_assert(v);
         prefix += ".for." + v->name;
-        result.push_back(ParallelTask {a->body, a->semaphore, loop->name, loop->min, loop->extent, const_true(), prefix});
+        result.push_back(ParallelTask {acquire->body,
+                                       acquire->semaphore,
+                                       acquire->count,
+                                       loop->name, loop->min, loop->extent, const_true(), prefix});
     } else {
         prefix += "." + std::to_string(result.size());
-        result.push_back(ParallelTask {s, Expr(), "", 0, 1, const_false(), prefix});
+        result.push_back(ParallelTask {s, Expr(), 0, "", 0, 1, const_false(), prefix});
     }
 }
 

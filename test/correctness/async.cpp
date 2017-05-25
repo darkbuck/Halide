@@ -16,13 +16,13 @@ int main(int argc, char **argv) {
 
     // Basic compute-root async producer
     if (1) {
-        Func producer("async_producer"), consumer;
+        Func producer, consumer;
         Var x, y;
 
         producer(x, y) = x + y;
         consumer(x, y) = expensive(producer(x-1, y-1) + producer(x+1, y+1));
         consumer.compute_root();
-        producer.compute_root();
+        producer.compute_root().async();
 
         Buffer<int> out = consumer.realize(16, 16);
 
@@ -38,13 +38,13 @@ int main(int argc, char **argv) {
 
     // Sliding and folding over a single variable
     if (1) {
-        Func producer("async_producer"), consumer;
+        Func producer, consumer;
         Var x, y;
 
         producer(x) = expensive(x);
         consumer(x) = expensive(producer(x) + producer(x-1));
         consumer.compute_root();
-        producer.store_root().fold_storage(x, 8).compute_at(consumer, x);
+        producer.store_root().fold_storage(x, 8).compute_at(consumer, x).async();
 
         Buffer<int> out = consumer.realize(16);
 
@@ -60,14 +60,14 @@ int main(int argc, char **argv) {
 
     // Sliding and folding over y
     if (1) {
-        Func producer("async_producer"), consumer;
+        Func producer, consumer;
         Var x, y;
 
         producer(x, y) = x + y;
         consumer(x, y) = expensive(producer(x-1, y-1) + producer(x+1, y+1));
         consumer.compute_root();
         // Producer can run 5 scanlines ahead
-        producer.store_root().fold_storage(y, 8).compute_at(consumer, y);
+        producer.store_root().fold_storage(y, 8).compute_at(consumer, y).async();
 
         Buffer<int> out = consumer.realize(16, 16);
 
@@ -83,14 +83,14 @@ int main(int argc, char **argv) {
 
     // Sliding over x and y, folding over y
     if (1) {
-        Func producer("async_producer"), consumer;
+        Func producer, consumer;
         Var x, y;
 
         producer(x, y) = x + y;
         consumer(x, y) = expensive(producer(x-1, y-1) + producer(x+1, y+1));
         consumer.compute_root();
         // Producer can still run 5 scanlines ahead
-        producer.store_root().fold_storage(y, 8).compute_at(consumer, x);
+        producer.store_root().fold_storage(y, 8).compute_at(consumer, x).async();
 
         Buffer<int> out = consumer.realize(16, 16);
 
@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
     // semaphore never actually does anything, because the inner
     // semaphore stops it from getting that far ahead.
     if (1) {
-        Func producer("async_producer"), consumer;
+        Func producer, consumer;
         Var x, y;
 
         producer(x, y) = x + y;
@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
         // The producer doesn't run into the new scanline as much as
         // it could, because we're sharing one semaphore for x in
         // between the two scanlines, so we're a little conservative.
-        producer.store_root().fold_storage(x, 8).fold_storage(y, 2).compute_at(consumer, x);
+        producer.store_root().fold_storage(x, 8).fold_storage(y, 2).compute_at(consumer, x).async();
 
         Buffer<int> out = consumer.realize(16, 16);
 
@@ -139,12 +139,12 @@ int main(int argc, char **argv) {
             });
     }
 
-    // Multiple async producers at root. This doesn't currently get
+    // Multiple async producers at root. TODO: This doesn't currently get
     // the producers running at the same time, because one is nested
     // inside the other's consume node. Need to tighten this up.
     if (1) {
-        Func producer_1("async_producer_1");
-        Func producer_2("async_producer_2");
+        Func producer_1;
+        Func producer_2;
         Func consumer;
         Var x, y;
 
@@ -154,8 +154,8 @@ int main(int argc, char **argv) {
         consumer(x, y) = (producer_1(x-1, y) + producer_1(x+1, y) +
                           producer_2(x-2, y) + producer_2(x+2, y));
 
-        producer_1.compute_root();
-        producer_2.compute_root();
+        producer_1.compute_root().async();
+        producer_2.compute_root().async();
 
         Buffer<int> out = consumer.realize(16, 16);
         out.for_each_element([&](int x, int y) {
@@ -170,8 +170,8 @@ int main(int argc, char **argv) {
 
     // Multiple async producers inside an outer parallel for loop
     if (1) {
-        Func producer_1("async_producer_1");
-        Func producer_2("async_producer_2");
+        Func producer_1;
+        Func producer_2;
         Func consumer;
         Var x, y;
 
@@ -180,8 +180,8 @@ int main(int argc, char **argv) {
         consumer(x, y) = (producer_1(x-1, y) + producer_1(x+1, y) +
                           producer_2(x-2, y) + producer_2(x+2, y));
 
-        producer_1.compute_at(consumer, y);
-        producer_2.compute_at(consumer, y);
+        producer_1.compute_at(consumer, y).async();
+        producer_2.compute_at(consumer, y).async();
         consumer.parallel(y);
 
         Buffer<int> out = consumer.realize(16, 16);
@@ -198,8 +198,8 @@ int main(int argc, char **argv) {
     // Multiple async producers inside an outer parallel for loop
     // with sliding within the inner serial loop
     if (1) {
-        Func producer_1("async_producer_1");
-        Func producer_2("async_producer_2");
+        Func producer_1;
+        Func producer_2;
         Func consumer;
         Var x, y;
 
@@ -209,8 +209,8 @@ int main(int argc, char **argv) {
         consumer(x, y) = expensive((producer_1(x-1, y) + producer_1(x+1, y) +
                                     producer_2(x-2, y) + producer_2(x+2, y)));
 
-        producer_1.compute_at(consumer, x).store_at(consumer, y);
-        producer_2.compute_at(consumer, x).store_at(consumer, y);
+        producer_1.compute_at(consumer, x).store_at(consumer, y).async();
+        producer_2.compute_at(consumer, x).store_at(consumer, y).async();
         consumer.parallel(y);
 
         Buffer<int> out = consumer.realize(16, 16);
@@ -226,7 +226,7 @@ int main(int argc, char **argv) {
 
     // Nested asynchronous tasks.
     if (1) {
-        Func f0("async_f0"), f1("async_f1"), f2;
+        Func f0, f1, f2;
         Var x, y;
 
         f0(x, y) = x + y;
@@ -234,8 +234,8 @@ int main(int argc, char **argv) {
         f2(x, y) = f1(x-1, y-1) + f1(x+1, y+1);
 
         f2.compute_root();
-        f1.compute_at(f2, y);
-        f0.compute_at(f1, x);
+        f1.compute_at(f2, y).async();
+        f0.compute_at(f1, x).async();
 
         Buffer<int> out = f2.realize(16, 16);
         out.for_each_element([&](int x, int y) {
@@ -249,12 +249,12 @@ int main(int argc, char **argv) {
     }
 
     // Two async producer-consumer pairs over x in a producer-consumer
-    // relationship over y. TODO: Currently generates junk IR w.r.t. semaphores.
+    // relationship over y.
     if (1) {
-        Func producer_1("async_producer_1");
-        Func consumer_1("async_consumer_1");
-        Func producer_2("async_producer_2");
-        Func consumer_2("consumer_2");
+        Func producer_1;
+        Func consumer_1;
+        Func producer_2;
+        Func consumer_2;
 
         Var x, y;
 
@@ -264,9 +264,9 @@ int main(int argc, char **argv) {
         consumer_2(x, y) = producer_2(x-1, y) + producer_2(x+1, y);
 
         consumer_2.compute_root();
-        producer_2.store_at(consumer_2, y).compute_at(consumer_2, x);
-        consumer_1.store_root().compute_at(consumer_2, y);
-        producer_1.store_at(consumer_2, y).compute_at(consumer_1, x);
+        producer_2.store_at(consumer_2, y).compute_at(consumer_2, x).async();
+        consumer_1.store_root().compute_at(consumer_2, y).async();
+        producer_1.store_at(consumer_2, y).compute_at(consumer_1, x).async();
 
         Buffer<int> out = consumer_2.realize(16, 16);
         out.for_each_element([&](int x, int y) {
@@ -278,6 +278,94 @@ int main(int argc, char **argv) {
                 }
             });
     }
+
+    // Sliding and folding over y, with a non-constant amount of stuff
+    // to acquire/release in the folding semaphore.
+    if (1) {
+        Func producer, consumer;
+        Var x, y;
+
+        producer(x, y) = x + y;
+        consumer(x, y) = expensive(producer(x - 1, min(y - 1, 15)) + producer(x + 1, min(y + 1, 17)));
+        consumer.compute_root();
+        producer.store_root().fold_storage(y, 8).compute_at(consumer, y).async();
+
+        Buffer<int> out = consumer.realize(128, 128);
+
+        out.for_each_element([&](int x, int y) {
+                int correct = (x - 1 + std::min(y - 1, 15)) + (x + 1 + std::min(y + 1, 17));
+                if (out(x, y) != correct) {
+                    printf("out(%d, %d) = %d instead of %d\n",
+                           x, y, out(x, y), correct);
+                    exit(-1);
+                }
+            });
+    }
+
+    // Downsample by 2x in y with sliding and folding over y
+    if (1) {
+        Func producer, consumer;
+        Var x, y;
+
+        producer(x, y) = x + y;
+        // Use a lousy [1 1 1 1] downsampling kernel
+        consumer(x, y) = producer(x, 2*y-1) + producer(x, 2*y) + producer(x, 2*y+1) + producer(x, 2*y+2);
+        consumer.compute_root();
+        producer.store_root().fold_storage(y, 8).compute_at(consumer, y).async();
+
+        Buffer<int> out = consumer.realize(16, 64);
+
+        out.for_each_element([&](int x, int y) {
+                int correct = 4*x + 8*y + 2;
+                if (out(x, y) != correct) {
+                    printf("out(%d, %d) = %d instead of %d\n",
+                           x, y, out(x, y), correct);
+                    exit(-1);
+                }
+            });
+    }
+
+    // Downsample by 1.5x in y with sliding and folding over y
+    if (1) {
+        Func producer, producer_up, consumer;
+        Var x, y;
+
+        producer(x, y) = x + y;
+        // Use a dyadic filter equivalent to upsampling by 2x with
+        // nearest neighbor then downsampling by 3x with a [1 2 3 2 1]
+        // kernel.
+        consumer(x, y) = select(y%2 == 0,
+                                (1*producer(x, 3*(y/2) - 1) +
+                                 5*producer(x, 3*(y/2) + 0) +
+                                 3*producer(x, 3*(y/2) + 1)),
+                                (3*producer(x, 3*(y/2) + 1) +
+                                 5*producer(x, 3*(y/2) + 2) +
+                                 1*producer(x, 3*(y/2) + 3)));
+
+        consumer.compute_root().align_bounds(y, 2).unroll(y, 2);
+        producer.store_root().fold_storage(y, 8).compute_at(consumer, y).async();
+
+        Buffer<int> out = consumer.realize(256, 256);
+
+        out.for_each_element([&](int x, int y) {
+                // Write it out as a 2x upsample followed by a [1 2 3
+                // 2 1] downsample to check correctness and also my
+                // math:
+                int correct = (9*x +
+                               ((3*y-1)>>1) +
+                               2*((3*y)>>1) +
+                               3*((3*y+1)>>1) +
+                               2*((3*y+2)>>1) +
+                               ((3*y+3)>>1));
+                if (out(x, y) != correct) {
+                    printf("out(%d, %d) = %d instead of %d\n",
+                           x, y, out(x, y), correct);
+                    exit(-1);
+                }
+            });
+    }
+
+    // TODO: downsample, upsample (by non-integer factors), sliding backwards
 
     printf("Success!\n");
     return 0;

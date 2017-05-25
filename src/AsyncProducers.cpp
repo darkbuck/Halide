@@ -21,7 +21,7 @@ class GenerateProducerBody : public IRMutator {
     void visit(const ProducerConsumer *op) {
         if (op->name == func && op->is_producer) {
             // Add post-synchronization
-            Expr release = Call::make(Int(32), "halide_semaphore_release", {sema}, Call::Extern);
+            Expr release = Call::make(Int(32), "halide_semaphore_release", {sema, 1}, Call::Extern);
             Stmt body = Block::make(op->body, Evaluate::make(release));
             stmt = ProducerConsumer::make_produce(op->name, body);
         } else {
@@ -121,13 +121,13 @@ class GenerateProducerBody : public IRMutator {
             stmt = body;
         } else if (starts_with(var->name, func + ".folding_semaphore.")) {
             // This is a storage-folding semaphore. Keep it.
-            stmt = Acquire::make(op->semaphore, body);
+            stmt = Acquire::make(op->semaphore, op->count, body);
         } else {
             // Uh-oh, the consumer also has a copy of this acquire! Make
             // a distinct one for the producer
             string cloned_acquire = var->name + unique_name('_');
             cloned_acquires[var->name] = cloned_acquire;
-            stmt = Acquire::make(Variable::make(type_of<halide_semaphore_t *>(), cloned_acquire), body);
+            stmt = Acquire::make(Variable::make(type_of<halide_semaphore_t *>(), cloned_acquire), op->count, body);
         }
     }
 
@@ -162,7 +162,7 @@ class GenerateConsumerBody : public IRMutator {
                 stmt = Evaluate::make(0);
             } else {
                 // Synchronize on the work done by the producer before beginning consumption
-                stmt = Acquire::make(sema, op);
+                stmt = Acquire::make(sema, 1, op);
             }
         } else {
             IRMutator::visit(op);
@@ -226,8 +226,7 @@ class ForkAsyncProducers : public IRMutator {
         auto it = env.find(op->name);
         internal_assert(it != env.end());
         Function f = it->second;
-        if (/* f is scheduled async */
-            starts_with(f.name(), "async_")) {
+        if (f.schedule().async()) {
             // Make two copies of the body, one which only does the
             // producer, and one which only does the consumer. Inject
             // synchronization to preserve dependencies. Put them in a

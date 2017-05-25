@@ -90,9 +90,10 @@ public:
 struct Semaphore {
     string name;
     Expr var;
-    Expr slop;
+    Expr init;
 };
 
+#if 0
 class InjectSynchronization : public IRMutator {
     const std::string &func;
     Expr semaphore;
@@ -133,11 +134,11 @@ public:
     InjectSynchronization(const std::string &f, Expr s) : func(f), semaphore(s) {}
 };
 
-std::pair<Stmt, Semaphore> inject_synchronization(Stmt body, const std::string &func, Expr slop) {
+std::pair<Stmt, Semaphore> inject_synchronization(Stmt body, const std::string &func, Expr init) {
     Semaphore sema;
     sema.name = func + ".folding_semaphore" + unique_name('_');
     sema.var = Variable::make(type_of<halide_semaphore_t *>(), sema.name);
-    sema.slop = slop;
+    sema.init = init;
 
     InjectSynchronization injector(func, sema.var);
     body = injector.mutate(body);
@@ -147,6 +148,7 @@ std::pair<Stmt, Semaphore> inject_synchronization(Stmt body, const std::string &
         return {body, Semaphore{}};
     }
 }
+#endif
 
 // Attempt to fold the storage of a particular function in a statement
 class AttemptStorageFoldingOfFunction : public IRMutator {
@@ -181,10 +183,19 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
         Box required = box_required(body, func.name());
         Box box = box_union(provided, required);
 
+        Expr loop_var = Variable::make(Int(32), op->name);
+        Expr loop_min = Variable::make(Int(32), op->name + ".loop_min");
+        Expr loop_max = Variable::make(Int(32), op->name + ".loop_max");
+
         // Try each dimension in turn from outermost in
         for (size_t i = box.size(); i > 0; i--) {
             Expr min = simplify(box[i-1].min);
             Expr max = simplify(box[i-1].max);
+
+            Expr min_provided = simplify(provided[i-1].min);
+            Expr max_provided = simplify(provided[i-1].max);
+            Expr min_required = simplify(required[i-1].min);
+            Expr max_required = simplify(required[i-1].max);
 
             const StorageDim &storage_dim = func.schedule().storage_dims()[i-1];
             Expr explicit_factor;
@@ -208,12 +219,16 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
             bool max_monotonic_decreasing = !explicit_only &&
                 (is_monotonic(max, op->name) == Monotonic::Decreasing);
 
+            // TODO: If async, also assert or prove max provided/min
+            // required monotonically increasing or min provided/max
+            // required monotonically decreasing
+
             if (!min_monotonic_increasing && !max_monotonic_decreasing &&
                 explicit_factor.defined()) {
                 // If we didn't find a monotonic dimension, and we have an explicit fold factor,
                 // assert that the min/max do in fact monotonically increase/decrease.
+
                 Expr condition;
-                Expr loop_var = Variable::make(Int(32), op->name);
                 if (storage_dim.fold_forward) {
                     Expr min_next = substitute(op->name, loop_var + 1, min);
                     condition = min_next >= min;
@@ -251,8 +266,7 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                 } else {
                     // The max of the extent over all values of the loop variable must be a constant
                     Scope<Interval> scope;
-                    scope.push(op->name, Interval(Variable::make(Int(32), op->name + ".loop_min"),
-                                                  Variable::make(Int(32), op->name + ".loop_max")));
+                    scope.push(op->name, Interval(loop_min, loop_max));
                     Expr max_extent = simplify(bounds_of_expr_in_scope(extent, scope).max);
                     scope.pop(op->name);
 
@@ -277,24 +291,50 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                     dims_folded.push_back(fold);
                     body = FoldStorageOfFunction(func.name(), (int)i - 1, factor).mutate(body);
 
-                    // If the producer is async, it can run ahead by at most 'slop' iterations
-                    if (starts_with(func.name(), "async_")) {
+                    // If the producer is async, it can run ahead by some amount controlled by a semaphore.
+                    if (func.schedule().async()) {
                         Semaphore sema;
                         sema.name = func.name() + ".folding_semaphore." + unique_name('_');
                         sema.var = Variable::make(type_of<halide_semaphore_t *>(), sema.name);
-                        sema.slop = slop;
-                        Expr release_producer = Call::make(Int(32), "halide_semaphore_release", {sema.var}, Call::Extern);
+                        sema.init = factor;
+
+                        Expr max_provided_prev = substitute(op->name, loop_var - 1, max_provided);
+                        Expr min_required_next = substitute(op->name, loop_var + 1, min_required);
+                        Expr to_acquire = max_provided - max_provided_prev; // This is the first time we use these entries
+                        Expr to_release = min_required_next - min_required; // This is the last time we use these entries
+
+                        // Logically we acquire the entire extent on
+                        // the first iteration:
+
+                        // to_acquire = select(loop_var > loop_min, to_acquire, extent);
+
+                        // However it's simpler to implement this by
+                        // just reducing the initial value on the
+                        // semaphore by the difference, as long as it
+                        // doesn't lift any inner names out of scope.
+                        Expr fudge = simplify(substitute(op->name, loop_min, extent - to_acquire));
+                        if (is_const(fudge)) {
+                            sema.init -= fudge;
+                        } else {
+                            to_acquire = select(loop_var > loop_min, likely(to_acquire), extent);
+                        }
+
+                        // TODO: Do I need to release the entire window in the last iteration?
+
+                        // TODO: folding backwards
+
+                        Expr release_producer =
+                            Call::make(Int(32), "halide_semaphore_release", {sema.var, to_release}, Call::Extern);
                         body = Block::make(body, Evaluate::make(release_producer));
-                        body = Acquire::make(sema.var, body);
+                        body = Acquire::make(sema.var, to_acquire, body);
                         dims_folded.back().semaphore = sema;
                     }
 
-                    Expr next_var = Variable::make(Int(32), op->name) + 1;
-                    Expr next_min = substitute(op->name, next_var, min);
-                    if (can_prove(max < next_min)) {
+                    Expr min_next = substitute(op->name, loop_var + 1, min);
+                    if (can_prove(max < min_next)) {
                         // There's no overlapping usage between loop
                         // iterations, so we can continue to search
-                        // for further folding opportinities
+                        // for further folding opportunities
                         // recursively.
                     } else if (!body.same_as(op->body)) {
                         stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
@@ -420,7 +460,7 @@ class StorageFolding : public IRMutator {
                     auto sema = folder.dims_folded[i].semaphore;
                     if (sema.var.defined()) {
                         Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), "halide_make_semaphore",
-                                                     {sema.slop + 1}, Call::Extern);
+                                                     {sema.init}, Call::Extern);
                         stmt = LetStmt::make(sema.name, sema_space, stmt);
                     }
                 }

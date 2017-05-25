@@ -374,6 +374,7 @@ void IRComparer::visit(const Acquire *op) {
     const Acquire *s = stmt.as<Acquire>();
 
     compare_expr(s->semaphore, op->semaphore);
+    compare_expr(s->count, op->count);
     compare_stmt(s->body, op->body);
 }
 

@@ -342,12 +342,13 @@ Stmt For::make(const std::string &name, Expr min, Expr extent, ForType for_type,
     return node;
 }
 
-Stmt Acquire::make(Expr semaphore, Stmt body) {
+Stmt Acquire::make(Expr semaphore, Expr count, Stmt body) {
     internal_assert(semaphore.defined()) << "Acquire with undefined semaphore\n";
     internal_assert(body.defined()) << "Acquire with undefined body\n";
 
     Acquire *node = new Acquire;
     node->semaphore = std::move(semaphore);
+    node->count = std::move(count);
     node->body = std::move(body);
     return node;
 }

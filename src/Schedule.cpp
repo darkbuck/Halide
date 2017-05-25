@@ -128,11 +128,11 @@ struct FuncScheduleContents {
     std::vector<StorageDim> storage_dims;
     std::vector<Bound> bounds;
     std::map<std::string, IntrusivePtr<Internal::FunctionContents>> wrappers;
-    bool memoized;
+    bool memoized, async;
 
     FuncScheduleContents() :
         store_level(LoopLevel::inlined()), compute_level(LoopLevel::inlined()),
-        memoized(false) {};
+        memoized(false), async(false) {};
 
     // Pass an IRMutator through to all Exprs referenced in the FuncScheduleContents
     void mutate(IRMutator *mutator) {
@@ -224,6 +224,7 @@ FuncSchedule FuncSchedule::deep_copy(
     copy.contents->storage_dims = contents->storage_dims;
     copy.contents->bounds = contents->bounds;
     copy.contents->memoized = contents->memoized;
+    copy.contents->async = contents->async;
 
     // Deep-copy wrapper functions. If function has already been deep-copied before,
     // i.e. it's in the 'copied_map', use the deep-copied version from the map instead
@@ -247,6 +248,14 @@ bool &FuncSchedule::memoized() {
 
 bool FuncSchedule::memoized() const {
     return contents->memoized;
+}
+
+bool &FuncSchedule::async() {
+    return contents->async;
+}
+
+bool FuncSchedule::async() const {
+    return contents->async;
 }
 
 std::vector<StorageDim> &FuncSchedule::storage_dims() {

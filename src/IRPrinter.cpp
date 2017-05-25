@@ -97,7 +97,7 @@ ostream &operator<<(ostream &out, const DeviceAPI &api) {
 
 ostream &operator<<(ostream &stream, const LoopLevel &loop_level) {
     return stream << "loop_level("
-        << (loop_level.defined() ? loop_level.to_string() : "undefined") 
+        << (loop_level.defined() ? loop_level.to_string() : "undefined")
         << ")";
 }
 
@@ -586,6 +586,8 @@ void IRPrinter::visit(const Acquire *op) {
     do_indent();
     stream << "acquire (";
     print(op->semaphore);
+    stream << ", ";
+    print(op->count);
     stream << ") {\n";
     indent += 2;
     print(op->body);

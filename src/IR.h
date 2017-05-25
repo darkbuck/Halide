@@ -676,9 +676,10 @@ struct For : public StmtNode<For> {
 
 struct Acquire : public StmtNode<Acquire> {
     Expr semaphore;
+    Expr count;
     Stmt body;
 
-    EXPORT static Stmt make(Expr semaphore, Stmt body);
+    EXPORT static Stmt make(Expr semaphore, Expr count, Stmt body);
 
     static const IRNodeType _node_type = IRNodeType::Acquire;
 };

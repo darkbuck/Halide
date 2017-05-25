@@ -170,6 +170,7 @@ void IRVisitor::visit(const For *op) {
 
 void IRVisitor::visit(const Acquire *op) {
     op->semaphore.accept(this);
+    op->count.accept(this);
     op->body.accept(this);
 }
 
@@ -421,6 +422,7 @@ void IRGraphVisitor::visit(const For *op) {
 
 void IRGraphVisitor::visit(const Acquire *op) {
     include(op->semaphore);
+    include(op->count);
     include(op->body);
 }
 

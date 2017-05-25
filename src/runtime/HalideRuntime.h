@@ -142,6 +142,7 @@ struct halide_parallel_task_t {
     halide_task_t fn;
     int min, extent;
     halide_semaphore_t *semaphore;
+    int count;
     uint8_t *closure;
     // The fields below will be compile-time constants. Once we have
     // more static metadata about a task, this should be a pointer to

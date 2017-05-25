@@ -224,12 +224,14 @@ void IRMutator::visit(const For *op) {
 
 void IRMutator::visit(const Acquire *op) {
     Expr sema = mutate(op->semaphore);
+    Expr count = mutate(op->count);
     Stmt body = mutate(op->body);
     if (sema.same_as(op->semaphore) &&
-        body.same_as(op->body)) {
+        body.same_as(op->body) &&
+        count.same_as(op->count)) {
         stmt = op;
     } else {
-        stmt = Acquire::make(sema, body);
+        stmt = Acquire::make(std::move(sema), std::move(count), std::move(body));
     }
 }
 

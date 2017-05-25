@@ -387,6 +387,8 @@ private:
         stream << keyword("acquire (");
         stream << close_span();
         print(op->semaphore);
+        stream << ", ";
+        print(op->count);
         stream << matched(")");
         stream << close_expand_button() << " {";
         stream << open_div("Acquire Indent", id);
