@@ -2963,7 +2963,6 @@ void CodeGen_LLVM::visit(const For *op) {
         (op->for_type == ForType::Serial &&
          acquire &&
          !expr_uses_var(acquire->count, op->name))) {
-        debug(0) << "Doing serial for as parallel task...\n";
         do_as_parallel_task(op);
     } else if (op->for_type == ForType::Serial) {
 
