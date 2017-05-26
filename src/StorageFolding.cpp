@@ -255,13 +255,12 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
             // variable, and should depend on the loop variable.
             if (min_monotonic_increasing || max_monotonic_decreasing) {
                 Expr extent = simplify(max - min + 1);
-                Expr factor, slop;
+                Expr factor;
                 if (explicit_factor.defined()) {
                     Expr error = Call::make(Int(32), "halide_error_fold_factor_too_small",
                                             {func.name(), storage_dim.var, explicit_factor, op->name, extent},
                                             Call::Extern);
                     body = Block::make(AssertStmt::make(extent <= explicit_factor, error), body);
-                    slop = explicit_factor - extent;
                     factor = explicit_factor;
                 } else {
                     // The max of the extent over all values of the loop variable must be a constant
@@ -281,7 +280,6 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                                  << "extent = " << extent << "\n"
                                  << "max extent = " << max_extent << "\n";
                     }
-                    slop = factor - max_extent;
                 }
 
                 if (factor.defined()) {
