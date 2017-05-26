@@ -136,7 +136,7 @@ struct halide_parallel_task_t {
     // more static metadata about a task, there should be a pointer to
     // static task info instead.
     halide_task_t fn;
-    halide_semaphore_t *semaphore;
+    struct halide_semaphore_t *semaphore;
     uint8_t *closure;
     const char *name;
     int min, extent;
