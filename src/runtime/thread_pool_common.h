@@ -320,11 +320,14 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
 WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
                                   halide_parallel_task_t *tasks) {
     // Avoid entering the task system if possible
-    if (num_tasks == 1 &&
-        tasks->extent == 1 &&
-        (tasks->semaphore == NULL ||
-         halide_semaphore_try_acquire(tasks->semaphore, tasks->count))) {
-        return tasks->fn(user_context, tasks->min, tasks->closure);
+    if (num_tasks == 1) {
+        if (tasks->extent == 0) {
+            return 0;
+        } else if (tasks->extent == 1 &&
+                   (tasks->semaphore == NULL ||
+                    halide_semaphore_try_acquire(tasks->semaphore, tasks->count))) {
+            return tasks->fn(user_context, tasks->min, tasks->closure);
+        }
     }
 
     work *jobs = (work *)__builtin_alloca(sizeof(work) * num_tasks);
