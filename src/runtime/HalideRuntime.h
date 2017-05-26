@@ -145,7 +145,7 @@ struct halide_parallel_task_t {
     bool may_block, serial;
 };
 
-extern int halide_do_parallel_tasks(void *user_context, int num_tasks, halide_parallel_task_t *tasks);
+extern int halide_do_parallel_tasks(void *user_context, int num_tasks, struct halide_parallel_task_t *tasks);
 
 /** If you use the default do_par_for, you can still set a custom
  * handler to perform each individual task. Returns the old handler. */
