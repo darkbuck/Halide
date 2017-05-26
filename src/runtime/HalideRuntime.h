@@ -88,32 +88,25 @@ extern halide_error_handler_t halide_set_error_handler(halide_error_handler_t ha
 // @}
 
 /** Cross-platform mutex. These are allocated statically inside the
- * runtime, hence the fixed size. They must be initialized with
- * zero. The first time halide_mutex_lock is called, the lock must be
- * initialized in a thread safe manner. This incurs a small overhead
- * for a once mechanism, but makes the lock reliably easy to setup and
- * use without depending on e.g. C++ constructor logic.
- */
+ * runtime, hence the fixed size. */
 struct halide_mutex {
     uint64_t _private[8];
 };
+
+/** A basic set of mutex and condition variable functions, which call
+ * platform specific code for mutual exclusion. Equivalent to posix
+ * calls. */
+//@{
+extern void halide_mutex_init(struct halide_mutex *mutex);
+extern void halide_mutex_lock(struct halide_mutex *mutex);
+extern void halide_mutex_unlock(struct halide_mutex *mutex);
+extern void halide_mutex_destroy(struct halide_mutex *mutex);
+//@}
 
 // TODO: docs, methods
 struct halide_semaphore_t {
     uint64_t _private[2];
 };
-
-/** A basic set of mutex and condition variable functions, which call
- * platform specific code for mutual exclusion. Equivalent to posix
- * calls. Mutexes should initially be set to zero'd memory. Any
- * resources required are created on first lock. Calling destroy
- * re-zeros the memory.
- */
-//@{
-extern void halide_mutex_lock(struct halide_mutex *mutex);
-extern void halide_mutex_unlock(struct halide_mutex *mutex);
-extern void halide_mutex_destroy(struct halide_mutex *mutex);
-//@}
 
 /** Define halide_do_par_for to replace the default thread pool
  * implementation. halide_shutdown_thread_pool can also be called to

@@ -94,6 +94,11 @@ struct work_queue_t {
 };
 WEAK work_queue_t work_queue;
 
+__attribute__((constructor))
+WEAK void initialize_work_queue() {
+    halide_mutex_init(&work_queue.mutex);
+}
+
 WEAK void worker_thread(void *);
 
 WEAK void worker_thread_already_locked(work *owned_job) {

@@ -2,14 +2,6 @@
 #include "runtime_internal.h"
 #include "printer.h"
 
-// TODO: This code currently doesn't work on OS X (Darwin) as we
-// require that locking a zero-initialized mutex works.  The fix is
-// probably to use a pthread_once type mechanism to call
-// pthread_mutex_init, but that requires the once initializer which
-// might not be zero and is platform dependent. Thus we need our own
-// portable once implementation. For now, threadpool only works on
-// platforms where PTHREAD_MUTEX_INITIALIZER is zero.
-
 extern "C" {
 
 // On posix platforms, there's a 1-to-1 correspondence between
@@ -62,6 +54,10 @@ WEAK void halide_join_thread(struct halide_thread *thread_arg) {
     void *ret = NULL;
     pthread_join(t->handle, &ret);
     free(t);
+}
+
+WEAK void halide_mutex_init(halide_mutex *mutex) {
+    pthread_mutex_init(mutex, NULL);
 }
 
 WEAK void halide_mutex_lock(halide_mutex *mutex) {

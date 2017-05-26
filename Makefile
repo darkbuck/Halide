@@ -554,7 +554,6 @@ RUNTIME_CPP_COMPONENTS = \
   errors \
   fake_thread_pool \
   float16_t \
-  gcd_thread_pool \
   gpu_device_selection \
   hexagon_host \
   ios_io \
@@ -608,7 +607,7 @@ RUNTIME_CPP_COMPONENTS = \
   windows_tempfile \
   windows_threads \
   write_debug_image \
-  x86_cpu_features
+  x86_cpu_features 
 
 RUNTIME_LL_COMPONENTS = \
   aarch64 \

@@ -83,7 +83,6 @@ DECLARE_CPP_INITMOD(device_interface)
 DECLARE_CPP_INITMOD(errors)
 DECLARE_CPP_INITMOD(fake_thread_pool)
 DECLARE_CPP_INITMOD(float16_t)
-DECLARE_CPP_INITMOD(gcd_thread_pool)
 DECLARE_CPP_INITMOD(gpu_device_selection)
 DECLARE_CPP_INITMOD(hexagon_host)
 DECLARE_CPP_INITMOD(ios_io)
@@ -646,7 +645,7 @@ std::unique_ptr<llvm::Module> get_initial_module_for_target(Target t, llvm::LLVM
                 modules.push_back(get_initmod_posix_io(c, bits_64, debug));
                 modules.push_back(get_initmod_posix_tempfile(c, bits_64, debug));
                 modules.push_back(get_initmod_thread_pool(c, bits_64, debug));
-                modules.push_back(get_initmod_gcd_thread_pool(c, bits_64, debug));
+                modules.push_back(get_initmod_posix_threads(c, bits_64, debug));
                 modules.push_back(get_initmod_osx_get_symbol(c, bits_64, debug));
                 modules.push_back(get_initmod_osx_host_cpu_count(c, bits_64, debug));
             } else if (t.os == Target::Android) {
@@ -684,7 +683,8 @@ std::unique_ptr<llvm::Module> get_initial_module_for_target(Target t, llvm::LLVM
                 modules.push_back(get_initmod_posix_clock(c, bits_64, debug));
                 modules.push_back(get_initmod_ios_io(c, bits_64, debug));
                 modules.push_back(get_initmod_posix_tempfile(c, bits_64, debug));
-                modules.push_back(get_initmod_gcd_thread_pool(c, bits_64, debug));
+                modules.push_back(get_initmod_posix_threads(c, bits_64, debug));
+                modules.push_back(get_initmod_thread_pool(c, bits_64, debug));
             } else if (t.os == Target::QuRT) {
                 modules.push_back(get_initmod_qurt_allocator(c, bits_64, debug));
                 modules.push_back(get_initmod_posix_error_handler(c, bits_64, debug));
