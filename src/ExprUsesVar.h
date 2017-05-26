@@ -40,6 +40,16 @@ class ExprUsesVars : public IRGraphVisitor {
         visit_name(op->name);
         IRGraphVisitor::visit(op);
     }
+
+    void visit(const Call *op) {
+        visit_name(op->name);
+        IRGraphVisitor::visit(op);
+    }
+
+    void visit(const Provide *op) {
+        visit_name(op->name);
+        IRGraphVisitor::visit(op);
+    }
 public:
     ExprUsesVars(const Scope<T> &v, const Scope<Expr> *s = nullptr) : vars(v), result(false) {
         scope.set_containing_scope(s);

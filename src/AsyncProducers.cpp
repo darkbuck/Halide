@@ -1,4 +1,5 @@
 #include "AsyncProducers.h"
+#include "ExprUsesVar.h"
 #include "IRMutator.h"
 #include "IROperator.h"
 
@@ -320,9 +321,106 @@ class InitializeSemaphores : public IRMutator {
     }
 };
 
+// Tighten the scope of consume nodes as much as possible to avoid needless synchronization.
+class TightenConsumeNodes : public IRMutator {
+    using IRMutator::visit;
+
+    void visit(const ProducerConsumer *op) {
+        Stmt body = mutate(op->body);
+        if (op->is_producer) {
+            stmt = ProducerConsumer::make(op->name, true, body);
+        } else if (const LetStmt *let = body.as<LetStmt>()) {
+            stmt = mutate(ProducerConsumer::make(op->name, false, let->body));
+            stmt = LetStmt::make(let->name, let->value, stmt);
+        } else if (const Block *block = body.as<Block>()) {
+            // Check which sides it's used on
+            Scope<int> scope;
+            scope.push(op->name, 0);
+            scope.push(op->name + ".buffer", 0);
+            bool first = stmt_uses_vars(block->first, scope);
+            bool rest = stmt_uses_vars(block->rest, scope);
+            if (first && rest) {
+                IRMutator::visit(op);
+            } else if (first) {
+                stmt = Block::make(
+                    mutate(ProducerConsumer::make(op->name, false, block->first)),
+                    mutate(block->rest));
+            } else if (rest) {
+                stmt = Block::make(
+                    mutate(block->first),
+                    mutate(ProducerConsumer::make(op->name, false, block->rest)));
+            } else {
+                stmt = mutate(op->body);
+            }
+        } else if (const ProducerConsumer *pc = body.as<ProducerConsumer>()) {
+            Stmt new_body = mutate(ProducerConsumer::make(op->name, false, pc->body));
+            stmt = ProducerConsumer::make(pc->name, pc->is_producer, new_body);
+        } else if (const Realize *r = body.as<Realize>()) {
+            Stmt new_body = mutate(ProducerConsumer::make(op->name, false, r->body));
+            stmt = Realize::make(r->name, r->types, r->bounds, r->condition, new_body);
+        } else {
+            stmt = ProducerConsumer::make(op->name, op->is_producer, body);
+        }
+    }
+};
+
+// Broaden the scope of acquire nodes to pack trailing work into the
+// same task and to potentially reduce the nesting depth of tasks.
+class ExpandAcquireNodes : public IRMutator {
+    using IRMutator::visit;
+
+    void visit(const Block *op) {
+        Stmt first = mutate(op->first), rest = mutate(op->rest);
+        if (const Acquire *a = first.as<Acquire>()) {
+            // May as well nest the rest stmt inside the acquire
+            // node. It's also blocked on it.
+            stmt = Acquire::make(a->semaphore, a->count,
+                                 mutate(Block::make(a->body, op->rest)));
+        } else {
+            stmt = Block::make(first, rest);
+        }
+    }
+
+    void visit(const Realize *op) {
+        Stmt body = mutate(op->body);
+        if (const Acquire *a = body.as<Acquire>()) {
+            // Don't do the allocation until we have the
+            // semaphore. Reduces peak memory use.
+            stmt = Acquire::make(a->semaphore, a->count,
+                                 mutate(Realize::make(op->name, op->types, op->bounds, op->condition, a->body)));
+        } else {
+            stmt = Realize::make(op->name, op->types, op->bounds, op->condition, body);
+        }
+    }
+
+    void visit(const LetStmt *op) {
+        Stmt body = mutate(op->body);
+        const Acquire *a = body.as<Acquire>();
+        if (a &&
+            !expr_uses_var(a->semaphore, op->name) &&
+            !expr_uses_var(a->count, op->name)) {
+            stmt = Acquire::make(a->semaphore, a->count,
+                                 LetStmt::make(op->name, op->value, a->body));
+        } else {
+            stmt = LetStmt::make(op->name, op->value, body);
+        }
+    }
+
+    void visit(const ProducerConsumer *op) {
+        Stmt body = mutate(op->body);
+        if (const Acquire *a = body.as<Acquire>()) {
+            stmt = Acquire::make(a->semaphore, a->count,
+                                 mutate(ProducerConsumer::make(op->name, op->is_producer, a->body)));
+        } else {
+            stmt = ProducerConsumer::make(op->name, op->is_producer, body);
+        }
+    }
+};
+
 Stmt fork_async_producers(Stmt s, const map<string, Function> &env) {
-    // TODO: tighten up the scope of consume nodes first
+    s = TightenConsumeNodes().mutate(s);
     s = ForkAsyncProducers(env).mutate(s);
+    s = ExpandAcquireNodes().mutate(s);
     s = InitializeSemaphores().mutate(s);
     return s;
 }
