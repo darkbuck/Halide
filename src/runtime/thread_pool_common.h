@@ -201,7 +201,7 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
         halide_cond_init(&work_queue.wake_b_team);
         halide_cond_init(&work_queue.wake_owners);
         work_queue.jobs = NULL;
-        
+
         // Compute the desired number of threads to use. Other code
         // can also mess with this value, but only when the work queue
         // is locked.
@@ -217,13 +217,36 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
         work_queue.initialized = true;
     }
 
+    // Gather some information about the work.
+
     // Some tasks require a minimum number of threads to make forward
     // progress. Also assume the tasks need to run concurrently.
     int min_threads = 0;
+
+    // Count how many workers to wake. Start at -1 because this thread
+    // will contribute.
+    int workers_to_wake = -1;
+
+    // Could stalled owners of other tasks conceivably help with one
+    // of these jobs.
+    bool stealable_jobs = false;
+
     for (int i = 0; i < num_jobs; i++) {
         min_threads += jobs[i].task.min_threads;
+        if (!jobs[i].task.may_block) {
+            stealable_jobs = true;
+        }
+        if (jobs[i].task.serial) {
+            workers_to_wake++;
+        } else {
+            workers_to_wake += jobs[i].task.extent;
+        }
     }
 
+    // Are there already jobs enqueued.
+    bool nested_parallelism = work_queue.jobs;
+
+    // Spawn more threads if necessary.
     while ((work_queue.threads_created < work_queue.desired_threads_working - 1) ||
            (work_queue.threads_created < min_threads - 1)) {
         // We might need to make some new threads, if work_queue.desired_threads_working has
@@ -231,15 +254,6 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
         work_queue.a_team_size++;
         work_queue.threads[work_queue.threads_created++] =
             halide_spawn_thread(worker_thread, NULL);
-    }
-
-    int workers_to_wake = -1; // I'm going to do one of the tasks myself
-    bool stealable_jobs = false;
-    for (int i = 0; i < num_jobs; i++) {
-        if (!jobs[i].task.may_block) {
-            stealable_jobs = true;
-        }
-        workers_to_wake += jobs[i].task.extent;
     }
 
     // Push the jobs onto the stack.
@@ -251,16 +265,20 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     }
 
     // Wake up an appropriate number of threads
-    if (jobs->next_job || workers_to_wake > work_queue.desired_threads_working) {
-        work_queue.target_a_team_size = work_queue.desired_threads_working;
-    } else {
-        work_queue.target_a_team_size = workers_to_wake;
-    }
-    halide_cond_broadcast(&work_queue.wake_a_team);
-    if (work_queue.target_a_team_size > work_queue.a_team_size) {
-        halide_cond_broadcast(&work_queue.wake_b_team);
-        if (stealable_jobs) {
-            halide_cond_broadcast(&work_queue.wake_owners);
+    if (workers_to_wake) {
+        if (nested_parallelism || workers_to_wake > work_queue.desired_threads_working - 1) {
+            // If there's nested parallelism going on, we just wake up
+            // everyone. TODO: make this more precise.
+            work_queue.target_a_team_size = work_queue.desired_threads_working - 1;
+        } else {
+            work_queue.target_a_team_size = workers_to_wake;
+        }
+        halide_cond_broadcast(&work_queue.wake_a_team);
+        if (work_queue.target_a_team_size > work_queue.a_team_size) {
+            halide_cond_broadcast(&work_queue.wake_b_team);
+            if (stealable_jobs) {
+                halide_cond_broadcast(&work_queue.wake_owners);
+            }
         }
     }
 }
@@ -359,17 +377,17 @@ WEAK void halide_shutdown_thread_pool() {
         // to go home
         halide_mutex_lock(&work_queue.mutex);
         work_queue.shutdown = true;
-        
+
         halide_cond_broadcast(&work_queue.wake_a_team);
         halide_cond_broadcast(&work_queue.wake_b_team);
         halide_cond_broadcast(&work_queue.wake_owners);
         halide_mutex_unlock(&work_queue.mutex);
-        
+
         // Wait until they leave
         for (int i = 0; i < work_queue.threads_created; i++) {
             halide_join_thread(work_queue.threads[i]);
         }
-        
+
         // Tidy up
         halide_mutex_destroy(&work_queue.mutex);
         halide_cond_destroy(&work_queue.wake_a_team);
@@ -395,7 +413,6 @@ WEAK int halide_semaphore_release(halide_semaphore_t *s, int n) {
     if (new_val == n) {
         // We may have just made a job runnable
         halide_cond_broadcast(&work_queue.wake_a_team);
-        halide_cond_broadcast(&work_queue.wake_b_team);
         halide_cond_broadcast(&work_queue.wake_owners);
     }
     return new_val;
