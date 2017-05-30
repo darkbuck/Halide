@@ -12,45 +12,11 @@ using std::pair;
 using std::string;
 using std::map;
 
-class GenerateProducerBody : public IRMutator {
-    const string &func;
-    Expr sema;
+/** A mutator which eagerly folds no-op stmts */
+class NoOpCollapsingMutator : public IRMutator {
+protected:
 
     using IRMutator::visit;
-
-    // Preserve produce nodes and add synchronization
-    void visit(const ProducerConsumer *op) {
-        if (op->name == func && op->is_producer) {
-            // Add post-synchronization
-            Expr release = Call::make(Int(32), "halide_semaphore_release", {sema, 1}, Call::Extern);
-            Stmt body = Block::make(op->body, Evaluate::make(release));
-            stmt = ProducerConsumer::make_produce(op->name, body);
-        } else {
-            Stmt body = mutate(op->body);
-            if (is_no_op(body)) {
-                stmt = body;
-            } else {
-                stmt = ProducerConsumer::make(op->name, op->is_producer, body);
-            }
-        }
-    }
-
-    // Other stmt leaves get replaced with no-ops
-    void visit(const Evaluate *) {
-        stmt = Evaluate::make(0);
-    }
-
-    void visit(const Provide *) {
-        stmt = Evaluate::make(0);
-    }
-
-    void visit(const AssertStmt *) {
-        stmt = Evaluate::make(0);
-    }
-
-    void visit(const Prefetch *) {
-        stmt = Evaluate::make(0);
-    }
 
     void visit(const LetStmt *op) {
         Stmt body = mutate(op->body);
@@ -113,6 +79,47 @@ class GenerateProducerBody : public IRMutator {
             stmt = IfThenElse::make(op->condition, then_case, else_case);
         }
     }
+};
+
+class GenerateProducerBody : public NoOpCollapsingMutator {
+    const string &func;
+    Expr sema;
+
+    using NoOpCollapsingMutator::visit;
+
+    // Preserve produce nodes and add synchronization
+    void visit(const ProducerConsumer *op) {
+        if (op->name == func && op->is_producer) {
+            // Add post-synchronization
+            Expr release = Call::make(Int(32), "halide_semaphore_release", {sema, 1}, Call::Extern);
+            Stmt body = Block::make(op->body, Evaluate::make(release));
+            stmt = ProducerConsumer::make_produce(op->name, body);
+        } else {
+            Stmt body = mutate(op->body);
+            if (is_no_op(body)) {
+                stmt = body;
+            } else {
+                stmt = ProducerConsumer::make(op->name, op->is_producer, body);
+            }
+        }
+    }
+
+    // Other stmt leaves get replaced with no-ops
+    void visit(const Evaluate *) {
+        stmt = Evaluate::make(0);
+    }
+
+    void visit(const Provide *) {
+        stmt = Evaluate::make(0);
+    }
+
+    void visit(const AssertStmt *) {
+        stmt = Evaluate::make(0);
+    }
+
+    void visit(const Prefetch *) {
+        stmt = Evaluate::make(0);
+    }
 
     void visit(const Acquire *op) {
         Stmt body = mutate(op->body);
@@ -150,11 +157,11 @@ public:
         func(f), sema(s), cloned_acquires(a) {}
 };
 
-class GenerateConsumerBody : public IRMutator {
+class GenerateConsumerBody : public NoOpCollapsingMutator {
     const string &func;
     Expr sema;
 
-    using IRMutator::visit;
+    using NoOpCollapsingMutator::visit;
 
     void visit(const ProducerConsumer *op) {
         if (op->name == func) {
@@ -262,7 +269,6 @@ class ForkAsyncProducers : public IRMutator {
             }
 
             body = LetStmt::make(sema_name, sema_space, body);
-
             stmt = Realize::make(op->name, op->types, op->bounds, op->condition, body);
         } else {
             IRMutator::visit(op);
@@ -324,13 +330,36 @@ class InitializeSemaphores : public IRMutator {
 // Tighten the scope of consume nodes as much as possible to avoid needless synchronization.
 class TightenConsumeNodes : public IRMutator {
     using IRMutator::visit;
+    using IRMutator::mutate;
+
+    std::set<Stmt> unchanged;
+
+public:
+
+    Stmt mutate(const Stmt &s) {
+        if (unchanged.count(s)) {
+            return s;
+        } else {
+            Stmt new_s = IRMutator::mutate(s);
+            if (new_s.same_as(s)) {
+                unchanged.insert(s);
+            }
+            return new_s;
+        }
+    }
+
+private:
 
     void visit(const ProducerConsumer *op) {
         Stmt body = mutate(op->body);
         if (op->is_producer) {
-            stmt = ProducerConsumer::make(op->name, true, body);
+            if (op->body.same_as(body)) {
+                stmt = op;
+            } else {
+                stmt = ProducerConsumer::make(op->name, true, body);
+            }
         } else if (const LetStmt *let = body.as<LetStmt>()) {
-            stmt = mutate(ProducerConsumer::make(op->name, false, let->body));
+            stmt = mutate(ProducerConsumer::make(op->name, op->is_producer, let->body));
             stmt = LetStmt::make(let->name, let->value, stmt);
         } else if (const Block *block = body.as<Block>()) {
             // Check which sides it's used on
@@ -343,21 +372,23 @@ class TightenConsumeNodes : public IRMutator {
                 IRMutator::visit(op);
             } else if (first) {
                 stmt = Block::make(
-                    mutate(ProducerConsumer::make(op->name, false, block->first)),
-                    mutate(block->rest));
+                    mutate(ProducerConsumer::make(op->name, op->is_producer, block->first)),
+                    block->rest);
             } else if (rest) {
                 stmt = Block::make(
-                    mutate(block->first),
-                    mutate(ProducerConsumer::make(op->name, false, block->rest)));
+                    block->first,
+                    mutate(ProducerConsumer::make(op->name, op->is_producer, block->rest)));
             } else {
                 stmt = mutate(op->body);
             }
         } else if (const ProducerConsumer *pc = body.as<ProducerConsumer>()) {
-            Stmt new_body = mutate(ProducerConsumer::make(op->name, false, pc->body));
+            Stmt new_body = mutate(ProducerConsumer::make(op->name, op->is_producer, pc->body));
             stmt = ProducerConsumer::make(pc->name, pc->is_producer, new_body);
         } else if (const Realize *r = body.as<Realize>()) {
-            Stmt new_body = mutate(ProducerConsumer::make(op->name, false, r->body));
+            Stmt new_body = mutate(ProducerConsumer::make(op->name, op->is_producer, r->body));
             stmt = Realize::make(r->name, r->types, r->bounds, r->condition, new_body);
+        } else if (body.same_as(op->body)) {
+            stmt = op;
         } else {
             stmt = ProducerConsumer::make(op->name, op->is_producer, body);
         }
