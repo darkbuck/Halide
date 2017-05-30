@@ -3132,19 +3132,17 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
             using IRVisitor::visit;
             void visit(const Fork *op) {
                 IRVisitor::visit(op);
-                // Conservatively assume that if both sides are
-                // blocking, there's a producer-consumer dependence in
-                // both directions across this edge (there may not
-                // be!). If either side is non-blocking, then a single
-                // thread that enters one side and gets blocked can
-                // just steal tasks from the other side.
+                // Conservatively assume that if either side is
+                // blocking, then the owner of this fork may get stuck
+                // waiting for the completion of a thread that stole
+                // the blocking side.
                 Stmt first = op->first, rest = op->rest;
                 MayBlock first_may_block, rest_may_block;
                 op->first.accept(&first_may_block);
                 op->rest.accept(&rest_may_block);
                 // TODO: Dig into any outer acquires / serial fors surrounding an acquire. An acquire
                 // at the level of the fork isn't actually blocking.
-                if (first_may_block.result && rest_may_block.result) {
+                if (first_may_block.result || rest_may_block.result) {
                     result++;
                 }
             }
