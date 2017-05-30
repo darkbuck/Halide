@@ -330,25 +330,35 @@ class InitializeSemaphores : public IRMutator {
 // Tighten the scope of consume nodes as much as possible to avoid needless synchronization.
 class TightenConsumeNodes : public IRMutator {
     using IRMutator::visit;
-    using IRMutator::mutate;
 
-    std::set<Stmt> unchanged;
-
-public:
-
-    Stmt mutate(const Stmt &s) {
-        if (unchanged.count(s)) {
-            return s;
-        } else {
-            Stmt new_s = IRMutator::mutate(s);
-            if (new_s.same_as(s)) {
-                unchanged.insert(s);
+    Stmt make_consume(string name, Stmt body) {
+        if (const LetStmt *let = body.as<LetStmt>()) {
+            return LetStmt::make(let->name, let->value, make_consume(name, let->body));
+        } else if (const Block *block = body.as<Block>()) {
+            // Check which sides it's used on
+            Scope<int> scope;
+            scope.push(name, 0);
+            scope.push(name + ".buffer", 0);
+            bool first = stmt_uses_vars(block->first, scope);
+            bool rest = stmt_uses_vars(block->rest, scope);
+            if (first && rest) {
+                return ProducerConsumer::make(name, false, body);
+            } else if (first) {
+                return Block::make(make_consume(name, block->first), block->rest);
+            } else if (rest) {
+                return Block::make(block->first, make_consume(name, block->rest));
+            } else {
+                // Used on neither side?!
+                return body;
             }
-            return new_s;
+        } else if (const ProducerConsumer *pc = body.as<ProducerConsumer>()) {
+            return ProducerConsumer::make(pc->name, pc->is_producer, make_consume(name, pc->body));
+        } else if (const Realize *r = body.as<Realize>()) {
+            return Realize::make(r->name, r->types, r->bounds, r->condition, make_consume(name, r->body));
+        } else {
+            return ProducerConsumer::make(name, false, body);
         }
     }
-
-private:
 
     void visit(const ProducerConsumer *op) {
         Stmt body = mutate(op->body);
@@ -358,39 +368,8 @@ private:
             } else {
                 stmt = ProducerConsumer::make(op->name, true, body);
             }
-        } else if (const LetStmt *let = body.as<LetStmt>()) {
-            stmt = mutate(ProducerConsumer::make(op->name, op->is_producer, let->body));
-            stmt = LetStmt::make(let->name, let->value, stmt);
-        } else if (const Block *block = body.as<Block>()) {
-            // Check which sides it's used on
-            Scope<int> scope;
-            scope.push(op->name, 0);
-            scope.push(op->name + ".buffer", 0);
-            bool first = stmt_uses_vars(block->first, scope);
-            bool rest = stmt_uses_vars(block->rest, scope);
-            if (first && rest) {
-                IRMutator::visit(op);
-            } else if (first) {
-                stmt = Block::make(
-                    mutate(ProducerConsumer::make(op->name, op->is_producer, block->first)),
-                    block->rest);
-            } else if (rest) {
-                stmt = Block::make(
-                    block->first,
-                    mutate(ProducerConsumer::make(op->name, op->is_producer, block->rest)));
-            } else {
-                stmt = mutate(op->body);
-            }
-        } else if (const ProducerConsumer *pc = body.as<ProducerConsumer>()) {
-            Stmt new_body = mutate(ProducerConsumer::make(op->name, op->is_producer, pc->body));
-            stmt = ProducerConsumer::make(pc->name, pc->is_producer, new_body);
-        } else if (const Realize *r = body.as<Realize>()) {
-            Stmt new_body = mutate(ProducerConsumer::make(op->name, op->is_producer, r->body));
-            stmt = Realize::make(r->name, r->types, r->bounds, r->condition, new_body);
-        } else if (body.same_as(op->body)) {
-            stmt = op;
         } else {
-            stmt = ProducerConsumer::make(op->name, op->is_producer, body);
+            stmt = make_consume(op->name, body);
         }
     }
 };
