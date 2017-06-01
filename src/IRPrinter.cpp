@@ -699,18 +699,26 @@ void IRPrinter::visit(const Block *op) {
 }
 
 void IRPrinter::visit(const Fork *op) {
+    vector<Stmt> stmts;
+    stmts.push_back(op->first);
+    Stmt rest = op->rest;
+    while (const Fork *f = rest.as<Fork>()) {
+        stmts.push_back(f->first);
+        rest = f->rest;
+    }
+    stmts.push_back(rest);
+
     do_indent();
-    stream << "fork {\n";
-    indent += 2;
-    print(op->first);
-    indent -= 2;
-    do_indent();
-    stream << "} {\n";
-    indent += 2;
-    print(op->rest);
-    indent -= 2;
-    do_indent();
-    stream << "}\n";
+    stream << "fork ";
+    for (Stmt s : stmts) {
+        stream << "{\n";
+        indent += 2;
+        print(s);
+        indent -= 2;
+        do_indent();
+        stream << "} ";
+    }
+    stream << "\n";
 }
 
 void IRPrinter::visit(const IfThenElse *op) {

@@ -1,5 +1,6 @@
 #include "AsyncProducers.h"
 #include "ExprUsesVar.h"
+#include "IREquality.h"
 #include "IRMutator.h"
 #include "IROperator.h"
 
@@ -83,7 +84,7 @@ protected:
 
 class GenerateProducerBody : public NoOpCollapsingMutator {
     const string &func;
-    Expr sema;
+    vector<Expr> sema;
 
     using NoOpCollapsingMutator::visit;
 
@@ -91,12 +92,17 @@ class GenerateProducerBody : public NoOpCollapsingMutator {
     void visit(const ProducerConsumer *op) {
         if (op->name == func && op->is_producer) {
             // Add post-synchronization
-            Expr release = Call::make(Int(32), "halide_semaphore_release", {sema, 1}, Call::Extern);
-            Stmt body = Block::make(op->body, Evaluate::make(release));
+            internal_assert(!sema.empty()) << "Duplicate produce node!\n";
+            Stmt body = op->body;
+            while (!sema.empty()) {
+                Expr release = Call::make(Int(32), "halide_semaphore_release", {sema.back(), 1}, Call::Extern);
+                body = Block::make(body, Evaluate::make(release));
+                sema.pop_back();
+            }
             stmt = ProducerConsumer::make_produce(op->name, body);
         } else {
             Stmt body = mutate(op->body);
-            if (is_no_op(body)) {
+            if (is_no_op(body) || op->is_producer) {
                 stmt = body;
             } else {
                 stmt = ProducerConsumer::make(op->name, op->is_producer, body);
@@ -128,11 +134,11 @@ class GenerateProducerBody : public NoOpCollapsingMutator {
         if (is_no_op(body)) {
             stmt = body;
         } else if (starts_with(var->name, func + ".folding_semaphore.")) {
-            // This is a storage-folding semaphore. Keep it.
+            // This is a storage-folding semaphore for the func we're producing. Keep it.
             stmt = Acquire::make(op->semaphore, op->count, body);
         } else {
-            // Uh-oh, the consumer also has a copy of this acquire! Make
-            // a distinct one for the producer
+            // This semaphore will end up on both sides of the fork,
+            // so we'd better duplicate it.
             string cloned_acquire = var->name + unique_name('_');
             cloned_acquires[var->name] = cloned_acquire;
             stmt = Acquire::make(Variable::make(type_of<halide_semaphore_t *>(), cloned_acquire), op->count, body);
@@ -153,13 +159,13 @@ class GenerateProducerBody : public NoOpCollapsingMutator {
     set<string> inner_semaphores;
 
 public:
-    GenerateProducerBody(const string &f, Expr s, map<string, string> &a) :
+    GenerateProducerBody(const string &f, const vector<Expr> &s, map<string, string> &a) :
         func(f), sema(s), cloned_acquires(a) {}
 };
 
 class GenerateConsumerBody : public NoOpCollapsingMutator {
     const string &func;
-    Expr sema;
+    vector<Expr> sema;
 
     using NoOpCollapsingMutator::visit;
 
@@ -170,7 +176,8 @@ class GenerateConsumerBody : public NoOpCollapsingMutator {
                 stmt = Evaluate::make(0);
             } else {
                 // Synchronize on the work done by the producer before beginning consumption
-                stmt = Acquire::make(sema, 1, op);
+                stmt = Acquire::make(sema.back(), 1, op);
+                sema.pop_back();
             }
         } else {
             IRMutator::visit(op);
@@ -189,7 +196,7 @@ class GenerateConsumerBody : public NoOpCollapsingMutator {
     }
 
 public:
-    GenerateConsumerBody(const string &f, Expr s) :
+    GenerateConsumerBody(const string &f, const vector<Expr> &s) :
         func(f), sema(s) {}
 };
 
@@ -223,6 +230,22 @@ public:
     }
 };
 
+class CountConsumeNodes : public IRVisitor {
+    const string &func;
+
+    using IRVisitor::visit;
+
+    void visit(const ProducerConsumer *op) {
+        if (op->name == func && !op->is_producer) {
+            count++;
+        }
+        IRVisitor::visit(op);
+    }
+public:
+    CountConsumeNodes(const string &f) : func(f) {}
+    int count = 0;
+};
+
 class ForkAsyncProducers : public IRMutator {
     using IRMutator::visit;
 
@@ -235,18 +258,31 @@ class ForkAsyncProducers : public IRMutator {
         internal_assert(it != env.end());
         Function f = it->second;
         if (f.schedule().async()) {
+            Stmt body = op->body;
+
             // Make two copies of the body, one which only does the
             // producer, and one which only does the consumer. Inject
             // synchronization to preserve dependencies. Put them in a
             // task-parallel block.
 
-            // Make a semaphore.
-            string sema_name = op->name + ".semaphore";
-            Expr sema_var = Variable::make(Handle(), sema_name);
+            // Make a semaphore per consume node
+            CountConsumeNodes consumes(op->name);
+            body.accept(&consumes);
 
-            Stmt body = op->body;
-            Stmt producer = GenerateProducerBody(op->name, sema_var, cloned_acquires).mutate(body);
-            Stmt consumer = GenerateConsumerBody(op->name, sema_var).mutate(body);
+            vector<string> sema_names;
+            vector<Expr> sema_vars;
+            for (int i = 0; i < consumes.count; i++) {
+                sema_names.push_back(op->name + ".semaphore_" + std::to_string(i));
+                sema_vars.push_back(Variable::make(Handle(), sema_names.back()));
+            }
+
+            // debug(0) << "Body: " << body << "\n\n";
+
+            Stmt producer = GenerateProducerBody(op->name, sema_vars, cloned_acquires).mutate(body);
+            Stmt consumer = GenerateConsumerBody(op->name, sema_vars).mutate(body);
+
+            // debug(0) << "Producer: " << producer << "\n\n";
+            // debug(0) << "Consumer: " << consumer << "\n\n";
 
             // Recurse on both sides
             producer = mutate(producer);
@@ -255,20 +291,23 @@ class ForkAsyncProducers : public IRMutator {
             // Run them concurrently
             body = Fork::make(producer, consumer);
 
-            // Make a semaphore on the stack
-            Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), "halide_make_semaphore",
-                                         {0}, Call::Extern);
+            for (const string &sema_name : sema_names) {
+                // Make a semaphore on the stack
+                Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), "halide_make_semaphore",
+                                             {0}, Call::Extern);
 
-            // If there's a nested async producer, we may have
-            // recursively cloned this semaphore inside the mutation
-            // of the producer and consumer.
-            auto it = cloned_acquires.find(sema_name);
-            if (it != cloned_acquires.end()) {
-                body = CloneAcquire(sema_name, it->second).mutate(body);
-                body = LetStmt::make(it->second, sema_space, body);
+                // If there's a nested async producer, we may have
+                // recursively cloned this semaphore inside the mutation
+                // of the producer and consumer.
+                auto it = cloned_acquires.find(sema_name);
+                if (it != cloned_acquires.end()) {
+                    body = CloneAcquire(sema_name, it->second).mutate(body);
+                    body = LetStmt::make(it->second, sema_space, body);
+                }
+
+                body = LetStmt::make(sema_name, sema_space, body);
             }
 
-            body = LetStmt::make(sema_name, sema_space, body);
             stmt = Realize::make(op->name, op->types, op->bounds, op->condition, body);
         } else {
             IRMutator::visit(op);
@@ -331,9 +370,9 @@ class InitializeSemaphores : public IRMutator {
 class TightenConsumeNodes : public IRMutator {
     using IRMutator::visit;
 
-    Stmt make_consume(string name, Stmt body) {
+    Stmt make_consume(string name, bool is_producer, Stmt body) {
         if (const LetStmt *let = body.as<LetStmt>()) {
-            return LetStmt::make(let->name, let->value, make_consume(name, let->body));
+            return LetStmt::make(let->name, let->value, make_consume(name, is_producer, let->body));
         } else if (const Block *block = body.as<Block>()) {
             // Check which sides it's used on
             Scope<int> scope;
@@ -341,35 +380,38 @@ class TightenConsumeNodes : public IRMutator {
             scope.push(name + ".buffer", 0);
             bool first = stmt_uses_vars(block->first, scope);
             bool rest = stmt_uses_vars(block->rest, scope);
-            if (first && rest) {
-                return ProducerConsumer::make(name, false, body);
+            if (first && rest && is_producer) {
+                return ProducerConsumer::make(name, is_producer, body);
+            } else if (first && rest) {
+                return Block::make(make_consume(name, is_producer, block->first),
+                                   make_consume(name, is_producer, block->rest));
             } else if (first) {
-                return Block::make(make_consume(name, block->first), block->rest);
+                return Block::make(make_consume(name, is_producer, block->first), block->rest);
             } else if (rest) {
-                return Block::make(block->first, make_consume(name, block->rest));
+                return Block::make(block->first, make_consume(name, is_producer, block->rest));
             } else {
                 // Used on neither side?!
                 return body;
             }
         } else if (const ProducerConsumer *pc = body.as<ProducerConsumer>()) {
-            return ProducerConsumer::make(pc->name, pc->is_producer, make_consume(name, pc->body));
+            return ProducerConsumer::make(pc->name, pc->is_producer, make_consume(name, is_producer, pc->body));
         } else if (const Realize *r = body.as<Realize>()) {
-            return Realize::make(r->name, r->types, r->bounds, r->condition, make_consume(name, r->body));
+            return Realize::make(r->name, r->types, r->bounds, r->condition, make_consume(name, is_producer, r->body));
         } else {
-            return ProducerConsumer::make(name, false, body);
+            return ProducerConsumer::make(name, is_producer, body);
         }
     }
 
     void visit(const ProducerConsumer *op) {
         Stmt body = mutate(op->body);
-        if (op->is_producer) {
+        if (false && op->is_producer) {
             if (op->body.same_as(body)) {
                 stmt = op;
             } else {
                 stmt = ProducerConsumer::make(op->name, true, body);
             }
         } else {
-            stmt = make_consume(op->name, body);
+            stmt = make_consume(op->name, op->is_producer, body);
         }
     }
 };
@@ -427,10 +469,69 @@ class ExpandAcquireNodes : public IRMutator {
     }
 };
 
+class TightenForkNodes : public IRMutator {
+    using IRMutator::visit;
+
+    Stmt make_fork(Stmt first, Stmt rest) {
+        const LetStmt *lf = first.as<LetStmt>();
+        const LetStmt *lr = rest.as<LetStmt>();
+        const Realize *rf = first.as<Realize>();
+        const Realize *rr = rest.as<Realize>();
+        if (lf && lr &&
+            lf->name == lr->name &&
+            equal(lf->value, lr->value)) {
+            return LetStmt::make(lf->name, lf->value, make_fork(lf->body, lr->body));
+        } else if (lf && !stmt_uses_var(rest, lf->name)) {
+            return LetStmt::make(lf->name, lf->value, make_fork(lf->body, rest));
+        } else if (lr && !stmt_uses_var(first, lr->name)) {
+            return LetStmt::make(lr->name, lr->value, make_fork(first, lr->body));
+        } else if (rf && !stmt_uses_var(rest, rf->name)) {
+            return Realize::make(rf->name, rf->types, rf->bounds, rf->condition, make_fork(rf->body, rest));
+        } else if (rr && !stmt_uses_var(first, rr->name)) {
+            return Realize::make(rr->name, rr->types, rr->bounds, rr->condition, make_fork(first, rr->body));
+        } else {
+            return Fork::make(first, rest);
+        }
+    }
+
+    void visit(const Fork *op) {
+        Stmt first = mutate(op->first), rest = mutate(op->rest);
+        if (is_no_op(first)) {
+            stmt = rest;
+        } else if (is_no_op(rest)) {
+            stmt = first;
+        } else {
+            stmt = make_fork(first, rest);
+        }
+    }
+
+    // This is also a good time to nuke any dangling allocations and lets
+    void visit(const Realize *op) {
+        Stmt body = mutate(op->body);
+        if (!stmt_uses_var(body, op->name)) {
+            stmt = body;
+        } else {
+            stmt = Realize::make(op->name, op->types, op->bounds, op->condition, body);
+        }
+    }
+
+    void visit(const LetStmt *op) {
+        Stmt body = mutate(op->body);
+        if (!stmt_uses_var(body, op->name)) {
+            stmt = body;
+        } else {
+            stmt = LetStmt::make(op->name, op->value, body);
+        }
+    }
+};
+
+// TODO: merge semaphores
+
 Stmt fork_async_producers(Stmt s, const map<string, Function> &env) {
     s = TightenConsumeNodes().mutate(s);
     s = ForkAsyncProducers(env).mutate(s);
     s = ExpandAcquireNodes().mutate(s);
+    s = TightenForkNodes().mutate(s);
     s = InitializeSemaphores().mutate(s);
     return s;
 }
