@@ -21,6 +21,7 @@ EXPORT Stmt optimize_hexagon_shuffles(Stmt s, int lut_alignment);
  * interleaving/deinterleaving. */
 EXPORT Stmt optimize_hexagon_instructions(Stmt s, Target t);
 
+EXPORT Stmt undo_bad_slice_vector_hoisting(Stmt s, Target &t);
 /** Generate deinterleave or interleave operations, operating on
  * groups of vectors at a time. */
 //@{

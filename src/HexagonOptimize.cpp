@@ -1686,6 +1686,38 @@ class OptimizeShuffles : public IRMutator {
 public:
     OptimizeShuffles(int lut_alignment) : lut_alignment(lut_alignment) {}
 };
+class UndoBadSliceVectorHoisting : public IRMutator {
+    using IRMutator::visit;
+    void visit(const Shuffle *op) {
+        if (op->is_slice() && op->vectors.size() == 1) {
+            const Shuffle *cv = op->vectors[0].as<Shuffle>();
+            if (cv && cv->is_concat()) {
+                std::vector<Expr> new_vectors;
+                const std::vector<Expr> &old_vectors = cv->vectors;
+                for (auto v : old_vectors) {
+                    Type t = v.type();
+                    Type target_t = t.with_bits(t.bits()/2).with_code(Type::UInt);
+                    Expr e = lossless_cast(target_t, v);
+                    if (e.defined()) {
+                        new_vectors.push_back(e);
+                    } else {
+                        break;
+                    }
+                }
+                if (new_vectors.size() == old_vectors.size()) {
+                    Expr new_cv = Shuffle::make(new_vectors, cv->indices);
+                    Expr new_slice_vector = Shuffle::make({new_cv}, op->indices);
+                    Type t = op->type;
+                    Type target_t = t.with_bits(cv->type.bits());
+                    expr = Cast::make(target_t, new_slice_vector);
+                    return;
+                }
+            }
+        }
+        IRMutator::visit(op);
+    }
+
+};
 }  // namespace
 
 Stmt optimize_hexagon_shuffles(Stmt s, int lut_alignment) {
@@ -1693,6 +1725,11 @@ Stmt optimize_hexagon_shuffles(Stmt s, int lut_alignment) {
     // dynamic_shuffle (vlut) calls.
     return OptimizeShuffles(lut_alignment).mutate(s);
 }
+Stmt undo_bad_slice_vector_hoisting(Stmt s, Target &t) {
+    s = UndoBadSliceVectorHoisting().mutate(s);
+    return s;
+}
+
 
 Stmt optimize_hexagon_instructions(Stmt s, Target t) {
     // Peephole optimize for Hexagon instructions. These can generate
