@@ -11,19 +11,26 @@ struct work {
     void *user_context;
     int active_workers;
     int exit_status;
+    int next_semaphore;
     // which condition variable is the owner sleeping on. NULL if it isn't sleeping.
     bool owner_is_sleeping;
-    int make_runnable() {
-        if (task.semaphore == NULL) {
-            return 0x7fffffff;
+
+    bool make_runnable() {
+        for (; next_semaphore < task.num_semaphores; next_semaphore++) {
+            if (!halide_semaphore_try_acquire(task.semaphores[next_semaphore].semaphore,
+                                              task.semaphores[next_semaphore].count)) {
+                // Note that we don't release the semaphores already
+                // acquired. We never have two consumers contending
+                // over the same semaphore, so it's not helpful to do
+                // so.
+                return false;
+            }
         }
-        return halide_semaphore_try_acquire(task.semaphore, task.count);
+        // Future iterations of this task need to acquire the semaphores from scratch.
+        next_semaphore = 0;
+        return true;
     }
-    void release() {
-        if (task.semaphore) {
-            halide_semaphore_release(task.semaphore, task.count);
-        }
-    }
+
     bool running() {
         return task.extent || active_workers;
     }
@@ -227,7 +234,7 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     // Gather some information about the work.
 
     // Some tasks require a minimum number of threads to make forward
-    // progress. Also assume the tasks need to run concurrently.
+    // progress. Also assume the blocking tasks need to run concurrently.
     int min_threads = 0;
 
     // Count how many workers to wake. Start at -1 because this thread
@@ -239,9 +246,10 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     bool stealable_jobs = false;
 
     for (int i = 0; i < num_jobs; i++) {
-        min_threads += jobs[i].task.min_threads;
         if (!jobs[i].task.may_block) {
             stealable_jobs = true;
+        } else {
+            min_threads += jobs[i].task.min_threads;
         }
         if (jobs[i].task.serial) {
             workers_to_wake++;
@@ -325,13 +333,15 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     job.task.extent = size;
     job.task.may_block = false; // May only call do_par_for if it there are no inner forks or acquires, so TODO: set this to false
     job.task.serial = false;
-    job.task.semaphore = NULL;
+    job.task.semaphores = NULL;
+    job.task.num_semaphores = 0;
     job.task.closure = closure;
     job.task.min_threads = 1;
     job.task.name = NULL;
     job.user_context = user_context;
     job.exit_status = 0;
     job.active_workers = 0;
+    job.next_semaphore = 0;
     job.owner_is_sleeping = false;
     halide_mutex_lock(&work_queue.mutex);
     enqueue_work_already_locked(1, &job);
@@ -343,15 +353,18 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
 WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
                                   halide_parallel_task_t *tasks) {
     // Avoid entering the task system if possible
+    #if 0
     if (num_tasks == 1) {
         if (tasks->extent == 0) {
             return 0;
         } else if (tasks->extent == 1 &&
-                   (tasks->semaphore == NULL ||
-                    halide_semaphore_try_acquire(tasks->semaphore, tasks->count))) {
+                   (tasks->num_semaphores == 0 ||
+                    (tasks->num_semaphores == 1 &&
+                     halide_semaphore_try_acquire(tasks->semaphores->semaphore, tasks->semaphores->count)))) {
             return tasks->fn(user_context, tasks->min, tasks->closure);
         }
     }
+    #endif
 
     work *jobs = (work *)__builtin_alloca(sizeof(work) * num_tasks);
 
@@ -360,6 +373,7 @@ WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
         jobs[i].user_context = user_context;
         jobs[i].exit_status = 0;
         jobs[i].active_workers = 0;
+        jobs[i].next_semaphore = 0;
         jobs[i].owner_is_sleeping = false;
     }
 

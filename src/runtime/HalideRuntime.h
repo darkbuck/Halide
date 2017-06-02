@@ -131,16 +131,21 @@ extern void halide_shutdown_thread_pool();
 typedef int (*halide_do_par_for_t)(void *, halide_task_t, int, int, uint8_t*);
 extern halide_do_par_for_t halide_set_custom_do_par_for(halide_do_par_for_t do_par_for);
 
+struct halide_semaphore_acquire_t {
+    struct halide_semaphore_t *semaphore;
+    int count;
+};
+
 struct halide_parallel_task_t {
     // Many of the fields below will be compile-time constants. Once we have
     // more static metadata about a task, there should be a pointer to
     // static task info instead.
     halide_task_t fn;
-    struct halide_semaphore_t *semaphore;
     uint8_t *closure;
+    struct halide_semaphore_acquire_t *semaphores;
     const char *name;
     int min, extent;
-    int count;
+    int num_semaphores;
     int min_threads;
     bool may_block, serial;
 };
