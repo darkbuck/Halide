@@ -131,26 +131,86 @@ extern void halide_shutdown_thread_pool();
 typedef int (*halide_do_par_for_t)(void *, halide_task_t, int, int, uint8_t*);
 extern halide_do_par_for_t halide_set_custom_do_par_for(halide_do_par_for_t do_par_for);
 
+/** A struct representing a semaphore and a number of items that must
+ * be acquired from it. Used in halide_parallel_task_t below. */
 struct halide_semaphore_acquire_t {
     struct halide_semaphore_t *semaphore;
     int count;
 };
 
+/** A parallel task to be passed to halide_do_parallel_tasks. That
+ * tasks may recursively call halide_do_parallel_tasks, and there may
+ * be complex dependencies between seemingly unrelated tasks expressed
+ * using semaphores. If you are using a custom task system, care must
+ * be taken to avoid potential deadlock. This can be done by carefully
+ * respecting the static metadata at the end of the task struct.*/
 struct halide_parallel_task_t {
-    // Many of the fields below will be compile-time constants. Once we have
-    // more static metadata about a task, there should be a pointer to
-    // static task info instead.
+    // The function to call. It takes a user context, an index, and a closure.
     halide_task_t fn;
+
+    // The closure to pass it
     uint8_t *closure;
-    struct halide_semaphore_acquire_t *semaphores;
+
+    // The name of the function to be called. For debugging purposes only.
     const char *name;
-    int min, extent;
+
+    // An array of semaphores that must be acquired before the
+    // function is called. Must be reacquired for every call made.
+    struct halide_semaphore_acquire_t *semaphores;
     int num_semaphores;
+
+    // The function should be called 'extent' times, with index
+    // parameter set to min, min + 1, ... (min + extent - 1).
+    int min, extent;
+
+    // A parallel task provides two pieces of static metadata to
+    // prevent unbounded resource usage or deadlock.
+
+    // The first is the minimum number of execution contexts (call
+    // stacks or threads) necessary for the function to run to
+    // completion. This may be greater than one when there is nested
+    // parallelism with internal producer-consumer relationships
+    // (calling the function recursively spawns and blocks on parallel
+    // sub-tasks that communicate with each other via semaphores). If
+    // a parallel runtime calls the function when fewer than this many
+    // threads are idle, it may need to create more threads to
+    // complete the task, or else risk deadlock due to committing all
+    // threads to tasks that cannot complete without more.
+    //
+    // FIXME: Note that extern stages are assumed to only require a
+    // single thread to complete. If the extern stage is itself a
+    // Halide pipeline, this may be an underestimate.
     int min_threads;
-    bool may_block, serial;
+
+    // The second piece of static metadata is a flag indicating
+    // whether this task recursively enqueues tasks that acquire
+    // semaphores. It is not safe for a parallel runtime to introduce
+    // a dependency between this task completing and another seemingly
+    // unrelated task completing. For example, if task A spawns some
+    // sub-task A', and finds it temporarily unrunnable, it should not
+    // steal a task B that may block instead, as running B may first
+    // unblock A' and then try to acquire something that A would have
+    // released after returning from A'.  More simply: If you're
+    // recursively inside the task system, don't steal tasks that may
+    // block.
+    //
+    // Any call to an extern stage is assumed to be non-blocking. This
+    // is actually safe, as there can't be semaphores shared by the
+    // parent program and the extern stage, so there should be no way
+    // to get the kind of mutual blocking described above.
+    bool may_block;
+
+    // The calls to the function should be in serial order from min to min+extent-1, with only
+    // one executing at a time. If false, any order is fine, and
+    // concurrency is fine.
+    bool serial;
 };
 
-extern int halide_do_parallel_tasks(void *user_context, int num_tasks, struct halide_parallel_task_t *tasks);
+/** Enqueue some number of the tasks described above and wait for them
+ * to complete. While waiting, the calling threads assists with either
+ * the tasks enqueued, or other non-blocking tasks in the task
+ * system. */
+extern int halide_do_parallel_tasks(void *user_context, int num_tasks, const struct halide_parallel_task_t *tasks);
 
 /** If you use the default do_par_for, you can still set a custom
  * handler to perform each individual task. Returns the old handler. */

@@ -351,7 +351,7 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
 }
 
 WEAK int halide_do_parallel_tasks(void *user_context, int num_tasks,
-                                  halide_parallel_task_t *tasks) {
+                                  const struct halide_parallel_task_t *tasks) {
     // Avoid entering the task system if possible
     #if 0
     if (num_tasks == 1) {
