@@ -208,6 +208,38 @@ private:
         stmt = ProducerConsumer::make(op->name, op->is_producer, body);
     }
 
+    Stmt incr_active_threads() {
+        Expr state = Variable::make(Handle(), "profiler_state");
+        return Evaluate::make(Call::make(Int(32), "halide_profiler_incr_active_threads",
+                                  {state}, Call::Extern));
+    }
+
+    Stmt decr_active_threads() {
+        Expr state = Variable::make(Handle(), "profiler_state");
+        return Evaluate::make(Call::make(Int(32), "halide_profiler_decr_active_threads",
+                                         {state}, Call::Extern));
+    }
+
+    Stmt visit_parallel_task(Stmt s) {
+        if (const Fork *f = s.as<Fork>()) {
+            return Fork::make(visit_parallel_task(f->first), visit_parallel_task(f->rest));
+        } else if (const Acquire *a = s.as<Acquire>()) {
+            return Acquire::make(a->semaphore, a->count, visit_parallel_task(a->body));
+        } else {
+            return Block::make({incr_active_threads(), mutate(s), decr_active_threads()});
+        }
+    }
+
+    void visit(const Acquire *op) {
+        Stmt s = visit_parallel_task(op);
+        stmt = Block::make({decr_active_threads(), s, incr_active_threads()});
+    }
+
+    void visit(const Fork *op) {
+        Stmt s = visit_parallel_task(op);
+        stmt = Block::make({decr_active_threads(), s, incr_active_threads()});
+    }
+
     void visit(const For *op) {
         Stmt body = op->body;
 
@@ -218,16 +250,8 @@ private:
         bool update_active_threads = (op->device_api == DeviceAPI::Hexagon ||
                                       op->is_parallel());
 
-        Expr state = Variable::make(Handle(), "profiler_state");
-        Stmt incr_active_threads =
-            Evaluate::make(Call::make(Int(32), "halide_profiler_incr_active_threads",
-                                      {state}, Call::Extern));
-        Stmt decr_active_threads =
-            Evaluate::make(Call::make(Int(32), "halide_profiler_decr_active_threads",
-                                      {state}, Call::Extern));
-
         if (update_active_threads) {
-            body = Block::make({incr_active_threads, body, decr_active_threads});
+            body = Block::make({incr_active_threads(), body, decr_active_threads()});
         }
 
         // We profile by storing a token to global memory, so don't enter GPU loops
@@ -257,7 +281,7 @@ private:
         stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
 
         if (update_active_threads) {
-            stmt = Block::make({decr_active_threads, stmt, incr_active_threads});
+            stmt = Block::make({decr_active_threads(), stmt, incr_active_threads()});
         }
     }
 };
@@ -269,7 +293,7 @@ Stmt inject_profiling(Stmt s, string pipeline_name) {
     int num_funcs = (int)(profiling.indices.size());
 
     Expr func_names_buf = Variable::make(Handle(), "profiling_func_names");
-    
+
     Expr start_profiler = Call::make(Int(32), "halide_profiler_pipeline_start",
                                      {pipeline_name, num_funcs, func_names_buf}, Call::Extern);
 
