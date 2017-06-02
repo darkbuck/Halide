@@ -522,6 +522,9 @@ std::unique_ptr<llvm::Module> CodeGen_LLVM::compile(const Module &input) {
     semaphore_t_type = module->getTypeByName("struct.halide_semaphore_t");
     internal_assert(semaphore_t_type) << "Did not find halide_semaphore_t in initial module";
 
+    semaphore_acquire_t_type = module->getTypeByName("struct.halide_semaphore_acquire_t");
+    internal_assert(semaphore_acquire_t_type) << "Did not find halide_semaphore_acquire_t in initial module";
+
     parallel_task_t_type = module->getTypeByName("struct.halide_parallel_task_t");
     internal_assert(parallel_task_t_type) << "Did not find halide_parallel_task_t in initial module";
 
@@ -3040,13 +3043,22 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
     for (int i = 0; i < num_tasks; i++) {
         const ParallelTask &t = tasks[i];
 
-        // Grab the semaphore
-        Value *semaphore;
-        if (t.semaphore.defined()) {
-            semaphore = codegen(t.semaphore);
-            semaphore = builder->CreatePointerCast(semaphore, semaphore_t_type->getPointerTo());
+        // Make the array of semaphore acquisitions this task needs to do before it runs.
+        Value *semaphores;
+        Value *num_semaphores = ConstantInt::get(i32_t, (int)t.semaphores.size());
+        if (!t.semaphores.empty()) {
+            semaphores = create_alloca_at_entry(semaphore_acquire_t_type, (int)t.semaphores.size());
+            for (int i = 0; i < (int)t.semaphores.size(); i++) {
+                Value *semaphore = codegen(t.semaphores[i].semaphore);
+                semaphore = builder->CreatePointerCast(semaphore, semaphore_t_type->getPointerTo());
+                Value *count = codegen(t.semaphores[i].count);
+                Value *slot_ptr = builder->CreateConstGEP2_32(semaphore_acquire_t_type, semaphores, i, 0);
+                builder->CreateStore(semaphore, slot_ptr);
+                slot_ptr = builder->CreateConstGEP2_32(semaphore_acquire_t_type, semaphores, i, 1);
+                builder->CreateStore(count, slot_ptr);
+            }
         } else {
-            semaphore = ConstantPointerNull::get(semaphore_t_type->getPointerTo());
+            semaphores = ConstantPointerNull::get(semaphore_acquire_t_type->getPointerTo());
         }
 
         // Make a new function that does the body
@@ -3140,11 +3152,17 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
                 MayBlock first_may_block, rest_may_block;
                 op->first.accept(&first_may_block);
                 op->rest.accept(&rest_may_block);
-                // TODO: Dig into any outer acquires / serial fors surrounding an acquire. An acquire
-                // at the level of the fork isn't actually blocking.
                 if (first_may_block.result || rest_may_block.result) {
                     result++;
                 }
+            }
+            void visit(const Block *op) {
+                int result_orig = result;
+                op->first.accept(this);
+                int result_first = result;
+                result = result_orig;
+                op->rest.accept(this);
+                result = std::max(result, result_first);
             }
         public:
             int result = 1;
@@ -3155,10 +3173,9 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         Value *min = codegen(t.min);
         Value *extent = codegen(t.extent);
         Value *serial = codegen(cast(UInt(8), t.serial));
-        Value *semaphore_count = codegen(t.count);
 
         if (num_tasks == 1 && min_threads.result == 1 &&
-            !t.semaphore.defined() && !may_block.result) {
+            t.semaphores.empty() && !may_block.result) {
             // We can go into the task system through
             // halide_do_par_for, which assumes these conditions.
             llvm::Function *do_par_for = module->getFunction("halide_do_par_for");
@@ -3176,9 +3193,9 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
             Value *slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 0);
             builder->CreateStore(task_ptr, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 1);
-            builder->CreateStore(semaphore, slot_ptr);
-            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 2);
             builder->CreateStore(closure_ptr, slot_ptr);
+            slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 2);
+            builder->CreateStore(semaphores, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 3);
             builder->CreateStore(create_string_constant(t.name), slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 4);
@@ -3186,7 +3203,7 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 5);
             builder->CreateStore(extent, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 6);
-            builder->CreateStore(semaphore_count, slot_ptr);
+            builder->CreateStore(num_semaphores, slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 7);
             builder->CreateStore(ConstantInt::get(i32_t, min_threads.result), slot_ptr);
             slot_ptr = builder->CreateConstGEP2_32(parallel_task_t_type, task_stack_ptr, i, 8);
@@ -3226,10 +3243,16 @@ void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result, stri
         const Variable *v = acquire->semaphore.as<Variable>();
         internal_assert(v);
         prefix += "." + v->name;
-        result.push_back(ParallelTask {acquire->body, acquire->semaphore, acquire->count, "", 0, 1, const_false(), prefix});
+        ParallelTask t {s, {}, "", 0, 1, const_false(), prefix};
+        while (acquire) {
+            t.semaphores.push_back({acquire->semaphore, acquire->count});
+            t.body = acquire->body;
+            acquire = t.body.as<Acquire>();
+        }
+        result.push_back(t);
     } else if (loop && loop->for_type == ForType::Parallel) {
         prefix += ".par_for." + loop->name;
-        result.push_back(ParallelTask {loop->body, Expr(), 0, loop->name, loop->min, loop->extent, const_false(), prefix});
+        result.push_back(ParallelTask {loop->body, {}, loop->name, loop->min, loop->extent, const_false(), prefix});
     } else if (loop &&
                loop->for_type == ForType::Serial &&
                acquire &&
@@ -3237,13 +3260,16 @@ void CodeGen_LLVM::get_parallel_tasks(Stmt s, vector<ParallelTask> &result, stri
         const Variable *v = acquire->semaphore.as<Variable>();
         internal_assert(v);
         prefix += ".for." + v->name;
-        result.push_back(ParallelTask {acquire->body,
-                                       acquire->semaphore,
-                                       acquire->count,
-                                       loop->name, loop->min, loop->extent, const_true(), prefix});
+        ParallelTask t {loop->body, {}, loop->name, loop->min, loop->extent, const_true(), prefix};
+        while (acquire) {
+            t.semaphores.push_back({acquire->semaphore, acquire->count});
+            t.body = acquire->body;
+            acquire = t.body.as<Acquire>();
+        }
+        result.push_back(t);
     } else {
         prefix += "." + std::to_string(result.size());
-        result.push_back(ParallelTask {s, Expr(), 0, "", 0, 1, const_false(), prefix});
+        result.push_back(ParallelTask {s, {}, "", 0, 1, const_false(), prefix});
     }
 }
 

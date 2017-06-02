@@ -181,11 +181,11 @@ Module lower(const vector<Function> &output_funcs, const string &pipeline_name, 
 
     debug(1) << "Injecting debug_to_file calls...\n";
     s = debug_to_file(s, outputs, env);
-    debug(1) << "Lowering after injecting debug_to_file calls:\n" << s << '\n';
+    debug(2) << "Lowering after injecting debug_to_file calls:\n" << s << '\n';
 
     debug(1) << "Forking asynchronous producers...\n";
     s = fork_async_producers(s, env);
-    debug(1) << "Lowering after forking asynchronous producers:\n" << s << '\n';
+    debug(2) << "Lowering after forking asynchronous producers:\n" << s << '\n';
 
     debug(1) << "Simplifying...\n"; // without removing dead lets, because storage flattening needs the strides
     s = simplify(s, false);

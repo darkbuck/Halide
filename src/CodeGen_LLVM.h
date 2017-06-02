@@ -187,6 +187,7 @@ protected:
         *scalar_value_t_type,
         *device_interface_t_type,
         *semaphore_t_type,
+        *semaphore_acquire_t_type,
         *parallel_task_t_type;
     // @}
 
@@ -270,8 +271,11 @@ protected:
     /** Codegen a call to do_parallel_tasks */
     struct ParallelTask {
         Stmt body;
-        Expr semaphore;
-        Expr count;
+        struct SemAcquire {
+            Expr semaphore;
+            Expr count;
+        };
+        std::vector<SemAcquire> semaphores;
         std::string loop_var;
         Expr min, extent;
         Expr serial;
