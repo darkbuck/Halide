@@ -367,36 +367,37 @@ class InitializeSemaphores : public IRMutator {
 };
 
 // Tighten the scope of consume nodes as much as possible to avoid needless synchronization.
-class TightenConsumeNodes : public IRMutator {
+class TightenProducerConsumerNodes : public IRMutator {
     using IRMutator::visit;
 
-    Stmt make_consume(string name, bool is_producer, Stmt body) {
+    Stmt make_producer_consumer(string name, bool is_producer, Stmt body, const Scope<int> &scope) {
         if (const LetStmt *let = body.as<LetStmt>()) {
-            return LetStmt::make(let->name, let->value, make_consume(name, is_producer, let->body));
+            if (expr_uses_vars(let->value, scope)) {
+                return ProducerConsumer::make(name, is_producer, body);
+            } else {
+                return LetStmt::make(let->name, let->value, make_producer_consumer(name, is_producer, let->body, scope));
+            }
         } else if (const Block *block = body.as<Block>()) {
             // Check which sides it's used on
-            Scope<int> scope;
-            scope.push(name, 0);
-            scope.push(name + ".buffer", 0);
             bool first = stmt_uses_vars(block->first, scope);
             bool rest = stmt_uses_vars(block->rest, scope);
             if (first && rest && is_producer) {
                 return ProducerConsumer::make(name, is_producer, body);
             } else if (first && rest) {
-                return Block::make(make_consume(name, is_producer, block->first),
-                                   make_consume(name, is_producer, block->rest));
+                return Block::make(make_producer_consumer(name, is_producer, block->first, scope),
+                                   make_producer_consumer(name, is_producer, block->rest, scope));
             } else if (first) {
-                return Block::make(make_consume(name, is_producer, block->first), block->rest);
+                return Block::make(make_producer_consumer(name, is_producer, block->first, scope), block->rest);
             } else if (rest) {
-                return Block::make(block->first, make_consume(name, is_producer, block->rest));
+                return Block::make(block->first, make_producer_consumer(name, is_producer, block->rest, scope));
             } else {
                 // Used on neither side?!
                 return body;
             }
         } else if (const ProducerConsumer *pc = body.as<ProducerConsumer>()) {
-            return ProducerConsumer::make(pc->name, pc->is_producer, make_consume(name, is_producer, pc->body));
+            return ProducerConsumer::make(pc->name, pc->is_producer, make_producer_consumer(name, is_producer, pc->body, scope));
         } else if (const Realize *r = body.as<Realize>()) {
-            return Realize::make(r->name, r->types, r->bounds, r->condition, make_consume(name, is_producer, r->body));
+            return Realize::make(r->name, r->types, r->bounds, r->condition, make_producer_consumer(name, is_producer, r->body, scope));
         } else {
             return ProducerConsumer::make(name, is_producer, body);
         }
@@ -404,16 +405,22 @@ class TightenConsumeNodes : public IRMutator {
 
     void visit(const ProducerConsumer *op) {
         Stmt body = mutate(op->body);
-        if (false && op->is_producer) {
-            if (op->body.same_as(body)) {
-                stmt = op;
-            } else {
-                stmt = ProducerConsumer::make(op->name, true, body);
-            }
+        Scope<int> scope;
+        scope.push(op->name, 0);
+        Function f = env.find(op->name)->second;
+        if (f.outputs() == 1) {
+            scope.push(op->name + ".buffer", 0);
         } else {
-            stmt = make_consume(op->name, op->is_producer, body);
+            for (int i = 0; i < f.outputs(); i++) {
+                scope.push(op->name + "." + std::to_string(i) + ".buffer", 0);
+            }
         }
+        stmt = make_producer_consumer(op->name, op->is_producer, body, scope);
     }
+
+    const map<string, Function> &env;
+public:
+    TightenProducerConsumerNodes(const map<string, Function> &e) : env(e) {}
 };
 
 // Broaden the scope of acquire nodes to pack trailing work into the
@@ -533,7 +540,7 @@ class TightenForkNodes : public IRMutator {
 // TODO: merge semaphores
 
 Stmt fork_async_producers(Stmt s, const map<string, Function> &env) {
-    s = TightenConsumeNodes().mutate(s);
+    s = TightenProducerConsumerNodes(env).mutate(s);
     s = ForkAsyncProducers(env).mutate(s);
     s = ExpandAcquireNodes().mutate(s);
     s = TightenForkNodes().mutate(s);
