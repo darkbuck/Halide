@@ -1686,37 +1686,92 @@ class OptimizeShuffles : public IRMutator {
 public:
     OptimizeShuffles(int lut_alignment) : lut_alignment(lut_alignment) {}
 };
+// Can all the Exprs in vectors be lossless_cast into a type half as small
+bool all_widening_casts(const std::vector<Expr> &vectors, std::vector<Expr> &new_vectors) {
+    for (auto v: vectors) {
+        debug(4) << "PDB: Checking if " << v << " is a widening cast\n";
+        const Cast *c = v.as<Cast>();
+        if (!c) {
+            return false;
+        } else {
+            new_vectors.push_back(c->value);
+        }
+    }
+    internal_assert(new_vectors.size() == vectors.size());
+    Type t = new_vectors[0].type();
+    for (unsigned i = 1; i < new_vectors.size(); ++i) {
+        if (t != new_vectors[i].type())
+            return false;
+    }
+    return true;
+}
+bool all_lossless_cast(const std::vector<Expr> &vectors, std::vector<Expr> &new_vectors) {
+    int bits = vectors[0].type().bits();
+    Type t_int = vectors[0].type().with_bits(bits/2).with_code(Type::Int);
+    Type t_uint = vectors[0].type().with_bits(bits/2).with_code(Type::UInt);
+    for (auto v: vectors) {
+        debug(4) << "pdb: Trying to lossless_cast " << v << " of type " << v.type() << " to " << t_int << "\n\n"; 
+        Expr e = lossless_cast(t_int, v);
+        if (e.defined()) {
+            debug(4) << "t_int passed\n";
+            new_vectors.push_back(e);
+        } else {
+            debug(4) << "pdb: Else Trying to lossless_cast " << v << " of type " << v.type() << " to " << t_uint << "\n\n"; 
+            e = lossless_cast(t_uint, v);
+            if (e.defined()) {
+                debug(4) << "t_unint passed\n";
+                new_vectors.push_back(e);
+            } else {
+                debug(4) << "Both t_int and t_uint failed for " << v << "\n\n";
+                return false;
+            }
+        }
+    }
+    // If we haven't yet, that means we were able to lossles_cast all Exprs
+    // in vectors.
+    internal_assert(new_vectors.size() == vectors.size());
+    return true;
+}
 class UndoBadSliceVectorHoisting : public IRMutator {
     using IRMutator::visit;
     void visit(const Shuffle *op) {
-        if (op->is_slice() && op->vectors.size() == 1) {
-            const Shuffle *cv = op->vectors[0].as<Shuffle>();
-            if (cv && cv->is_concat()) {
-                std::vector<Expr> new_vectors;
-                const std::vector<Expr> &old_vectors = cv->vectors;
-                for (auto v : old_vectors) {
-                    Type t = v.type();
-                    Type target_t = t.with_bits(t.bits()/2).with_code(Type::UInt);
-                    Expr e = lossless_cast(target_t, v);
-                    if (e.defined()) {
-                        new_vectors.push_back(e);
-                    } else {
-                        break;
+        if (op->is_slice()) {
+            if (op->vectors.size() == 1 &&
+                (op->type.is_int()|| op->type.is_uint())) {
+                const Shuffle *cv = op->vectors[0].as<Shuffle>();
+                if (cv && cv->is_concat()) {
+                    std::vector<Expr> new_vectors;
+                    if (all_lossless_cast(cv->vectors, new_vectors)) {
+                        Expr new_cv = Shuffle::make(new_vectors, cv->indices);
+                        Expr new_slice_vector = Shuffle::make({new_cv}, op->indices);
+                        Type t = op->type;
+                        Type target_t = t.with_bits(cv->type.bits());
+                        expr = Cast::make(target_t, new_slice_vector);
+                        debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                        return;
                     }
                 }
-                if (new_vectors.size() == old_vectors.size()) {
-                    Expr new_cv = Shuffle::make(new_vectors, cv->indices);
-                    Expr new_slice_vector = Shuffle::make({new_cv}, op->indices);
-                    Type t = op->type;
-                    Type target_t = t.with_bits(cv->type.bits());
-                    expr = Cast::make(target_t, new_slice_vector);
-                    return;
-                }
+            } else {
+                // This way we ensure that we descend into slice_vector only if op is
+                // slice_vector(concat_vector(widening_cast, widening_cast));
+                expr = op;
+                return;
+            }
+        } else if (op->is_concat()) {
+            std::vector<Expr> new_vectors;
+            std::vector<Expr> mutated_exprs;
+            for (auto v: op->vectors) {
+                mutated_exprs.push_back(mutate(v));
+            }
+            if (all_widening_casts(mutated_exprs, new_vectors)) {
+                Expr new_cv = Shuffle::make(new_vectors, op->indices);
+                expr = Cast::make(op->type, new_cv);
+                debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                return;
             }
         }
         IRMutator::visit(op);
     }
-
 };
 }  // namespace
 
