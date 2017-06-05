@@ -495,7 +495,10 @@ class TightenForkNodes : public IRMutator {
     }
 
     void visit(const Fork *op) {
+        bool old_in_fork = in_fork;
+        in_fork = true;
         Stmt first = mutate(op->first), rest = mutate(op->rest);
+        in_fork = old_in_fork;
         if (is_no_op(first)) {
             stmt = rest;
         } else if (is_no_op(rest)) {
@@ -505,10 +508,10 @@ class TightenForkNodes : public IRMutator {
         }
     }
 
-    // This is also a good time to nuke any dangling allocations and lets
+    // This is also a good time to nuke any dangling allocations and lets in the fork children.
     void visit(const Realize *op) {
         Stmt body = mutate(op->body);
-        if (!stmt_uses_var(body, op->name)) {
+        if (in_fork && !stmt_uses_var(body, op->name)) {
             stmt = body;
         } else {
             stmt = Realize::make(op->name, op->types, op->bounds, op->condition, body);
@@ -517,12 +520,14 @@ class TightenForkNodes : public IRMutator {
 
     void visit(const LetStmt *op) {
         Stmt body = mutate(op->body);
-        if (!stmt_uses_var(body, op->name)) {
+        if (in_fork && !stmt_uses_var(body, op->name)) {
             stmt = body;
         } else {
             stmt = LetStmt::make(op->name, op->value, body);
         }
     }
+
+    bool in_fork = false;
 };
 
 // TODO: merge semaphores
