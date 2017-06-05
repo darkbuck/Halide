@@ -44,6 +44,15 @@ private:
         in_loop = old_in_loop;
     }
 
+    void visit(const Acquire *acq) {
+        acq->semaphore.accept(this);
+        acq->count.accept(this);
+        bool old_in_loop = in_loop;
+        in_loop = true;
+        acq->body.accept(this);
+        in_loop = old_in_loop;
+    }
+
     void visit(const Load *load) {
         if (func == load->name) {
             last_use = containing_stmt;
