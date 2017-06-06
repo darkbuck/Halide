@@ -1692,6 +1692,10 @@ bool all_widening_casts(const std::vector<Expr> &vectors, std::vector<Expr> &new
         debug(4) << "PDB: Checking if " << v << " is a widening cast\n";
         const Cast *c = v.as<Cast>();
         if (!c) {
+            debug(4) << v << " is not a cast at all \n";
+            return false;
+        }
+        if (c->type.bits() < c->value.type().bits()) {
             return false;
         } else {
             new_vectors.push_back(c->value);
@@ -1732,15 +1736,123 @@ bool all_lossless_cast(const std::vector<Expr> &vectors, std::vector<Expr> &new_
     internal_assert(new_vectors.size() == vectors.size());
     return true;
 }
+class FindWideningMultiplyAdd : public IRVisitor {
+    Scope<Expr> variables;
+    bool found;
+public:
+    using IRVisitor::visit;
+    template<typename T>
+    void visit_let(const T *op) {
+        variables.push(op->name, op->value);
+        op->body.accept(this);
+        variables.pop(op->name);
+    }
+
+    void visit(const Let *op) { visit_let(op); }
+    void visit(const LetStmt *op) { visit_let(op); }
+
+    // void visit(const Cast *op) {
+    //     if (op->type.is_vector()) {
+    //         if (op->type.bits() > op->value.type().bits()) {
+    //             found = true;
+    //             return;
+    //         }
+    //     }
+    //     IRVisitor::visit(op);
+    // }
+    bool is_widened_op(Expr e) {
+        debug(4) << "Checking " << e << "\n\n";
+        if (const Variable *v = e.as<Variable>()) {
+            if (variables.contains(v->name)) {
+                Expr value = variables.get(v->name);
+                debug(4) << "is_widened_op: checking the value of " << e << " which is " << value << "\n";
+                return is_widened_op(value);
+            }
+            return false;
+        }
+        Type e_type = e.type();
+        Type t_int = e_type.with_bits(e_type.bits()/2).with_code(Type::Int);
+        Type t_uint = e_type.with_bits(e_type.bits()/2).with_code(Type::UInt);
+        Expr int_expr = lossless_cast(t_int, e);
+        if (int_expr.defined()) {
+            debug(4) << "is_widened_op: " << e << " is a lossless_cast from " << t_int << "\n";
+            return true;
+        }
+        Expr uint_expr = lossless_cast(t_uint, e);
+        if (uint_expr.defined()) {
+            debug(4) << "is_widened_op: " << e << " is a lossless_cast from " << t_uint << "\n";
+            return true;
+        }
+        return false;
+    }
+    void visit(const Mul *op) {
+        if (op->type.is_vector()) {
+            debug(4) << "FindWideningMultiplyAdd: Checking " << (Expr) op << "\n";
+            if (is_widened_op(op->a) && is_widened_op(op->b)) {
+                debug(4) << ".... is widened\n";
+                found = true;
+                return;
+            }
+            debug(4) << "... can't say. visiting operands\n";
+        }
+        IRVisitor::visit(op);
+    }
+    bool found_widening_add() { return found; }
+    FindWideningMultiplyAdd() : found(false) {}
+};
+bool has_widening_mul_add(Expr e) {
+    FindWideningMultiplyAdd f;
+    e.accept(&f);
+    return f.found_widening_add();
+}
+bool should_concat_and_add(const std::vector<Expr> &vectors,
+                        std::vector<Expr> &new_vectors_a,
+                        std::vector<Expr> &new_vectors_b) {
+    new_vectors_a.clear();
+    new_vectors_b.clear();
+    for (auto v: vectors) {
+        debug(4) << "In should_concat_and_add: Checking " << v << "\n";
+        const Add *add_v = v.as<Add>();
+        if (!add_v ||
+            (add_v && has_widening_mul_add(v))) {
+            debug(4) << v << "is either not an add or is a widened mul_add operation\n";
+            new_vectors_a.clear();
+            new_vectors_b.clear();
+            return false;
+        } else {
+            debug(4) << v << "isn't a widened add\n";
+            new_vectors_a.push_back(add_v->a);
+            new_vectors_b.push_back(add_v->b);
+        }
+    }
+    return true;
+}
+// Expr narrow_int_op(Expr e) {
+//     Type t = op->vectors[0].type();
+//     Expr e = op->vectors[0];
+//     Type t_int = t.with_bits(t.bits()/2).with_code(Type::Int);
+//     Type t_uint = t.with_bits(t.bits()/2).with_code(Type::UInt);
+//     Expr int_expr = lossless_cast(t_int, e);
+
+//     return Expr();
+// }
 class UndoBadSliceVectorHoisting : public IRMutator {
     using IRMutator::visit;
     void visit(const Shuffle *op) {
         if (op->is_slice()) {
+            // std::vector<Expr> mutated_exprs;
+            // for (auto v : op->vectors) {
+            //     mutated_exprs.push_back(mutate(v));
+            // }
             if (op->vectors.size() == 1 &&
                 (op->type.is_int()|| op->type.is_uint())) {
+
+
                 const Shuffle *cv = op->vectors[0].as<Shuffle>();
                 if (cv && cv->is_concat()) {
                     std::vector<Expr> new_vectors;
+                    debug(4) << "UndoBadSliceVector: Working on slice_vector(concat_vector)-> " << (Expr) op <<  "\n\n";
+
                     if (all_lossless_cast(cv->vectors, new_vectors)) {
                         Expr new_cv = Shuffle::make(new_vectors, cv->indices);
                         Expr new_slice_vector = Shuffle::make({new_cv}, op->indices);
@@ -1750,16 +1862,47 @@ class UndoBadSliceVectorHoisting : public IRMutator {
                         debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
                         return;
                     }
+                } else {
+                    // slice_vector(widen_cast(double_vector_without_concat), .., .., ..) ->
+                    // widen_cast(slice_vector(double_vector_without_concat), .., .., ..)
+                    Type t = op->vectors[0].type();
+                    Expr e = op->vectors[0];
+                    Type t_int = t.with_bits(t.bits()/2).with_code(Type::Int);
+                    Type t_uint = t.with_bits(t.bits()/2).with_code(Type::UInt);
+                    Expr int_expr = lossless_cast(t_int, e);
+                    Expr sv;
+                    if (int_expr.defined()) {
+                        debug(4) << "UndoBadSliceVector: " << e << " is a lossless_cast from " << t_int << "\n";
+                        sv = Shuffle::make({int_expr}, op->indices);
+                        debug(4) << "UndoBadSliceVector: creating slice_vector " << sv << "\n";
+                        Type new_type = op->type.with_lanes(sv.type().lanes());
+                        expr = Cast::make(new_type, sv);
+                        debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                        return;
+
+                    }
+                    Expr uint_expr = lossless_cast(t_uint, e);
+                    if (uint_expr.defined()) {
+                        debug(4) << "UndoBadSliceVector: " << e << " is a lossless_cast from " << t_uint << "\n";
+                        sv = Shuffle::make({uint_expr}, op->indices);
+                        Type new_type = op->type.with_lanes(sv.type().lanes());
+                        debug(4) << "UndoBadSliceVector: creating slice_vector " << sv << "\n";
+                        expr = Cast::make(new_type, sv);
+                        debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                        return;
+                    }
                 }
-            } else {
-                // This way we ensure that we descend into slice_vector only if op is
-                // slice_vector(concat_vector(widening_cast, widening_cast));
-                expr = op;
-                return;
-            }
+            } // else {
+            // This way we ensure that we descend into slice_vector only if op is
+            // slice_vector(concat_vector(widening_cast, widening_cast));
+            expr = op;
+            return;
+            // }
         } else if (op->is_concat()) {
             std::vector<Expr> new_vectors;
             std::vector<Expr> mutated_exprs;
+            debug(4) << "UndoBadSliceVector: Working on concat_vector-> " << (Expr) op <<  "\n\n";
+          
             for (auto v: op->vectors) {
                 mutated_exprs.push_back(mutate(v));
             }
@@ -1769,6 +1912,17 @@ class UndoBadSliceVectorHoisting : public IRMutator {
                 debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
                 return;
             }
+            std::vector<Expr> new_vectors_a;
+            std::vector<Expr> new_vectors_b;
+            if (should_concat_and_add(mutated_exprs, new_vectors_a, new_vectors_b)) {
+                Expr new_cv_a = Shuffle::make_concat(new_vectors_a);
+                Expr new_cv_b = Shuffle::make_concat(new_vectors_b);
+                expr = mutate(Add::make(new_cv_b, new_cv_b));
+                debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                return;
+            }
+            expr = Shuffle::make(mutated_exprs, op->indices);
+            return;
         }
         IRMutator::visit(op);
     }
