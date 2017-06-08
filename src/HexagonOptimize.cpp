@@ -139,7 +139,9 @@ struct Pattern {
         NarrowUnsignedOp2 = 1 << 17,
         NarrowUnsignedOps = NarrowUnsignedOp0 | NarrowUnsignedOp1 | NarrowUnsignedOp2,
 
-        v62 = 1 << 20,  // Pattern should be matched only for v62 target
+        v62orLater = 1 << 20,  // Pattern should be matched only for v62 target or later
+        v65orLater = 1 << 21,  // Pattern should be matched only for v65 target or later
+        v66orLater = 1 << 22,  // Pattern should be matched only for v66 target or later
    };
 
     string intrin;        // Name of the intrinsic
@@ -178,7 +180,14 @@ Expr apply_patterns(Expr x, const vector<Pattern> &patterns, const Target &targe
     vector<Expr> matches;
     for (const Pattern &p : patterns) {
 
-        if ((p.flags & (Pattern::v62)) && !target.has_feature(Target::HVX_v62))
+        if ((p.flags & (Pattern::v62orLater)) &&
+            !target.features_any_of({Target::HVX_v62, Target::HVX_v65, Target::HVX_v66}))
+            continue;
+        if ((p.flags & (Pattern::v65orLater)) &&
+            !target.features_any_of({Target::HVX_v65, Target::HVX_v66}))
+            continue;
+        if ((p.flags & (Pattern::v66orLater)) &&
+            !target.features_any_of({Target::HVX_v66}))
             continue;
 
         if (expr_match(p.pattern, x, matches)) {
@@ -303,6 +312,8 @@ Expr unbroadcast_lossless_cast(Type ty, Expr x) {
 // Try to extract a list of multiplies of the form a_ty*b_ty added
 // together, such that op is equivalent to the sum of the
 // multiplies in 'mpys', added to 'rest'.
+// Difference in mpys.size() - return indicates the number of
+// expressions where we pretend the op to be multiplied by 1.
 int find_mpy_ops(Expr op, Type a_ty, Type b_ty, int max_mpy_count,
                         vector<MulExpr> &mpys, Expr &rest) {
     if ((int)mpys.size() >= max_mpy_count) {
@@ -683,7 +694,9 @@ private:
                     // Widening subtracts. There are other instructions that subtact two vub and two vuh but do not widen.
                     // To differentiate those from the widening ones, we encode the return type in the name here.
                     { "halide.hexagon.sub_vuh.vub.vub", wild_u16x - wild_u16x, Pattern::InterleaveResult | Pattern::NarrowOps },
+                    { "halide.hexagon.sub_vh.vub.vub", wild_i16x - wild_i16x, Pattern::InterleaveResult | Pattern::NarrowUnsignedOps },
                     { "halide.hexagon.sub_vuw.vuh.vuh", wild_u32x - wild_u32x, Pattern::InterleaveResult | Pattern::NarrowOps },
+                    { "halide.hexagon.sub_vw.vuh.vuh", wild_i32x - wild_i32x, Pattern::InterleaveResult | Pattern::NarrowUnsignedOps },
                     { "halide.hexagon.sub_vw.vh.vh", wild_i32x - wild_i32x, Pattern::InterleaveResult | Pattern::NarrowOps },
                 };
 
@@ -740,7 +753,7 @@ private:
             // Saturating add/subtract
             { "halide.hexagon.satub_add.vub.vub", u8_sat(wild_u16x + wild_u16x), Pattern::NarrowOps },
             { "halide.hexagon.satuh_add.vuh.vuh", u16_sat(wild_u32x + wild_u32x), Pattern::NarrowOps },
-            { "halide.hexagon.satuw_add.vuw.vuw", u32_sat(wild_u64x + wild_u64x), Pattern::NarrowOps | Pattern::v62 },
+            { "halide.hexagon.satuw_add.vuw.vuw", u32_sat(wild_u64x + wild_u64x), Pattern::NarrowOps | Pattern::v62orLater },
             { "halide.hexagon.sath_add.vh.vh", i16_sat(wild_i32x + wild_i32x), Pattern::NarrowOps },
             { "halide.hexagon.satw_add.vw.vw", i32_sat(wild_i64x + wild_i64x), Pattern::NarrowOps },
 
@@ -790,7 +803,7 @@ private:
             { "halide.hexagon.pack_sath.vw", i16_sat(wild_i32x) },
 
             // We don't have a vpack equivalent to this one, so we match it directly.
-            { "halide.hexagon.trunc_satuh.vuw", u16_sat(wild_u32x), Pattern::DeinterleaveOp0 | Pattern::v62 },
+            { "halide.hexagon.trunc_satuh.vuw", u16_sat(wild_u32x), Pattern::DeinterleaveOp0 | Pattern::v62orLater },
 
             // Narrowing casts. These may interleave later with trunclo.
             { "halide.hexagon.packhi.vh", u8(wild_u16x/256) },
