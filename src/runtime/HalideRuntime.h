@@ -212,6 +212,12 @@ struct halide_parallel_task_t {
  * system. */
 extern int halide_do_parallel_tasks(void *user_context, int num_tasks, const struct halide_parallel_task_t *tasks);
 
+/** Provide a custom do_parallel_tasks via function pointer */
+// @{
+typedef int (*halide_do_parallel_tasks_t)(void *, int, const struct halide_parallel_task_t *);
+extern halide_do_parallel_tasks_t halide_set_custom_do_parallel_tasks(halide_do_parallel_tasks_t);
+// @}
+
 /** If you use the default do_par_for, you can still set a custom
  * handler to perform each individual task. Returns the old handler. */
 //@{
@@ -227,6 +233,9 @@ extern int halide_do_task(void *user_context, halide_task_t f, int idx,
 extern int halide_default_do_par_for(void *user_context,
                                      halide_task_t task,
                                      int min, int size, uint8_t *closure);
+extern int halide_default_do_parallel_tasks(void *user_context,
+                                            int num_tasks,
+                                            const struct halide_parallel_task_t *tasks);
 extern int halide_default_do_task(void *user_context, halide_task_t f, int idx,
                                   uint8_t *closure);
 // @}

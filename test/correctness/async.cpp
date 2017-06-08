@@ -139,9 +139,7 @@ int main(int argc, char **argv) {
             });
     }
 
-    // Multiple async producers at root. TODO: This doesn't currently get
-    // the producers running at the same time, because one is nested
-    // inside the other's consume node. Need to tighten this up.
+    // Multiple async producers at root.
     if (1) {
         Func producer_1;
         Func producer_2;
