@@ -1686,7 +1686,48 @@ class OptimizeShuffles : public IRMutator {
 public:
     OptimizeShuffles(int lut_alignment) : lut_alignment(lut_alignment) {}
 };
-// Can all the Exprs in vectors be lossless_cast into a type half as small
+
+Expr narrow_int_op(Expr e) {
+    Type t = e.type();
+    if (t.bits() != 32) {
+        Type t_int = t.with_bits(t.bits()/2).with_code(Type::Int);
+        Type t_uint = t.with_bits(t.bits()/2).with_code(Type::UInt);
+        Expr int_expr = lossless_cast(t_int, e);
+        if (int_expr.defined()) {
+            return int_expr;
+        }
+        Expr uint_expr = lossless_cast(t_uint, e);
+        if (uint_expr.defined()) {
+            return uint_expr;
+        }
+        return Expr();
+    } else {
+        Type t_int8 = t.with_bits(8).with_code(Type::Int);
+        Type t_uint8 = t.with_bits(8).with_code(Type::UInt);
+        Type t_int16 = t.with_bits(16).with_code(Type::Int);
+        Type t_uint16 = t.with_bits(16).with_code(Type::UInt);
+
+        Expr int8_expr = lossless_cast(t_int8, e);
+        if (int8_expr.defined()) {
+            return int8_expr;
+        }
+        Expr uint8_expr = lossless_cast(t_uint8, e);
+        if (uint8_expr.defined()) {
+            return uint8_expr;
+        }
+        Expr int16_expr = lossless_cast(t_int16, e);
+        if (int16_expr.defined()) {
+            return int16_expr;
+        }
+        Expr uint16_expr = lossless_cast(t_uint16, e);
+        if (uint16_expr.defined()) {
+            return uint16_expr;
+        }
+        return Expr();
+    }
+}
+// Can all the Exprs in vectors be lossless_cast into a type half as small and
+// such that all the vectors in new_vectors are of the same type.
 bool all_widening_casts(const std::vector<Expr> &vectors, std::vector<Expr> &new_vectors) {
     for (auto v: vectors) {
         debug(4) << "PDB: Checking if " << v << " is a widening cast\n";
@@ -1700,6 +1741,14 @@ bool all_widening_casts(const std::vector<Expr> &vectors, std::vector<Expr> &new
         } else {
             new_vectors.push_back(c->value);
         }
+        // pdb: doing this for int32(uin16(vector)) which can be used for vrmpy
+        // Expr narrow_expr = narrow_int_op(v);
+        // if (narrow_expr.defined()) {
+        //     new_vectors.push_back(narrow_expr);
+        // } else {
+        //     debug(4) << v << " cannot be narrowed\n";
+        //     return false;
+        // }
     }
     internal_assert(new_vectors.size() == vectors.size());
     Type t = new_vectors[0].type();
@@ -1731,12 +1780,12 @@ bool all_lossless_cast(const std::vector<Expr> &vectors, std::vector<Expr> &new_
             }
         }
     }
-    // If we haven't yet, that means we were able to lossles_cast all Exprs
+    // If we haven't returned yet, that means we were able to lossles_cast all Exprs
     // in vectors.
     internal_assert(new_vectors.size() == vectors.size());
     return true;
 }
-class FindWideningMultiplyAdd : public IRVisitor {
+class FindWideningMultiply : public IRVisitor {
     Scope<Expr> variables;
     bool found;
 public:
@@ -1787,7 +1836,7 @@ public:
     }
     void visit(const Mul *op) {
         if (op->type.is_vector()) {
-            debug(4) << "FindWideningMultiplyAdd: Checking " << (Expr) op << "\n";
+            debug(4) << "FindWideningMultiply: Checking " << (Expr) op << "\n";
             if (is_widened_op(op->a) && is_widened_op(op->b)) {
                 debug(4) << ".... is widened\n";
                 found = true;
@@ -1797,13 +1846,13 @@ public:
         }
         IRVisitor::visit(op);
     }
-    bool found_widening_add() { return found; }
-    FindWideningMultiplyAdd() : found(false) {}
+    bool found_widening_multiply() { return found; }
+    FindWideningMultiply() : found(false) {}
 };
-bool has_widening_mul_add(Expr e) {
-    FindWideningMultiplyAdd f;
+bool has_widening_multiply(Expr e) {
+    FindWideningMultiply f;
     e.accept(&f);
-    return f.found_widening_add();
+    return f.found_widening_multiply();
 }
 bool should_concat_and_add(const std::vector<Expr> &vectors,
                         std::vector<Expr> &new_vectors_a,
@@ -1814,7 +1863,7 @@ bool should_concat_and_add(const std::vector<Expr> &vectors,
         debug(4) << "In should_concat_and_add: Checking " << v << "\n";
         const Add *add_v = v.as<Add>();
         if (!add_v ||
-            (add_v && has_widening_mul_add(v))) {
+            (add_v && has_widening_multiply(v))) {
             debug(4) << v << "is either not an add or is a widened mul_add operation\n";
             new_vectors_a.clear();
             new_vectors_b.clear();
@@ -1827,80 +1876,109 @@ bool should_concat_and_add(const std::vector<Expr> &vectors,
     }
     return true;
 }
-// Expr narrow_int_op(Expr e) {
-//     Type t = op->vectors[0].type();
-//     Expr e = op->vectors[0];
-//     Type t_int = t.with_bits(t.bits()/2).with_code(Type::Int);
-//     Type t_uint = t.with_bits(t.bits()/2).with_code(Type::UInt);
-//     Expr int_expr = lossless_cast(t_int, e);
+bool should_concat_and_mul(const std::vector<Expr> &vectors,
+                           std::vector<Expr> &new_vectors_a,
+                           std::vector<Expr> &new_vectors_b) {
+    new_vectors_a.clear();
+    new_vectors_b.clear();
+    for (auto v: vectors) {
+        debug(4) << "In should_concat_and_mul: Checking " << v << "\n";
+        const Mul *mul_v = v.as<Mul>();
+        if (!mul_v//  ||
+            // (mul_v && has_widening_multiply(v))
+            ) {
+            // debug(4) << v << "is either not an mul or is a widened mul operation\n";
+            debug(4) << v << "is not a mul\n";
+            new_vectors_a.clear();
+            new_vectors_b.clear();
+            return false;
+        } else {
+            debug(4) << v << "is widened mul\n";
+            new_vectors_a.push_back(mul_v->a);
+            new_vectors_b.push_back(mul_v->b);
+        }
+    }
+    return true;
+}
 
-//     return Expr();
-// }
+bool all_broadcasts_same_value(const std::vector<Expr> vectors, Expr &value) {
+    for (auto v: vectors) {
+        const Broadcast *bc = v.as<Broadcast>();
+        if (!bc) {
+            debug(4) << v << " is not a broadcast at all\n";
+            return false;
+        }
+        if (value.defined() && !bc->value.same_as(value)) {
+            debug(4) << v << " is a broadcast of a different value\n";
+            return false;
+        } else {
+            value = bc->value;
+        }
+    }
+    return true;
+}
 class UndoBadSliceVectorHoisting : public IRMutator {
     using IRMutator::visit;
     void visit(const Shuffle *op) {
         if (op->is_slice()) {
-            // std::vector<Expr> mutated_exprs;
-            // for (auto v : op->vectors) {
-            //     mutated_exprs.push_back(mutate(v));
-            // }
-            if (op->vectors.size() == 1 &&
+            debug(4) << "UndoBadSliceVector: Working on slice_vector-> " << (Expr) op <<  "\n\n";
+            std::vector<Expr> mutated_exprs;
+            for (auto v : op->vectors) {
+                mutated_exprs.push_back(mutate(v));
+            }
+            if (mutated_exprs.size() == 1 &&
                 (op->type.is_int()|| op->type.is_uint())) {
 
-
-                const Shuffle *cv = op->vectors[0].as<Shuffle>();
-                if (cv && cv->is_concat()) {
-                    std::vector<Expr> new_vectors;
-                    debug(4) << "UndoBadSliceVector: Working on slice_vector(concat_vector)-> " << (Expr) op <<  "\n\n";
-
-                    if (all_lossless_cast(cv->vectors, new_vectors)) {
-                        Expr new_cv = Shuffle::make(new_vectors, cv->indices);
-                        Expr new_slice_vector = Shuffle::make({new_cv}, op->indices);
-                        Type t = op->type;
-                        Type target_t = t.with_bits(cv->type.bits());
-                        expr = Cast::make(target_t, new_slice_vector);
-                        debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
-                        return;
-                    }
-                } else {
-                    // slice_vector(widen_cast(double_vector_without_concat), .., .., ..) ->
-                    // widen_cast(slice_vector(double_vector_without_concat), .., .., ..)
-                    Type t = op->vectors[0].type();
-                    Expr e = op->vectors[0];
-                    Type t_int = t.with_bits(t.bits()/2).with_code(Type::Int);
-                    Type t_uint = t.with_bits(t.bits()/2).with_code(Type::UInt);
-                    Expr int_expr = lossless_cast(t_int, e);
-                    Expr sv;
-                    if (int_expr.defined()) {
-                        debug(4) << "UndoBadSliceVector: " << e << " is a lossless_cast from " << t_int << "\n";
-                        sv = Shuffle::make({int_expr}, op->indices);
-                        debug(4) << "UndoBadSliceVector: creating slice_vector " << sv << "\n";
-                        Type new_type = op->type.with_lanes(sv.type().lanes());
-                        expr = Cast::make(new_type, sv);
-                        debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
-                        return;
-
-                    }
-                    Expr uint_expr = lossless_cast(t_uint, e);
-                    if (uint_expr.defined()) {
-                        debug(4) << "UndoBadSliceVector: " << e << " is a lossless_cast from " << t_uint << "\n";
-                        sv = Shuffle::make({uint_expr}, op->indices);
-                        Type new_type = op->type.with_lanes(sv.type().lanes());
-                        debug(4) << "UndoBadSliceVector: creating slice_vector " << sv << "\n";
-                        expr = Cast::make(new_type, sv);
-                        debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
-                        return;
-                    }
+                // PDB: Fix me - for vmpa the order of having broadcast check before the narrow_int_op
+                // check matters because narrow_int_op uses lossless_cast that matches an expression
+                // like x256((int16)128) returning narrow_expr as x256(uint8) 128). So,
+                // for slice_vectors(x256((int16)128), 16, 1, 128),  we'll end up
+                // returning int16x128(slice_vectors(x256((uint8)128), 16, 1, 128))
+                // Instead we want to return
+                // x128((int16) 128)
+                const Broadcast *bc = mutated_exprs[0].as<Broadcast>();
+                if (bc) {
+                    // slice_vector(x256(value), start, stride, lanes) ->
+                    // xlanes(value)
+                    int lanes = op->type.lanes();
+                    expr = Broadcast::make(bc->value, lanes);
+                    debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                    return;
                 }
-            } // else {
-            // This way we ensure that we descend into slice_vector only if op is
-            // slice_vector(concat_vector(widening_cast, widening_cast));
-            expr = op;
+                Expr narrow_expr = narrow_int_op(mutated_exprs[0]);
+                if (narrow_expr.defined()) {
+                    Expr new_slice_vector = Shuffle::make({narrow_expr}, op->indices);
+                    Type t = op->type;
+                    Type target_t = t.with_bits(mutated_exprs[0].type().bits());
+                    expr = Cast::make(target_t, new_slice_vector);
+                    debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                    return;
+                }
+                const Mul *mul = mutated_exprs[0].as<Mul>();
+                if (mul) {
+                    // vmpa needs this. Can we solve this in lossless_cast?
+                    Expr slice_a = mutate(Shuffle::make({mul->a}, op->indices));
+                    Expr slice_b = mutate(Shuffle::make({mul->b}, op->indices));
+                    expr = Mul::make(slice_a, slice_b);
+                    debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                    return;
+                }
+                const Add *add = mutated_exprs[0].as<Add>();
+                if (add) {
+                    Expr slice_a = mutate(Shuffle::make({add->a}, op->indices));
+                    Expr slice_b = mutate(Shuffle::make({add->b}, op->indices));
+                    expr = Add::make(slice_a, slice_b);
+                    debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                    return;
+                }
+            }
+            expr = Shuffle::make(mutated_exprs, op->indices);
+            debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
             return;
-            // }
         } else if (op->is_concat()) {
             std::vector<Expr> new_vectors;
             std::vector<Expr> mutated_exprs;
+            Expr value;
             debug(4) << "UndoBadSliceVector: Working on concat_vector-> " << (Expr) op <<  "\n\n";
           
             for (auto v: op->vectors) {
@@ -1917,7 +1995,38 @@ class UndoBadSliceVectorHoisting : public IRMutator {
             if (should_concat_and_add(mutated_exprs, new_vectors_a, new_vectors_b)) {
                 Expr new_cv_a = Shuffle::make_concat(new_vectors_a);
                 Expr new_cv_b = Shuffle::make_concat(new_vectors_b);
-                expr = mutate(Add::make(new_cv_b, new_cv_b));
+                expr = mutate(Add::make(new_cv_a, new_cv_b));
+                debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                return;
+            }
+            // should_concat_and_mul is needed for vmpyi(): PDB: Fix this comment.
+            if (should_concat_and_mul(mutated_exprs, new_vectors_a, new_vectors_b)) {
+                std::vector<Expr> vec_a, vec_b;
+                Expr new_cv_a, new_cv_b;
+                bool cast_after = false;
+                if (all_widening_casts(new_vectors_a, vec_a) &&
+                    all_widening_casts(new_vectors_b, vec_b)) {
+                    new_cv_a = simplify(Shuffle::make_concat(vec_a));
+                    new_cv_b = simplify(Shuffle::make_concat(vec_b));
+                    cast_after = true;
+                } else {
+                    new_cv_a = Shuffle::make_concat(new_vectors_a);
+                    new_cv_b = Shuffle::make_concat(new_vectors_b);
+                }
+                if (cast_after) {
+                    Expr mul = Mul::make(new_cv_a, new_cv_b);
+                    Type t = mul.type().with_bits(op->type.bits());
+                    // do we mutate this?
+                    expr = Cast::make(t, mul);
+                } else {
+                    expr = mutate(Mul::make(new_cv_a, new_cv_b));
+                }
+                debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                return;
+            }
+            
+            if (all_broadcasts_same_value(mutated_exprs, value)) {
+                expr = mutate(Broadcast::make(value, op->type.lanes()));
                 debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
                 return;
             }
