@@ -137,6 +137,12 @@ struct halide_semaphore_acquire_t {
     struct halide_semaphore_t *semaphore;
     int count;
 };
+extern int halide_semaphore_init(struct halide_semaphore_t *, int n);
+extern int halide_semaphore_release(struct halide_semaphore_t *, int n);
+extern bool halide_semaphore_try_acquire(struct halide_semaphore_t *, int n);
+typedef int (*halide_semaphore_init_t)(struct halide_semaphore_t *, int);
+typedef int (*halide_semaphore_release_t)(struct halide_semaphore_t *, int);
+typedef bool (*halide_semaphore_try_acquire_t)(struct halide_semaphore_t *, int);
 
 /** A parallel task to be passed to halide_do_parallel_tasks. That
  * tasks may recursively call halide_do_parallel_tasks, and there may
@@ -210,13 +216,7 @@ struct halide_parallel_task_t {
  * to complete. While waiting, the calling threads assists with either
  * the tasks enqueued, or other non-blocking tasks in the task
  * system. */
-extern int halide_do_parallel_tasks(void *user_context, int num_tasks, const struct halide_parallel_task_t *tasks);
-
-/** Provide a custom do_parallel_tasks via function pointer */
-// @{
-typedef int (*halide_do_parallel_tasks_t)(void *, int, const struct halide_parallel_task_t *);
-extern halide_do_parallel_tasks_t halide_set_custom_do_parallel_tasks(halide_do_parallel_tasks_t);
-// @}
+extern int halide_do_parallel_tasks(void *user_context, int num_tasks, struct halide_parallel_task_t *tasks);
 
 /** If you use the default do_par_for, you can still set a custom
  * handler to perform each individual task. Returns the old handler. */
@@ -227,17 +227,32 @@ extern int halide_do_task(void *user_context, halide_task_t f, int idx,
                           uint8_t *closure);
 //@}
 
-/** The default versions of do_task and do_par_for. Can be convenient
- * to call from overrides in certain circumstances. */
+/** Provide an entire custom tasking runtime via function pointers. */
+// @{
+typedef int (*halide_do_parallel_tasks_t)(void *, int, struct halide_parallel_task_t *);
+extern void halide_set_custom_parallel_runtime(
+    halide_do_par_for_t,
+    halide_do_task_t,
+    halide_do_parallel_tasks_t,
+    halide_semaphore_init_t,
+    halide_semaphore_try_acquire_t,
+    halide_semaphore_release_t
+    );
+// @}
+
+/** The default versions of the parallel runtime functions. */
 // @{
 extern int halide_default_do_par_for(void *user_context,
                                      halide_task_t task,
                                      int min, int size, uint8_t *closure);
 extern int halide_default_do_parallel_tasks(void *user_context,
                                             int num_tasks,
-                                            const struct halide_parallel_task_t *tasks);
+                                            struct halide_parallel_task_t *tasks);
 extern int halide_default_do_task(void *user_context, halide_task_t f, int idx,
                                   uint8_t *closure);
+extern int halide_default_semaphore_init(struct halide_semaphore_t *, int n);
+extern int halide_default_semaphore_release(struct halide_semaphore_t *, int n);
+extern bool halide_default_semaphore_try_acquire(struct halide_semaphore_t *, int n);
 // @}
 
 struct halide_thread;

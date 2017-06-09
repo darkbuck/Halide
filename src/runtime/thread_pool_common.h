@@ -17,8 +17,8 @@ struct work {
 
     bool make_runnable() {
         for (; next_semaphore < task.num_semaphores; next_semaphore++) {
-            if (!halide_semaphore_try_acquire(task.semaphores[next_semaphore].semaphore,
-                                              task.semaphores[next_semaphore].count)) {
+            if (!halide_default_semaphore_try_acquire(task.semaphores[next_semaphore].semaphore,
+                                                      task.semaphores[next_semaphore].count)) {
                 // Note that we don't release the semaphores already
                 // acquired. We never have two consumers contending
                 // over the same semaphore, so it's not helpful to do
@@ -351,7 +351,7 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
 }
 
 WEAK int halide_default_do_parallel_tasks(void *user_context, int num_tasks,
-                                          const struct halide_parallel_task_t *tasks) {
+                                          struct halide_parallel_task_t *tasks) {
     // Avoid entering the task system if possible
     #if 0
     if (num_tasks == 1) {
@@ -360,7 +360,7 @@ WEAK int halide_default_do_parallel_tasks(void *user_context, int num_tasks,
         } else if (tasks->extent == 1 &&
                    (tasks->num_semaphores == 0 ||
                     (tasks->num_semaphores == 1 &&
-                     halide_semaphore_try_acquire(tasks->semaphores->semaphore, tasks->semaphores->count)))) {
+                     halide_default_semaphore_try_acquire(tasks->semaphores->semaphore, tasks->semaphores->count)))) {
             return tasks->fn(user_context, tasks->min, tasks->closure);
         }
     }
@@ -439,13 +439,13 @@ struct halide_semaphore_impl_t {
     int value;
 };
 
-WEAK int halide_semaphore_init(halide_semaphore_t *s, int n) {
+WEAK int halide_default_semaphore_init(halide_semaphore_t *s, int n) {
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
     sem->value = n;
     return n;
 }
 
-WEAK int halide_semaphore_release(halide_semaphore_t *s, int n) {
+WEAK int halide_default_semaphore_release(halide_semaphore_t *s, int n) {
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
     int new_val = __sync_add_and_fetch(&(sem->value), n);
     if (new_val == n) {
@@ -456,7 +456,7 @@ WEAK int halide_semaphore_release(halide_semaphore_t *s, int n) {
     return new_val;
 }
 
-WEAK bool halide_semaphore_try_acquire(halide_semaphore_t *s, int n) {
+WEAK bool halide_default_semaphore_try_acquire(halide_semaphore_t *s, int n) {
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
     // Decrement and get new value
     int new_val = __sync_add_and_fetch(&(sem->value), -n);
