@@ -8,9 +8,9 @@
 #include "halide_benchmark.h"
 #include "async_coroutine.h"
 
-// This test runs an async pipeline that requires multiple thread
-// using a single thread and coroutines. We start with a basic x86-64
-// coroutine implementation.
+// This test runs an async pipeline that requires multiple execution
+// contexts using a single OS thread and coroutines. We start with a
+// basic x86-64 coroutine implementation.
 
 struct execution_context {
     char *stack_bottom = NULL;
@@ -295,7 +295,7 @@ int main(int argc, char **argv) {
     double reference_time =
         Halide::Tools::benchmark(3, 3, [&]() {
                 async_coroutine(out);
-            });
+    });
 
     // Now install a custom parallel runtime
     halide_set_custom_parallel_runtime(
