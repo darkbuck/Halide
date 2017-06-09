@@ -10,7 +10,8 @@
 
 using namespace Halide;
 using namespace Halide::ConciseCasts;
-
+// using namespace Halide::Internal;
+// IRPrinter irp(std::cerr);
 // This tests that we can correctly generate all the simd ops
 using std::vector;
 using std::string;
@@ -1529,10 +1530,10 @@ struct Test {
         check("vsub(v*.w,v*.w):sat", hvx_width/4, i32_sat(i64(i32_1) - i64(i32_2)));
 
         // Double vector versions of the above
-        check("vadd(v*:*.b,v*:*.b)", hvx_width*2, u8_1 + u8_2);
+        check("vadd(v*:*.b,v*:*.b)", hvx_width*2, u8_1 + u8_2); // PDB: FAILS - not found due to lazy slice.
         check("vadd(v*:*.h,v*:*.h)", hvx_width/1, u16_1 + u16_2);
         check("vadd(v*:*.w,v*:*.w)", hvx_width/2, u32_1 + u32_2);
-        check("vadd(v*:*.b,v*:*.b)", hvx_width*2, i8_1 + i8_2);
+        check("vadd(v*:*.b,v*:*.b)", hvx_width*2, i8_1 + i8_2); // PDB: FAILS - expect same as above.
         check("vadd(v*:*.h,v*:*.h)", hvx_width/1, i16_1 + i16_2);
         check("vadd(v*:*.w,v*:*.w)", hvx_width/2, i32_1 + i32_2);
         check("vadd(v*:*.ub,v*:*.ub):sat", hvx_width*2, u8_sat(u16(u8_1) + u16(u8_2)));
@@ -1920,7 +1921,7 @@ struct Test {
         check("vrmpy(v*.ub,v*.ub)", hvx_width, u32(u8_1)*u8_1 + u32(u8_2)*u8_2 + u32(u8_3)*u8_3 + u32(u8_4)*u8_4);
         check("vrmpy(v*.b,v*.b)", hvx_width, i32(i8_1)*i8_1 + i32(i8_2)*i8_2 + i32(i8_3)*i8_3 + i32(i8_4)*i8_4);
         check("v*.uw += vrmpy(v*.ub,v*.ub)", hvx_width, u32_1 + u32(u8_1)*u8_1 + u32(u8_2)*u8_2 + u32(u8_3)*u8_3 + u32(u8_4)*u8_4);
-check("v*.w += vrmpy(v*.b,v*.b)", hvx_width, i32_1 + i32(i8_1)*i8_1 + i32(i8_2)*i8_2 + i32(i8_3)*i8_3 + i32(i8_4)*i8_4);
+        check("v*.w += vrmpy(v*.b,v*.b)", hvx_width, i32_1 + i32(i8_1)*i8_1 + i32(i8_2)*i8_2 + i32(i8_3)*i8_3 + i32(i8_4)*i8_4);
 
 #if 0
         // These don't generate yet because we don't support mixed signs yet.

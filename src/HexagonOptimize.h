@@ -24,6 +24,7 @@ EXPORT Stmt vtmpy_generator(Stmt s);
  * interleaving/deinterleaving. */
 EXPORT Stmt optimize_hexagon_instructions(Stmt s, Target t);
 
+EXPORT Stmt undo_bad_slice_vector_hoisting(Stmt s, Target &t);
 /** Generate deinterleave or interleave operations, operating on
  * groups of vectors at a time. */
 //@{
