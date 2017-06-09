@@ -5,6 +5,7 @@
 
 #include "HalideRuntime.h"
 #include "HalideBuffer.h"
+#include "halide_benchmark.h"
 #include "async_coroutine.h"
 
 // This test runs an async pipeline that requires multiple thread
@@ -286,8 +287,17 @@ int do_par_tasks(void *user_context, int num_tasks, halide_parallel_task_t *task
 }
 
 int main(int argc, char **argv) {
-    Halide::Runtime::Buffer<int> out(64, 64, 64);
+    Halide::Runtime::Buffer<int> out(16, 16, 16);
 
+    // Get a baseline runtime.
+    halide_set_num_threads(11); // This test needs 11 stacks to complete
+    // TODO: this shouldn't deadlock when set to one, but sometimes it does!
+    double reference_time =
+        Halide::Tools::benchmark(3, 3, [&]() {
+                async_coroutine(out);
+            });
+
+    // Now install a custom parallel runtime
     halide_set_custom_parallel_runtime(
         nullptr, // This pipeline shouldn't call do_par_for
         nullptr, // our custom runtime never calls do_task
@@ -302,7 +312,10 @@ int main(int argc, char **argv) {
     call_in_new_context(&root_context, &scheduler_context, scheduler, nullptr);
     printf("Scheduler running... calling into Halide.\n");
 
-    async_coroutine(out);
+    double custom_time =
+        Halide::Tools::benchmark(3, 3, [&]() {
+            async_coroutine(out);
+        });
 
     printf("Left Halide\n");
 
@@ -327,6 +340,9 @@ int main(int argc, char **argv) {
         printf("Zombie stacks\n");
         return -1;
     }
+
+    printf("Default threadpool time: %f\n", reference_time);
+    printf("Custom threadpool time: %f\n", custom_time);
 
     printf("Success!\n");
     return 0;
