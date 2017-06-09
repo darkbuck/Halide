@@ -227,7 +227,12 @@ extern int halide_do_task(void *user_context, halide_task_t f, int idx,
                           uint8_t *closure);
 //@}
 
-/** Provide an entire custom tasking runtime via function pointers. */
+/** Provide an entire custom tasking runtime via function
+ * pointers. Note that do_task and semaphore_try_acquire are only ever
+ * called by halide_default_do_par_for and
+ * halide_default_do_parallel_tasks, so it's only necessary to provide
+ * those if you are mixing in the default implementations of
+ * do_par_for and do_parallel_tasks. */
 // @{
 typedef int (*halide_do_parallel_tasks_t)(void *, int, struct halide_parallel_task_t *);
 extern void halide_set_custom_parallel_runtime(

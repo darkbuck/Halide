@@ -17,6 +17,7 @@ struct execution_context {
     int priority = 0;
 };
 
+// Track the number of context switches
 int context_switches = 0;
 
 void switch_context(execution_context *from, execution_context *to) {
@@ -89,6 +90,8 @@ void call_in_new_context(execution_context *from,
 
     // Zero it to aid debugging
     memset(to->stack_bottom, 0, sz);
+
+    // Set up the stack pointer
     to->stack = to->stack_bottom + sz;
     to->stack = (char *)(((uintptr_t)to->stack) & ~((uintptr_t)(15)));
 
@@ -143,7 +146,10 @@ void call_in_new_context(execution_context *from,
         );
 }
 
-// A semaphore implementation that does the right thing with execution contexts
+// That's the end of the coroutines implementation. Next we need a
+// task scheduler and semaphore implementation that plays nice with
+// them.
+
 struct my_semaphore {
     int count = 0;
     execution_context *waiter = nullptr;
@@ -161,19 +167,22 @@ std::priority_queue<execution_context *,
                     std::vector<execution_context *>,
                     compare_contexts> runnable_contexts;
 
+// Instead of returning, finished contexts push themselves here and
+// switch contexts to the scheduler. I would make them clean
+// themselves up, but it's hard to free your own stack while you're
+// executing on it.
 std::vector<execution_context *> dead_contexts;
 
 // The scheduler execution context. Switch to this when stalled.
 execution_context scheduler_context;
 void scheduler(execution_context *parent, execution_context *this_context, void *arg) {
     // The first time this is called is just to set up the scheduler's
-    // context so immediately transfer control back to the parent.
+    // context, so we immediately transfer control back to the parent.
     switch_context(this_context, parent);
 
     while (1) {
         // Clean up any finished contexts
         for (execution_context *ctx: dead_contexts) {
-            printf("Destroying context %p\n", ctx);
             if (ctx->stack_bottom) {
                 stacks_allocated--;
                 free(ctx->stack_bottom);
@@ -185,7 +194,6 @@ void scheduler(execution_context *parent, execution_context *this_context, void 
         // Run the next highest-priority context
         execution_context *next = runnable_contexts.top();
         runnable_contexts.pop();
-        printf("Running context %p with priority %d\n", next, next->priority);
         switch_context(this_context, next);
     }
 }
@@ -198,22 +206,11 @@ int semaphore_init(halide_semaphore_t *s, int count) {
     return count;
 }
 
-bool semaphore_try_acquire(halide_semaphore_t *s, int count) {
-    my_semaphore *sema = (my_semaphore *)s;
-    if (sema->count >= count) {
-        sema->count -= count;
-        return true;
-    } else {
-        return false;
-    }
-}
-
 int semaphore_release(halide_semaphore_t *s, int count) {
     my_semaphore *sema = (my_semaphore *)s;
     sema->count += count;
     if (sema->waiter && sema->count > 0) {
         // Re-enqueue the blocked context
-        printf("Waking context %p\n", sema->waiter);
         runnable_contexts.push(sema->waiter);
         sema->waiter = nullptr;
     }
@@ -235,17 +232,17 @@ void semaphore_acquire(execution_context *this_context, halide_semaphore_t *s, i
     sema->count -= count;
 }
 
-
-
 struct do_one_task_arg {
     halide_parallel_task_t *task;
-    halide_semaphore_t *parent_semaphore;
+    halide_semaphore_t *completion_semaphore;
 };
 
+// Do one of the tasks in a do_parallel_tasks call. Intended to be
+// called in a fresh context.
 void do_one_task(execution_context *parent, execution_context *this_context, void *arg) {
     do_one_task_arg *task_arg = (do_one_task_arg *)arg;
     halide_parallel_task_t *task = task_arg->task;
-    halide_semaphore_t *parent_sema = task_arg->parent_semaphore;
+    halide_semaphore_t *completion_sema = task_arg->completion_semaphore;
     this_context->priority = -(task->min_threads);
 
     // This is a single-threaded runtime, so treat all loops as serial.
@@ -256,7 +253,7 @@ void do_one_task(execution_context *parent, execution_context *this_context, voi
         }
         task->fn(nullptr, i, task->closure);
     }
-    halide_semaphore_release(parent_sema, 1);
+    halide_semaphore_release(completion_sema, 1);
     dead_contexts.push_back(this_context);
     switch_context(this_context, &scheduler_context);
     printf("Scheduled dead context!\n");
@@ -274,7 +271,8 @@ int do_par_tasks(void *user_context, int num_tasks, halide_parallel_task_t *task
     halide_semaphore_t parent_sema;
     halide_semaphore_init(&parent_sema, 1 - num_tasks);
 
-    // Queue up the children. Run each up until the first stall.
+    // Queue up the children, switching directly to the context of
+    // each. Run each up until the first stall.
     for (int i = 0; i < num_tasks; i++) {
         execution_context *ctx = new execution_context;
         do_one_task_arg arg = {tasks + i, &parent_sema};
@@ -282,19 +280,20 @@ int do_par_tasks(void *user_context, int num_tasks, halide_parallel_task_t *task
         call_in_new_context(this_context, ctx, do_one_task, &arg);
     }
 
+    // Wait until the children are done.
     semaphore_acquire(this_context, &parent_sema, 1);
     return 0;
 }
 
 int main(int argc, char **argv) {
-    Halide::Runtime::Buffer<int> out(16, 16, 16);
+    Halide::Runtime::Buffer<int> out(64, 64, 64);
 
     halide_set_custom_parallel_runtime(
-        nullptr, // This pipeline shouldn't call do_par_for, and our custom override never calls do_task.
-        nullptr,
+        nullptr, // This pipeline shouldn't call do_par_for
+        nullptr, // our custom runtime never calls do_task
         do_par_tasks,
         semaphore_init,
-        semaphore_try_acquire,
+        nullptr, // our custom runtime never calls try_acquire
         semaphore_release);
 
     // Start up the scheduler
