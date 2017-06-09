@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <assert.h>
 #include <queue>
+#include <mutex>
+#include <future>
 
 #include "HalideRuntime.h"
 #include "HalideBuffer.h"
@@ -16,6 +18,10 @@ struct execution_context {
     char *stack_bottom = NULL;
     char *stack = NULL;
     int priority = 0;
+
+    // Used to ensure we only have one thread in a context at a
+    // time. Two threads executing on the same stack is bad.
+    bool occupied = true;
 };
 
 // Track the number of context switches
@@ -23,6 +29,12 @@ int context_switches = 0;
 
 void switch_context(execution_context *from, execution_context *to) {
     context_switches++;
+
+    //printf("Context switch from %p to %p\n", from, to);
+
+    from->occupied = false;
+    assert(!to->occupied);
+    to->occupied = true;
 
     // To switch contexts, we'll push a return address onto our own
     // stack, switch to the target stack, and then issue a ret
@@ -96,7 +108,10 @@ void call_in_new_context(execution_context *from,
     to->stack = to->stack_bottom + sz;
     to->stack = (char *)(((uintptr_t)to->stack) & ~((uintptr_t)(15)));
 
-    // printf("Calling %p(%p, %p, %p) in a new context at %p\n", f, from, to, arg, to->stack);
+    //printf("Calling %p(%p, %p, %p) in a new context at %p\n", f, from, to, arg, to->stack);
+
+    from->occupied = false;
+    to->occupied = true;
 
     // Switching to a new context is much like switching to an
     // existing one, except we have to set up some arguments and we
@@ -151,6 +166,11 @@ void call_in_new_context(execution_context *from,
 // task scheduler and semaphore implementation that plays nice with
 // them.
 
+// We'll throw one big lock around this whole thing. It's only
+// released by a thread when inside of Halide code.
+std::mutex big_lock;
+std::condition_variable_any wake_workers;
+
 struct my_semaphore {
     int count = 0;
     execution_context *waiter = nullptr;
@@ -174,6 +194,9 @@ std::priority_queue<execution_context *,
 // executing on it.
 std::vector<execution_context *> dead_contexts;
 
+// Contexts for idle worker threads to hang out in
+std::vector<execution_context *> idle_worker_contexts;
+
 // The scheduler execution context. Switch to this when stalled.
 execution_context scheduler_context;
 void scheduler(execution_context *parent, execution_context *this_context, void *arg) {
@@ -193,8 +216,23 @@ void scheduler(execution_context *parent, execution_context *this_context, void 
         dead_contexts.clear();
 
         // Run the next highest-priority context
-        execution_context *next = runnable_contexts.top();
-        runnable_contexts.pop();
+        execution_context *next;
+        if (!runnable_contexts.empty()) {
+            next = runnable_contexts.top();
+            runnable_contexts.pop();
+        } else {
+            if (idle_worker_contexts.empty()) {
+                printf("Out of idle worker contexts!\n");
+                abort();
+            }
+            // There's nothing interesting to do, go become an idle worker
+            next = idle_worker_contexts.back();
+            idle_worker_contexts.pop_back();
+        }
+        if (!runnable_contexts.empty()) {
+            //printf("Waking a worker\n");
+            wake_workers.notify_one();
+        }
         switch_context(this_context, next);
     }
 }
@@ -207,7 +245,8 @@ int semaphore_init(halide_semaphore_t *s, int count) {
     return count;
 }
 
-int semaphore_release(halide_semaphore_t *s, int count) {
+
+int semaphore_release_already_locked(halide_semaphore_t *s, int count) {
     my_semaphore *sema = (my_semaphore *)s;
     sema->count += count;
     if (sema->waiter && sema->count > 0) {
@@ -218,13 +257,18 @@ int semaphore_release(halide_semaphore_t *s, int count) {
     return sema->count;
 }
 
+int semaphore_release(halide_semaphore_t *s, int count) {
+    std::lock_guard<std::mutex> lock(big_lock);
+    return semaphore_release_already_locked(s, count);
+}
+
 // A blocking version of semaphore acquire that enters the task system
 void semaphore_acquire(execution_context *this_context, halide_semaphore_t *s, int count) {
     my_semaphore *sema = (my_semaphore *)s;
     while (sema->count < count) {
         if (sema->waiter) {
             // We don't generate IR with competing acquires
-            printf("Semaphore contention!\n");
+            printf("Semaphore contention %p vs %p!\n", sema->waiter, this_context);
             abort();
         }
         sema->waiter = this_context;
@@ -246,15 +290,18 @@ void do_one_task(execution_context *parent, execution_context *this_context, voi
     halide_semaphore_t *completion_sema = task_arg->completion_semaphore;
     this_context->priority = -(task->min_threads);
 
-    // This is a single-threaded runtime, so treat all loops as serial.
+    // Treat all loops as serial for now.
     for (int i = task->min; i < task->min + task->extent; i++) {
         // Try to acquire the semaphores
         for (int j = 0; j < task->num_semaphores; j++) {
+            //printf("Acquiring task semaphore\n");
             semaphore_acquire(this_context, task->semaphores[j].semaphore, task->semaphores[j].count);
         }
+        big_lock.unlock();
         task->fn(nullptr, i, task->closure);
+        big_lock.lock();
     }
-    halide_semaphore_release(completion_sema, 1);
+    semaphore_release_already_locked(completion_sema, 1);
     dead_contexts.push_back(this_context);
     switch_context(this_context, &scheduler_context);
     printf("Scheduled dead context!\n");
@@ -262,6 +309,9 @@ void do_one_task(execution_context *parent, execution_context *this_context, voi
 }
 
 int do_par_tasks(void *user_context, int num_tasks, halide_parallel_task_t *tasks) {
+    // We're leaving Halide code, so grab the lock until we return
+    std::lock_guard<std::mutex> lock(big_lock);
+
     // Make this context schedulable.
     execution_context *this_context = new execution_context;
     for (int i = 0; i < num_tasks; i++) {
@@ -282,7 +332,10 @@ int do_par_tasks(void *user_context, int num_tasks, halide_parallel_task_t *task
     }
 
     // Wait until the children are done.
+    //printf("Acquiring parent semaphore\n");
     semaphore_acquire(this_context, &parent_sema, 1);
+
+    // Re-entering Halide code
     return 0;
 }
 
@@ -290,8 +343,7 @@ int main(int argc, char **argv) {
     Halide::Runtime::Buffer<int> out(16, 16, 16);
 
     // Get a baseline runtime.
-    halide_set_num_threads(11); // This test needs 11 stacks to complete
-    // TODO: this shouldn't deadlock when set to one, but sometimes it does!
+    // TODO: this shouldn't deadlock when done with one thread, but sometimes it does!
     double reference_time =
         Halide::Tools::benchmark(3, 3, [&]() {
                 async_coroutine(out);
@@ -309,15 +361,52 @@ int main(int argc, char **argv) {
     // Start up the scheduler
     printf("Starting scheduler context\n");
     execution_context root_context;
+    big_lock.lock();
     call_in_new_context(&root_context, &scheduler_context, scheduler, nullptr);
-    printf("Scheduler running... calling into Halide.\n");
+    printf("Scheduler running...\n");
 
-    double custom_time =
-        Halide::Tools::benchmark(3, 3, [&]() {
-            async_coroutine(out);
-        });
+    printf("Starting worker threads\n");
 
-    printf("Left Halide\n");
+    // Add some worker threads to the mix
+    std::vector<std::future<void>> futures;
+    bool done = false;
+    for (int i = 1; i < halide_set_num_threads(0); i++) {
+        futures.push_back(
+            std::async(std::launch::async, [&](int i) {
+                    std::lock_guard<std::mutex> lock(big_lock);
+                    execution_context worker_context;
+                    while (!done) {
+                        idle_worker_contexts.push_back(&worker_context);
+                        switch_context(&worker_context, &scheduler_context);
+                        if (done) break;
+                        wake_workers.wait(big_lock);
+                    }
+                }, i));
+    }
+
+    double custom_time;
+    auto work = [&]() {
+        printf("Entering Halide\n");
+        custom_time =
+            Halide::Tools::benchmark(3, 3, [&]() {
+                big_lock.unlock();
+                async_coroutine(out);
+                big_lock.lock();
+            });
+        printf("Left Halide\n");
+        done = true;
+        wake_workers.notify_all();
+        big_lock.unlock();
+    };
+    std::async(std::launch::async, work).get();
+
+    // Join the workers.
+    while (!futures.empty()) {
+        futures.back().get();
+        futures.pop_back();
+    }
+
+    printf("Validating result\n");
 
     out.for_each_element([&](int x, int y, int z) {
             int correct = 8*(x + y + z);
