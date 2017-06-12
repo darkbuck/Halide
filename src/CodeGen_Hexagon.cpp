@@ -1148,9 +1148,6 @@ Value *CodeGen_Hexagon::vlut(Value *lut, const vector<int> &indices) {
         return vlut(lut, ConstantVector::get(llvm_indices), min_index, max_index);
     }
 
-    llvm::Type *i8x_t = VectorType::get(i8_t, indices.size());
-    llvm::Type *i16x_t = VectorType::get(i16_t, indices.size());
-
     // We use i16 indices because we can't support LUTs with more than
     // 32k elements anyways without massive stack spilling (the LUT
     // must fit in registers), and it costs some runtime performance
@@ -1168,21 +1165,14 @@ Value *CodeGen_Hexagon::vlut(Value *lut, const vector<int> &indices) {
         // Make a vector of the indices shifted such that the min of
         // this range is at 0.
         vector<Constant *> llvm_indices;
+        vector<Constant *> use_indices;
         llvm_indices.reserve(indices.size());
         for (int i : indices) {
-            llvm_indices.push_back(ConstantInt::get(i16_t, i - min_index_i));
+            llvm_indices.push_back(ConstantInt::get(i8_t, std::max(0, i - min_index_i)));
+            use_indices.push_back(ConstantInt::get(i8_t, i >= min_index_i ? 255 : 0));
         }
         Value *llvm_index = ConstantVector::get(llvm_indices);
-
-        // Create a condition value for which elements of the range are valid for this index.
-        // We can't make a constant vector of <1024 x i1>, it crashes the Hexagon LLVM backend.
-        Value *minus_one = codegen(make_const(UInt(16, indices.size()), -1));
-        Value *use_index = call_intrin(i16x_t, "halide.hexagon.gt.vh.vh", {llvm_index, minus_one});
-
-        // After we've eliminated the invalid elements, we can
-        // truncate to 8 bits, as vlut requires.
-        llvm_index = call_intrin(i8x_t, "halide.hexagon.pack.vh", {llvm_index});
-        use_index = call_intrin(i8x_t, "halide.hexagon.pack.vh", {use_index});
+        Value *use_index = ConstantVector::get(use_indices);
 
         int range_extent_i = std::min(max_index - min_index_i, 255);
         Value *range_i = vlut(slice_vector(lut, min_index_i, range_extent_i), llvm_index, 0, range_extent_i);

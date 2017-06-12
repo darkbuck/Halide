@@ -877,6 +877,10 @@ Buffer<uint8_t> compile_module_to_hexagon_shared_object(const Module &device_cod
     llvm::raw_svector_ostream object_stream(object);
     compile_llvm_module_to_object(*llvm_module, object_stream);
 
+    std::ofstream dbgf("/tmp/test.o");
+    dbgf.write(object.data(), object.size());
+    dbgf.flush();
+
     if (debug::debug_level() >= 2) {
         debug(0) << "Hexagon device code assembly: " << "\n";
         llvm::SmallString<4096> assembly;
