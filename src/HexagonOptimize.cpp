@@ -2193,6 +2193,8 @@ class UndoBadSliceVectorHoisting : public IRMutator {
             for (auto v: op->vectors) {
                 mutated_exprs.push_back(mutate(v));
             }
+            // concat_vector(widening_cast(a), widening_cast(b))->
+            // widening_cast(concat_vector(a, b))
             if (all_widening_casts(mutated_exprs, new_vectors)) {
                 Expr new_cv = Shuffle::make(new_vectors, op->indices);
                 expr = Cast::make(op->type, new_cv);
