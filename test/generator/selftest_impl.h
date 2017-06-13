@@ -39,22 +39,23 @@ public:
     }
 };
 
-#ifdef _halide_user_assert
-using Halide::Buffer;
-#else
-using Halide::Runtime::Buffer;
-#endif
-
 namespace Halide {
 namespace Internal {
 
-template<typename T>
-struct is_buffer {
+template<template<typename BufType = void> class Buffer, typename T>
+struct is_buffer_impl {
   static constexpr bool value = std::is_convertible<typename std::decay<T>::type, Buffer<>>::value;
 };
 
 #ifdef _halide_user_assert
+// Can only define this class if Halide.h is around
 class Testable_JIT {
+  template<typename T = void>
+  using Buffer = Halide::Buffer<T>;
+
+  template<typename T>
+  using is_buffer = is_buffer_impl<Buffer, T>;
+
   const std::string name;
   const GeneratorContext &context;
   std::vector<std::vector<StubInput>> inputs;
@@ -155,6 +156,12 @@ private:
 #endif   // _halide_user_assert
 
 class Testable_AOT {
+  template<typename T = void>
+  using Buffer = Halide::Runtime::Buffer<T>;
+
+  template<typename T>
+  using is_buffer = is_buffer_impl<Buffer, T>;
+
   int (*func)(void **);
   const struct halide_filter_metadata_t* md;
   std::vector<void*> addresses;
@@ -238,6 +245,14 @@ inline std::ostream &operator<<(std::ostream &o, const halide_type_t &t) {
     }
     return o;
 }
+
+// TODO(srj): yuck
+#ifdef _halide_user_assert
+using Halide::Buffer;
+#else
+using Halide::Runtime::Buffer;
+#endif
+
 
 template<typename Testable>
 void selftest_test(Testable &testable) {
