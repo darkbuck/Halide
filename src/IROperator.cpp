@@ -333,6 +333,39 @@ Expr lossless_cast(Type t, Expr e) {
             return Expr();
         }
     }
+    if (const Shuffle *s = e.as<Shuffle>()) {
+      debug(4) << "lossless_cast: Checking if " << (Expr) s << " can be represented as type " << t << "\n";
+      std::vector<Expr> new_vectors;
+      const std::vector<Expr> &vectors = s->vectors;
+      if (s->is_concat() || s->is_slice()) {
+        for (auto v: vectors) {
+          Expr new_v = lossless_cast(t.with_lanes(v.type().lanes()), v);
+          if (new_v.defined()) {
+            debug(4) << "lossless_cast: " << (Expr) v << " CAN be represented as type " << t.with_lanes(v.type().lanes()) << " as " << new_v << "\n";
+            new_vectors.push_back(new_v);
+          } else {
+            debug(4) << "lossless_cast: " << (Expr) v << " CANNOT be represented as type " << t.with_lanes(v.type().lanes()) << "\n";
+            return Expr();
+          }
+        }
+        Expr new_shuffle =  Shuffle::make(new_vectors, s->indices);
+        debug(4) << "lossless_cast " << (Expr) s << " to " << new_shuffle << "\n\n";
+        return new_shuffle;
+      }
+      // if (s->is_slice()) {
+      //   for (auto v: vectors) {
+      //     Expr new_v = lossless_cast(t.with_lanes(v.lanes()), v);
+      //     if (new_v.defined()) {
+      //       debug(4) << "lossless_cast: " << (Expr) v << " CAN be represented as type " << t.with_lanes(v.lanes()) << " as " << new_v << "\n";
+      //       new_vectors.push_back(new_v);
+      //     } else {
+      //       debug(4) << "lossless_cast: " << (Expr) v << " CANNOT be represented as type " << t.with_lanes(v.lanes()) << "\n";
+      //       return Expr();
+      //     }
+
+      //   }
+      // }
+    }
 
     if (const IntImm *i = e.as<IntImm>()) {
         if (t.can_represent(i->value)) {

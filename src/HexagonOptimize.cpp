@@ -2145,24 +2145,27 @@ class UndoBadSliceVectorHoisting : public IRMutator {
                 // returning int16x128(slice_vectors(x256((uint8)128), 16, 1, 128))
                 // Instead we want to return
                 // x128((int16) 128)
+
                 const Broadcast *bc = mutated_exprs[0].as<Broadcast>();
                 if (bc) {
                     // slice_vector(x256(value), start, stride, lanes) ->
                     // xlanes(value)
+                  // PDB: remove this comment. Handling broadcasts helps gaussian5x5.
                     int lanes = op->type.lanes();
                     expr = Broadcast::make(bc->value, lanes);
                     debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
                     return;
                 }
-                Expr narrow_expr = narrow_int_op(mutated_exprs[0]);
-                if (narrow_expr.defined()) {
-                    Expr new_slice_vector = Shuffle::make({narrow_expr}, op->indices);
-                    Type t = op->type;
-                    Type target_t = t.with_bits(mutated_exprs[0].type().bits());
-                    expr = Cast::make(target_t, new_slice_vector);
-                    debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
-                    return;
-                }
+                // Expr narrow_expr = narrow_int_op(mutated_exprs[0]);
+                // if (narrow_expr.defined()) {
+                //     Expr new_slice_vector = Shuffle::make({narrow_expr}, op->indices);
+                //     Type t = op->type;
+                //     Type target_t = t.with_bits(mutated_exprs[0].type().bits());
+                //     expr = Cast::make(target_t, new_slice_vector);
+                //     debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+                //     return;
+                // }
+
                 const Mul *mul = mutated_exprs[0].as<Mul>();
                 if (mul) {
                     // vmpa needs this. Can we solve this in lossless_cast?
@@ -2195,12 +2198,12 @@ class UndoBadSliceVectorHoisting : public IRMutator {
             }
             // concat_vector(widening_cast(a), widening_cast(b))->
             // widening_cast(concat_vector(a, b))
-            if (all_widening_casts(mutated_exprs, new_vectors)) {
-                Expr new_cv = Shuffle::make(new_vectors, op->indices);
-                expr = Cast::make(op->type, new_cv);
-                debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
-                return;
-            }
+            // if (all_widening_casts(mutated_exprs, new_vectors)) {
+            //     Expr new_cv = Shuffle::make(new_vectors, op->indices);
+            //     expr = Cast::make(op->type, new_cv);
+            //     debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
+            //     return;
+            // }
             std::vector<Expr> new_vectors_a;
             std::vector<Expr> new_vectors_b;
             if (should_concat_and_add(mutated_exprs, new_vectors_a, new_vectors_b)) {
@@ -2235,7 +2238,7 @@ class UndoBadSliceVectorHoisting : public IRMutator {
                 debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
                 return;
             }
-            
+            // PDB: remove this comment. Handling broadcasts helps gaussian5x5.
             if (all_broadcasts_same_value(mutated_exprs, value)) {
                 expr = mutate(Broadcast::make(value, op->type.lanes()));
                 debug(4) << "UndoBadSliceVector: converting " << (Expr) op << " to " << expr << "\n\n";
