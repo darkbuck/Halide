@@ -47,9 +47,23 @@ struct is_buffer_impl {
   static constexpr bool value = std::is_convertible<typename std::decay<T>::type, Buffer<>>::value;
 };
 
+class TestableBase {
+public:
+
+protected:
+  TestableBase() {}
+  virtual ~TestableBase() {}
+
+  virtual std::pair<size_t, size_t> io_count() const = 0;
+
+private:
+    explicit TestableBase(const TestableBase &) = delete;
+    void operator=(const TestableBase &) = delete;
+};
+
 #ifdef _halide_user_assert
 // Can only define this class if Halide.h is around
-class Testable_JIT {
+class Testable_JIT : public TestableBase {
   template<typename T = void>
   using Buffer = Halide::Buffer<T>;
 
@@ -98,14 +112,13 @@ class Testable_JIT {
 
   template<typename T>
   void set_io(size_t i, T&& arg) {
-    auto &inputs = generator->param_info().filter_inputs;
-    auto &outputs = generator->param_info().filter_outputs;
-    if (i < inputs.size()) {
+    const auto counts = io_count();
+    if (i < counts.first) {
       set_input(i, arg);
       return;
     }
-    i -= inputs.size();
-    if (i < outputs.size()) {
+    i -= counts.first;
+    if (i < counts.second) {
       set_output(i, arg);
       return;
     }
@@ -125,6 +138,13 @@ class Testable_JIT {
            typename std::enable_if<index == sizeof...(Args)>::type * = nullptr>
   void build_inputs_and_outputs(const std::tuple<Args...>& t) { 
       // nothing
+  }
+
+protected:
+  std::pair<size_t, size_t> io_count() const override {
+    _halide_user_assert(generator);
+    const auto &p = generator->param_info();
+    return { p.filter_inputs.size(), p.filter_outputs.size() };
   }
 
 public:
@@ -156,7 +176,7 @@ private:
 };
 #endif   // _halide_user_assert
 
-class Testable_AOT {
+class Testable_AOT : public TestableBase {
   template<typename T = void>
   using Buffer = Halide::Runtime::Buffer<T>;
 
@@ -176,24 +196,29 @@ class Testable_AOT {
   template<typename T2,
            typename std::enable_if<is_buffer<T2>::value>::type * = nullptr>
   static halide_type_t get_arg_type(const T2 &a) {
+    // TODO: should this be the static type?
     return a.type();
+  }
+
+  template<typename T>
+  void set_io(size_t i, T&& arg) {
+      using arg_type = typename std::decay<decltype(arg)>::type;
+      const halide_type_t type = get_arg_type<arg_type>(arg);
+      const bool is_buf = is_buffer<arg_type>::value;
+
+      const halide_type_t expected_type = md->arguments[i].type;
+      const bool expected_is_buffer = (md->arguments[i].kind != halide_argument_kind_input_scalar);
+      expect_eq(expected_type, type) << "Type mismatch for argument #" << i << " " << md->arguments[i].name;
+      expect_eq(expected_is_buffer, is_buf) << "IsBuffer mismatch for argument #" << i << " " << md->arguments[i].name;
+
+      addresses[i] = const_cast<void *>((const void *) &arg);
   }
 
   template<size_t index = 0,
            typename... Args, 
            typename std::enable_if<index < sizeof...(Args)>::type * = nullptr>
   void build_inputs_and_outputs(const std::tuple<Args...>& t) { 
-      using arg_type = typename std::decay<decltype(std::get<index>(t))>::type;
-      const halide_type_t type = get_arg_type<arg_type>(std::get<index>(t));
-      const bool is_buf = is_buffer<arg_type>::value;
-
-      const halide_type_t expected_type = md->arguments[index].type;
-      const bool expected_is_buffer = (md->arguments[index].kind != halide_argument_kind_input_scalar);
-      expect_eq(expected_type, type) << "Type mismatch for argument #" << index << " " << md->arguments[index].name;
-      expect_eq(expected_is_buffer, is_buf) << "IsBuffer mismatch for argument #" << index << " " << md->arguments[index].name;
-
-      addresses[index] = (const void *) &std::get<index>(t);
-
+      set_io(index, std::get<index>(t));
       build_inputs_and_outputs<index+1, Args...>(t);
   }
 
@@ -202,6 +227,20 @@ class Testable_AOT {
            typename std::enable_if<index == sizeof...(Args)>::type * = nullptr>
   void build_inputs_and_outputs(const std::tuple<Args...>& t) { 
       // nothing
+  }
+
+protected:
+  std::pair<size_t, size_t> io_count() const override {
+    size_t inputs = 0, outputs = 0;
+    for (int i = 0; i < md->num_arguments; ++i) {
+      if (md->arguments[i].kind == halide_argument_kind_output_buffer) {
+        outputs++;
+      } else {
+        expect_eq(outputs, (size_t) 0) << "All inputs must come before any outputs";
+        inputs++;
+      }
+    }
+    return { inputs, outputs };
   }
 
 public:
