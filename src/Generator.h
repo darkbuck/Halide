@@ -2248,6 +2248,7 @@ struct NoRealizations<T, Args...> {
 
 class GeneratorStub;
 class SimpleGeneratorFactory;
+class Testable_JIT;
 
 class GeneratorBase : public NamesInterface, public GeneratorContext {
 public:
@@ -2415,6 +2416,7 @@ private:
     friend class GeneratorStub;
     friend class SimpleGeneratorFactory;
     friend class StubOutputBufferBase;
+    friend class Testable_JIT;
 
     struct ParamInfo {
         EXPORT ParamInfo(GeneratorBase *generator, const size_t size);
