@@ -135,9 +135,10 @@ public:
 
   template <typename... Args>
   int operator()(Args... args) {
-    const std::map<std::string, std::string> generator_params = {};
-    generator = Halide::Internal::GeneratorRegistry::create(name, context, generator_params);
-    build_inputs_and_outputs(std::make_tuple<Args...>(std::forward<Args>(args)...));
+    generator = Halide::Internal::GeneratorRegistry::create(name, context, {});
+    _halide_user_assert(generator->param_info().filter_params.empty()) << "Can only test new-style Generators";
+    auto all = std::make_tuple<Args...>(std::forward<Args>(args)...);
+    build_inputs_and_outputs(all);
 
     generator->set_inputs_vector(inputs);
     generator->call_generate();
