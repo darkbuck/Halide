@@ -192,7 +192,7 @@ class Testable_AOT {
       expect_eq(expected_type, type) << "Type mismatch for argument #" << index << " " << md->arguments[index].name;
       expect_eq(expected_is_buffer, is_buf) << "IsBuffer mismatch for argument #" << index << " " << md->arguments[index].name;
 
-      addresses[index] = (void *) &std::get<index>(t);
+      addresses[index] = (const void *) &std::get<index>(t);
 
       build_inputs_and_outputs<index+1, Args...>(t);
   }
