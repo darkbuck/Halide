@@ -2128,6 +2128,170 @@ bool all_broadcasts_same_value(const std::vector<Expr> vectors, Expr &value) {
 }
 class UndoBadSliceVectorHoisting : public IRMutator {
     using IRMutator::visit;
+    struct VarInfo {
+        Expr replacement;
+        int old_uses, new_uses;
+    };
+
+    Scope<VarInfo> var_info;
+
+    template <typename NodeType, typename LetType>
+    void visit_let(NodeType &result, const LetType *op) {
+        internal_assert(!var_info.contains(op->name))
+            << "Repeated name: " << op->name << "\n";
+        Expr value = mutate(op->value);
+        NodeType body = op->body;
+
+        // Iteratively peel off certain operations from the let value and push them inside.
+        Expr new_value = value;
+        string new_name = op->name + ".us";
+        Expr new_var = Variable::make(new_value.type(), new_name);
+        Expr replacement = new_var;
+
+        debug(4) << "UndoBadSliceVector: Working on Let " << op->name << " = "
+                 << value << " in ... " << op->name << " ...\n";
+
+        while (1) {
+            const Shuffle *shuffle = new_value.as<Shuffle>();
+            const Variable *var = new_value.as<Variable>();
+            const Variable *var_b = nullptr;
+            const Variable *var_a = nullptr;
+            if (shuffle && shuffle->is_concat() &&
+                shuffle->vectors.size() == 2) {
+                var_a = shuffle->vectors[0].as<Variable>();
+                var_b = shuffle->vectors[1].as<Variable>();
+            }
+            if (is_const(new_value)) {
+                replacement = substitute(new_name, new_value, replacement);
+                new_value = Expr();
+                break;
+            } else if (var) {
+                replacement = substitute(new_name, var, replacement);
+                new_value = Expr();
+                break;
+            } else if (shuffle && shuffle->is_slice()) {
+                std::vector<int> slice_indices = shuffle->indices;
+                new_value = Shuffle::make_concat(shuffle->vectors);
+                new_var = Variable::make(new_value.type(), new_name);
+                replacement =
+                    substitute(new_name, Shuffle::make({new_var}, slice_indices), replacement);
+            } else if (shuffle && shuffle->is_concat()) {
+              if ((var_a && !var_b) || (!var_a && var_b)) {
+                new_var = Variable::make(var_a ? shuffle->vectors[1].type() : shuffle->vectors[0].type(), new_name);
+                Expr op_a = var_a ? shuffle->vectors[0] : new_var;
+                Expr op_b = var_a ? new_var : shuffle->vectors[1];
+                replacement = substitute(new_name, Shuffle::make_concat({op_a, op_b}), replacement);
+                new_value = var_a ? shuffle->vectors[1] : shuffle->vectors[0];
+              } else {
+                replacement = substitute(new_name, new_value, replacement);
+                new_value = Expr();
+              }
+            } else {
+                break;
+            }
+
+        }
+
+        if (new_value.same_as(value)) {
+            // Nothing to substitute
+            new_value = Expr();
+            replacement = Expr();
+        } else {
+            // debug(4) << "HoistSliceVector: new let " << new_name << " = " << new_value << " in ... " << replacement << " ...\n";
+        }
+
+        VarInfo info;
+        info.old_uses = 0;
+        info.new_uses = 0;
+        info.replacement = replacement;
+        debug (4) << "UndoBadSliceVector: Pushing " << op->name << " -> " << info.replacement << "\n";
+        var_info.push(op->name, info);
+
+        body = mutate(body);
+
+        info = var_info.get(op->name);
+        var_info.pop(op->name);
+        debug (4) << "UndoBadSliceVector: Pushing " << op->name << " -> " << info.replacement << "\n";
+
+        NodeType res = body;
+
+        if (new_value.defined() && info.new_uses > 0) {
+            // The new name/value may be used
+            res = LetType::make(new_name, new_value, res);
+        }
+
+        if (info.old_uses > 0) {
+            // The old name is still in use. We'd better keep it as well.
+            res = LetType::make(op->name, value, res);
+            debug(4) << "Old name is still used: as " << res << "\n";
+        }
+
+        const LetType *new_op = res.template as<LetType>();
+        if (new_op &&
+            new_op->name == op->name &&
+            new_op->body.same_as(op->body) &&
+            new_op->value.same_as(op->value)) {
+            result = op;
+            return;
+        }
+        result = res;
+        return;
+    }
+    void visit(const Variable *op) {
+        if (var_info.contains(op->name)) {
+            VarInfo &info = var_info.ref(op->name);
+
+            // if replacement is defined, we should substitute it in (unless
+            // it's a var that has been hidden by a nested scope).
+            if (info.replacement.defined()) {
+                internal_assert(info.replacement.type() == op->type);
+                expr = info.replacement;
+                info.new_uses++;
+            } else {
+                // This expression was not something deemed
+                // substitutable - no replacement is defined.
+                expr = op;
+                info.old_uses++;
+            }
+        } else {
+            // We never encountered a let that defines this var. Must
+            // be a uniform. Don't touch it.
+            expr = op;
+        }
+    }
+    void found_buffer_reference(const string &name, size_t dimensions = 0) {
+        // for (size_t i = 0; i < dimensions; i++) {
+        //     string stride = name + ".stride." + std::to_string(i);
+        //     if (var_info.contains(stride)) {
+        //         var_info.ref(stride).old_uses++;
+        //     }
+
+        //     string min = name + ".min." + std::to_string(i);
+        //     if (var_info.contains(min)) {
+        //         var_info.ref(min).old_uses++;
+        //     }
+        // }
+
+        if (var_info.contains(name)) {
+            var_info.ref(name).old_uses++;
+        }
+    }
+    void visit(const Load *op) {
+        found_buffer_reference(op->name);
+        IRMutator::visit(op);
+    }
+    void visit(const Store *op) {
+        found_buffer_reference(op->name);
+        IRMutator::visit(op);
+    }
+
+    void visit(const Let *op) {
+      visit_let(expr, op);
+    }
+    void visit(const LetStmt *op) {
+        visit_let(stmt, op);
+    }
+
     void visit(const Shuffle *op) {
         if (op->is_slice()) {
             debug(4) << "UndoBadSliceVector: Working on slice_vector-> " << (Expr) op <<  "\n\n";
