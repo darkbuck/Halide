@@ -478,6 +478,7 @@ private:
         const Ramp *ramp_value = value.as<Ramp>();
         const Add *add = value.as<Add>();
         const Shuffle *shuffle = value.as<Shuffle>();
+        const Mul *mul = value.as<Mul>();
         double f = 0.0;
         int64_t i = 0;
         uint64_t u = 0;
@@ -554,6 +555,33 @@ private:
             // In the interest of moving constants outwards so they
             // can cancel, pull the addition outside of the cast.
             expr = mutate(Cast::make(op->type, add->a) + add->b);
+        } else if (mul) {
+          // widening_cast(widening_cast(a) * widening_cast(b));
+          const Cast *cast_a = mul->a.as<Cast>();
+          const Cast *cast_b = mul->b.as<Cast>();
+          const Broadcast *broadcast_b = mul->b.as<Broadcast>(); 
+          if (broadcast_b) {
+            cast_b = broadcast_b->value.as<Cast>();
+          }
+          bool widening_cast_a = cast_a ? cast_a->type.bits() > cast_a->value.type().bits() : false;
+          bool widening_cast_b =  cast_b ? cast_b->type.bits() >  cast_b->value.type().bits() : false;
+          bool widening_cast_op = op->type.bits() > cast_a->type.bits();
+          if (cast_a && cast_b &&
+              widening_cast_a &&
+              widening_cast_b &&
+              widening_cast_op) {
+            Expr value_a = Cast::make(op->type, cast_a->value);
+            Expr value_b;
+            if (broadcast_b) {
+              value_b = Broadcast::make(Cast::make(op->type.with_lanes(1),cast_b->value),
+                                        op->type.lanes());
+            } else {
+              value_b = Cast::make(op->type, cast_b->value);
+            }
+            expr = mutate(value_a * value_b);
+          } else {
+            expr = Cast::make(op->type, value);
+          }
         } else if (shuffle &&
                    (shuffle->is_slice() || shuffle->is_concat())) {
             vector<Expr> vectors;
