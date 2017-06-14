@@ -479,6 +479,10 @@ private:
         const Add *add = value.as<Add>();
         const Shuffle *shuffle = value.as<Shuffle>();
         const Mul *mul = value.as<Mul>();
+        if (mul) {
+          debug(4) << "Simplify cast with mul " << (Expr) op << "\n";
+          debug(4) << "value is " << value << "\n";
+        }
         double f = 0.0;
         int64_t i = 0;
         uint64_t u = 0;
@@ -557,29 +561,32 @@ private:
             expr = mutate(Cast::make(op->type, add->a) + add->b);
         } else if (mul) {
           // widening_cast(widening_cast(a) * widening_cast(b));
+          debug(4) << "Handling mul in simplify cast" << (Expr) mul << "\n";
           const Cast *cast_a = mul->a.as<Cast>();
           const Cast *cast_b = mul->b.as<Cast>();
           const Broadcast *broadcast_b = mul->b.as<Broadcast>(); 
-          if (broadcast_b) {
-            cast_b = broadcast_b->value.as<Cast>();
-          }
           bool widening_cast_a = cast_a ? cast_a->type.bits() > cast_a->value.type().bits() : false;
-          bool widening_cast_b =  cast_b ? cast_b->type.bits() >  cast_b->value.type().bits() : false;
+          bool widening_cast_b =  cast_b ? cast_b->type.bits() >  cast_b->value.type().bits() : is_simple_const(mul->b);
           bool widening_cast_op = op->type.bits() > cast_a->type.bits();
-          if (cast_a && cast_b &&
-              widening_cast_a &&
-              widening_cast_b &&
-              widening_cast_op) {
+          if (widening_cast_a && widening_cast_b && widening_cast_op) {
             Expr value_a = Cast::make(op->type, cast_a->value);
             Expr value_b;
-            if (broadcast_b) {
-              value_b = Broadcast::make(Cast::make(op->type.with_lanes(1),cast_b->value),
+            if (cast_b) {
+              value_b = Cast::make(op->type, cast_b->value);
+            } else if (broadcast_b) {
+              value_b = Broadcast::make(Cast::make(op->type.with_lanes(1), broadcast_b->value),
                                         op->type.lanes());
             } else {
-              value_b = Cast::make(op->type, cast_b->value);
+              value_b = Cast::make(op->type, mul->b);
             }
             expr = mutate(value_a * value_b);
+          } else if (value.same_as(op->value)) {
+            debug(4) << "Doesn't match criteria\n";
+            debug(4) << "widening_cast_a, widening_cast_b, widening_cast_op ->(" << widening_cast_a << "," << widening_cast_b << ", " << widening_cast_op << ")\n";
+            expr = op;
           } else {
+            debug(4) << "Doesn't match criteria\n";
+            debug(4) << "widening_cast_a, widening_cast_b, widening_cast_op ->(" << widening_cast_a << "," << widening_cast_b << ", " << widening_cast_op << ")\n";
             expr = Cast::make(op->type, value);
           }
         } else if (shuffle &&
@@ -4460,14 +4467,18 @@ private:
             }
             return;
         }
-
+        debug(4) << "Simplify shuffle " << (Expr) op << "\n";
         // Mutate the vectors
         vector<Expr> new_vectors;
         bool changed = false;
         for (Expr vector : op->vectors) {
+          debug(4) << ".... mutating " << vector << "\n";
             Expr new_vector = mutate(vector);
             if (!vector.same_as(new_vector)) {
+              debug(4) << ".... CHANGED TO " << new_vector << "\n";
                 changed = true;
+            } else {
+              debug(4) << ".... NO CHANGE\n";
             }
             new_vectors.push_back(new_vector);
         }

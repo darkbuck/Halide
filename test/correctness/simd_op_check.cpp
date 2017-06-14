@@ -1914,7 +1914,7 @@ struct Test {
         check("vrmpy(v*.ub,r*.b)", hvx_width, i32(u8_1) + i32(u8_2)*-2 + i32(u8_3)*3 + i32(u8_4)*-4);
         check("v*.w += vrmpy(v*.ub,r*.b)", hvx_width, i32_1 + i32(u8_1) + i32(u8_2)*2 + i32(u8_3)*3 + i32(u8_4)*4);
 
-        We should also match this pattern.
+        // We should also match this pattern.
         check("vrmpy(v*.ub,r*.ub)", hvx_width, u32(u16(u8_1)*255) + u32(u16(u8_2)*254) + u32(u16(u8_3)*253) + u32(u16(u8_4)*252)); // PDB: XFailed
         check("v*.w += vrmpy(v*.ub,r*.b)", hvx_width, i32_1 + i32(i16(u8_1)*2) + i32(i16(u8_2)*-3) + i32(i16(u8_3)*-4) + i32(i16(u8_4)*5)); // PDB: XFAILED
 
