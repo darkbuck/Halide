@@ -142,6 +142,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
             if (owned_job) {
                 work_queue.owners_sleeping++;
                 owned_job->owner_is_sleeping = true;
+                //print(NULL) << pthread_self() << " Owner sleeping\n";
                 halide_cond_wait(&work_queue.wake_owners, &work_queue.mutex);
                 owned_job->owner_is_sleeping = false;
                 work_queue.owners_sleeping--;
@@ -149,6 +150,7 @@ WEAK void worker_thread_already_locked(work *owned_job) {
                 work_queue.workers_sleeping++;
                 if (work_queue.a_team_size > work_queue.target_a_team_size) {
                     // Transition to B team
+                    //print(NULL) << pthread_self() << " B team worker sleeping\n";
                     work_queue.a_team_size--;
                     halide_cond_wait(&work_queue.wake_b_team, &work_queue.mutex);
                     work_queue.a_team_size++;
@@ -294,22 +296,20 @@ WEAK void enqueue_work_already_locked(int num_jobs, work *jobs) {
     //print(NULL) << pthread_self() << " nested parallelism: " << nested_parallelism << "\n";
 
     // Wake up an appropriate number of threads
-    if (workers_to_wake) {
-        if (nested_parallelism || workers_to_wake > work_queue.workers_sleeping) {
-            // If there's nested parallelism going on, we just wake up
-            // everyone. TODO: make this more precise.
-            work_queue.target_a_team_size = work_queue.threads_created;
-        } else {
-            work_queue.target_a_team_size = workers_to_wake;
-        }
-        //print(NULL) << pthread_self() << " A team size: " << work_queue.a_team_size << "\n";
-        //print(NULL) << pthread_self() << " Target A team size: " << work_queue.target_a_team_size << "\n";
-        halide_cond_broadcast(&work_queue.wake_a_team);
-        if (work_queue.target_a_team_size > work_queue.a_team_size) {
-            halide_cond_broadcast(&work_queue.wake_b_team);
-            if (stealable_jobs) {
-                halide_cond_broadcast(&work_queue.wake_owners);
-            }
+    if (nested_parallelism || workers_to_wake > work_queue.workers_sleeping) {
+        // If there's nested parallelism going on, we just wake up
+        // everyone. TODO: make this more precise.
+        work_queue.target_a_team_size = work_queue.threads_created;
+    } else {
+        work_queue.target_a_team_size = workers_to_wake;
+    }
+    //print(NULL) << pthread_self() << " A team size: " << work_queue.a_team_size << "\n";
+    //print(NULL) << pthread_self() << " Target A team size: " << work_queue.target_a_team_size << "\n";
+    halide_cond_broadcast(&work_queue.wake_a_team);
+    if (work_queue.target_a_team_size > work_queue.a_team_size) {
+        halide_cond_broadcast(&work_queue.wake_b_team);
+        if (stealable_jobs) {
+            halide_cond_broadcast(&work_queue.wake_owners);
         }
     }
 }
@@ -331,7 +331,7 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     job.task.fn = f;
     job.task.min = min;
     job.task.extent = size;
-    job.task.may_block = false; // May only call do_par_for if it there are no inner forks or acquires, so TODO: set this to false
+    job.task.may_block = false;
     job.task.serial = false;
     job.task.semaphores = NULL;
     job.task.num_semaphores = 0;
@@ -352,20 +352,6 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
 
 WEAK int halide_default_do_parallel_tasks(void *user_context, int num_tasks,
                                           struct halide_parallel_task_t *tasks) {
-    // Avoid entering the task system if possible
-    #if 0
-    if (num_tasks == 1) {
-        if (tasks->extent == 0) {
-            return 0;
-        } else if (tasks->extent == 1 &&
-                   (tasks->num_semaphores == 0 ||
-                    (tasks->num_semaphores == 1 &&
-                     halide_default_semaphore_try_acquire(tasks->semaphores->semaphore, tasks->semaphores->count)))) {
-            return tasks->fn(user_context, tasks->min, tasks->closure);
-        }
-    }
-    #endif
-
     work *jobs = (work *)__builtin_alloca(sizeof(work) * num_tasks);
 
     for (int i = 0; i < num_tasks; i++) {
@@ -382,7 +368,8 @@ WEAK int halide_default_do_parallel_tasks(void *user_context, int num_tasks,
     int exit_status = 0;
     for (int i = 0; i < num_tasks; i++) {
         //print(NULL) << pthread_self() << " Joining task " << jobs[i].task.name << "\n";
-        // TODO: Is it bad to join the tasks in a specific order?
+        // It doesn't matter what order we join the tasks in, because
+        // we'll happily assist with siblings too.
         worker_thread_already_locked(jobs + i);
         if (jobs[i].exit_status != 0) {
             exit_status = jobs[i].exit_status;
