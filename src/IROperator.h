@@ -188,6 +188,10 @@ struct BufferBuilder {
     EXPORT Expr build() const;
 };
 
+/** If e is a ramp expression with stride, default 1, return the base,
+ * otherwise undefined. */
+Expr strided_ramp_base(Expr e, int stride = 1);
+
 } // namespace Internal
 
 /** Cast an expression to the halide type corresponding to the C++ type T. */
@@ -807,10 +811,14 @@ inline Expr clamp(Expr a, Expr min_val, Expr max_val) {
         << "clamp of undefined Expr\n";
     Expr n_min_val = lossless_cast(a.type(), min_val);
     user_assert(n_min_val.defined())
-        << "clamp with possibly out of range minimum bound: " << min_val << "\n";
+        << "Type mismatch in call to clamp. First argument ("
+        << a << ") has type " << a.type() << ", but second argument ("
+        << min_val << ") has type " << min_val.type() << ". Use an explicit cast.\n";
     Expr n_max_val = lossless_cast(a.type(), max_val);
     user_assert(n_max_val.defined())
-        << "clamp with possibly out of range maximum bound: " << max_val << "\n";
+        << "Type mismatch in call to clamp. First argument ("
+        << a << ") has type " << a.type() << ", but third argument ("
+        << max_val << ") has type " << max_val.type() << ". Use an explicit cast.\n";
     return Internal::Max::make(Internal::Min::make(std::move(a), std::move(n_max_val)), std::move(n_min_val));
 }
 
