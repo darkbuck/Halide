@@ -1433,6 +1433,93 @@ class EliminateInterleaves : public IRMutator {
         }
     }
 
+
+    // v0 and v1 are deinterleaved double vectors.
+    // lanes is the number of lanes in one vector.
+    Expr rewrite_interleaves(Expr v0, Expr v1, int start_lane, int lanes) {
+        // Remember, v0 and v1 are deinterleaved, so the even lanes are in
+        // the lower half
+        Expr v0_even = Shuffle::make_slice(v0, 0, 1, lanes);
+        Expr v1_even = Shuffle::make_slice(v1, 0, 1, lanes);
+
+        Expr v0_odd = Shuffle::make_slice(v0, lanes, 1, lanes);
+        Expr v1_odd = Shuffle::make_slice(v1, lanes, 1, lanes);
+
+        Expr deint_v, e, o;
+        if (start_lane % 2 == 0) {
+            // If the start lane is even, then even lanes in v0 and
+            // v1 remain even in the result and odd lanes remain odd
+            e = Shuffle::make_slice(Shuffle::make_concat({v0_even, v1_even}),
+                                         start_lane/2, 1, lanes);
+            o = Shuffle::make_slice(Shuffle::make_concat({v0_odd, v1_odd}),
+                                         start_lane/2, 1, lanes);
+        } else {
+            // If the start lane is odd, then even lanes of v0 and
+            // v1 become odd lanes in the result and odd lanes become
+            // even lanes in the result.
+            e = Shuffle::make_slice(Shuffle::make_concat({v0_odd, v1_odd}),
+                                         start_lane/2, 1, lanes);
+            o = Shuffle::make_slice(Shuffle::make_concat({v0_even, v1_even}),
+                                         (start_lane+1)/2, 1, lanes);
+        }
+        deint_v = Shuffle::make_concat({e, o});
+        return native_interleave(deint_v);
+    }
+    void visit(const Shuffle *op) {
+        if (op->is_slice()) {
+            // op has only one operand and that is a concat vector.
+            int vlen = native_vector_bits / 8;
+            // We could, perhaps, generalize this, I don't know. However,
+            // in this code, we look for this pattern
+            // dv2 = slice_vector(concat_vector(interleave(dv0), interleave(dv1), ..);
+            // we convert that into
+            // dv2 = interleave(concat_vector(slice_vector(dv0)), slice_vector(dv1))
+            // dv0, dv1 and dv2 are double vectors.
+            // This allows the interleave to be cancelled by a higher deinterleave.
+            if (op->vectors.size() == 1 && op->slice_stride() == 1 &&
+                op->type.lanes() * op->type.bytes() == 2*vlen) {
+
+                Expr v = mutate(op->vectors[0]);
+                const Shuffle *concat = v.as<Shuffle>();
+                if (concat && concat->vectors.size() == 2) {
+                    // We'll deal with only 2 vectors being
+                    // concatenated. This simplifies things
+                    // while also capturing most, if not all
+                    // the instances we want handled.
+                    // slice_vector(concat_vector(..))
+                    bool all_yield_interleave = true;
+                    bool all_are_double_vectors = true;
+                    for (auto v : concat->vectors) {
+                        if (!yields_interleave(v)) {
+                            all_yield_interleave = false;
+                            break;
+                        } else {
+                            int bytes = v.type().lanes() * v.type().bytes();
+                            if (bytes != 2 * vlen) {
+                                all_are_double_vectors = false;
+                            }
+                        }
+                    }
+                    if (all_yield_interleave & all_are_double_vectors) {
+                        // slice_vector(concat_vector(..)) FIXME: fix this comment.
+                        Expr v0 = concat->vectors[0];
+                        Expr v1 = concat->vectors[1];
+                        if (v0.type() == v1.type()) {
+                            expr = rewrite_interleaves(remove_interleave(v0),
+                                                       remove_interleave(v1), op->slice_begin(),
+                                                       op->type.lanes()/2);
+                            return;
+                        }
+                    }
+                }
+            }
+            IRMutator::visit(op);
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+
     void visit(const Load *op) {
         if (buffers.contains(op->name)) {
             if ((op->type.lanes()*op->type.bits()) % (native_vector_bits*2) == 0) {
