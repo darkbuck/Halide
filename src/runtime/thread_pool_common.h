@@ -327,6 +327,10 @@ WEAK int halide_default_do_task(void *user_context, halide_task_t f, int idx,
 
 WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
                                    int min, int size, uint8_t *closure) {
+    if (size <= 0) {
+        return 0;
+    }
+
     work job;
     job.task.fn = f;
     job.task.min = min;
@@ -355,12 +359,21 @@ WEAK int halide_default_do_parallel_tasks(void *user_context, int num_tasks,
     work *jobs = (work *)__builtin_alloca(sizeof(work) * num_tasks);
 
     for (int i = 0; i < num_tasks; i++) {
-        jobs[i].task = tasks[i];
+        if (tasks->extent <= 0) {
+            // Skip extent zero jobs
+            num_tasks--;
+            continue;
+        }
+        jobs[i].task = *tasks++;
         jobs[i].user_context = user_context;
         jobs[i].exit_status = 0;
         jobs[i].active_workers = 0;
         jobs[i].next_semaphore = 0;
         jobs[i].owner_is_sleeping = false;
+    }
+
+    if (num_tasks == 0) {
+        return 0;
     }
 
     halide_mutex_lock(&work_queue.mutex);
