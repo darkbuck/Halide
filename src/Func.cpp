@@ -604,8 +604,8 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     internal_assert(prover_result.size() == values.size());
 
     vector<Split> &splits = definition.schedule().splits();
-    vector<ReductionVariable> &rvars = definition.schedule().rvars();
     vector<Dim> &dims = definition.schedule().dims();
+    vector<ReductionVariable> &rvars = definition.schedule().rvars();
     vector<Expr> predicates = definition.split_predicate();
 
     Scope<string> scope; // Contains list of RVars lifted to the intermediate Func
@@ -806,9 +806,10 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
 
     // Copy over the storage order of the original pure dims
     vector<StorageDim> &intm_storage_dims = intm.function().schedule().storage_dims();
-    internal_assert(intm_storage_dims.size() == storage_dims().size() + vars_rename.size());
-    for (size_t i = 0; i < storage_dims().size(); ++i) {
-        intm_storage_dims[i] = storage_dims()[i];
+    internal_assert(intm_storage_dims.size() ==
+                    func.schedule().storage_dims().size() + vars_rename.size());
+    for (size_t i = 0; i < func.schedule().storage_dims().size(); ++i) {
+        intm_storage_dims[i] = func.schedule().storage_dims()[i];
     }
 
     for (size_t i = 0; i < rvars_kept.size(); ++i) {
@@ -1156,7 +1157,7 @@ Stage &Stage::purify(VarOrRVar old_var, VarOrRVar new_var) {
     debug(4) << "In schedule for " << name() << ", purify RVar "
              << old_var.name() << " to Var " << new_var.name() << "\n";
 
-    Schedule &schedule = definition.schedule();
+    StageSchedule &schedule = definition.schedule();
 
     // Replace the old dimension with the new dimensions in the dims list
     bool found = false;
@@ -1189,7 +1190,7 @@ Stage &Stage::purify(VarOrRVar old_var, VarOrRVar new_var) {
 void Stage::remove(const string &var) {
     debug(4) << "In schedule for " << name() << ", remove " << var << "\n";
 
-    Schedule &schedule = definition.schedule();
+    StageSchedule &schedule = definition.schedule();
 
     // Replace the old dimension with the new dimensions in the dims list
     bool found = false;
@@ -1298,7 +1299,7 @@ Stage &Stage::rename(VarOrRVar old_var, VarOrRVar new_var) {
     debug(4) << "In schedule for " << name() << ", rename " << old_var.name()
              << " to " << new_var.name() << "\n";
 
-    Schedule &schedule = definition.schedule();
+    StageSchedule &schedule = definition.schedule();
 
     // Replace the old dimension with the new dimensions in the dims list
     bool found = false;
@@ -2234,7 +2235,7 @@ Func &Func::shader(Var x, Var y, Var c, DeviceAPI device_api) {
     Stage(func, func.definition(), 0, args()).gpu_blocks(x, y, device_api);
 
     bool constant_bounds = false;
-    Schedule &sched = func.schedule();
+    FuncSchedule &sched = func.schedule();
     for (size_t i = 0; i < sched.bounds().size(); i++) {
         if (c.name() == sched.bounds()[i].var) {
             constant_bounds = is_const(sched.bounds()[i].min) &&

@@ -78,7 +78,8 @@ Stmt build_provide_loop_nest_helper(string func_name,
                                     const vector<Expr> &site,
                                     const vector<Expr> &values,
                                     const vector<Expr> &predicates,
-                                    const Schedule &s,
+                                    const FuncSchedule &func_s,
+                                    const StageSchedule &stage_s,
                                     bool is_update) {
     // We'll build it from inside out, starting from a store node,
     // then wrapping it in for loops.
@@ -93,7 +94,7 @@ Stmt build_provide_loop_nest_helper(string func_name,
     map<string, Expr> dim_extent_alignment;
 
     // First hunt through the bounds for them.
-    for (const Bound &i : s.bounds()) {
+    for (const Bound &i : func_s.bounds()) {
         if (i.extent.defined()) {
             dim_extent_alignment[i.var] = i.extent;
         }
@@ -102,11 +103,11 @@ Stmt build_provide_loop_nest_helper(string func_name,
         }
     }
     // Then use any reduction domain.
-    for (const ReductionVariable &i : s.rvars()) {
+    for (const ReductionVariable &i : stage_s.rvars()) {
         dim_extent_alignment[i.var] = i.extent;
     }
 
-    vector<Split> splits = s.splits();
+    vector<Split> splits = stage_s.splits();
 
     // Define the function args in terms of the loop variables using the splits
     for (const Split &split : splits) {
@@ -128,8 +129,8 @@ Stmt build_provide_loop_nest_helper(string func_name,
     vector<Container> nest;
 
     // Put the desired loop nest into the containers vector.
-    for (int i = (int)s.dims().size() - 1; i >= 0; i--) {
-        const Dim &dim = s.dims()[i];
+    for (int i = (int)stage_s.dims().size() - 1; i >= 0; i--) {
+        const Dim &dim = stage_s.dims()[i];
         Container c = {Container::For, i, prefix + dim.var, Expr()};
         nest.push_back(c);
     }
@@ -158,8 +159,8 @@ Stmt build_provide_loop_nest_helper(string func_name,
     // some let stmts (e.g. the rebase let stmt) might depend on this vars;
     // otherwise, this may mess up the bounds_touched computation.
     int n_predicates_inner = 0;
-    for (int i = start_fuse; (i >= 0) && (i < (int)s.dims().size()-1); ++i) {
-        const Dim &dim = s.dims()[i];
+    for (int i = start_fuse; (i >= 0) && (i < (int)stage_s.dims().size()-1); ++i) {
+        const Dim &dim = stage_s.dims()[i];
         Expr var = Variable::make(Int(32), prefix + dim.var);
         Expr max = Variable::make(Int(32), prefix + dim.var + ".loop_max");
         Expr min = Variable::make(Int(32), prefix + dim.var + ".loop_min");
@@ -184,7 +185,7 @@ Stmt build_provide_loop_nest_helper(string func_name,
 
     // Resort the containers vector so that lets are as far outwards
     // as possible. Use reverse insertion sort. Start at the first letstmt.
-    for (int i = (int)s.dims().size(); i < (int)nest.size() - n_predicates_inner - n_predicates; i++) {
+    for (int i = (int)stage_s.dims().size(); i < (int)nest.size() - n_predicates_inner - n_predicates; i++) {
         // Only push up LetStmts.
         internal_assert(nest[i].value.defined());
         internal_assert(nest[i].type == Container::Let);
@@ -281,7 +282,7 @@ Stmt build_provide_loop_nest_helper(string func_name,
             stmt = IfThenElse::make(nest[i].value, stmt, Stmt());
         } else {
             internal_assert(nest[i].type == Container::For);
-            const Dim &dim = s.dims()[nest[i].dim_idx];
+            const Dim &dim = stage_s.dims()[nest[i].dim_idx];
             Expr min = Variable::make(Int(32), nest[i].name + ".loop_min");
             Expr extent = Variable::make(Int(32), nest[i].name + ".loop_extent");
             stmt = For::make(nest[i].name, min, extent, dim.for_type, dim.device_api, stmt);
@@ -322,7 +323,7 @@ Stmt build_provide_loop_nest_helper(string func_name,
 
     // Define the loop mins and extents for the reduction domain (if there is any)
     // in terms of the mins and maxs produced by bounds inference
-    for (const ReductionVariable &rv : s.rvars()) {
+    for (const ReductionVariable &rv : stage_s.rvars()) {
         string p = prefix + rv.var;
         Expr rmin = Variable::make(Int(32), p + ".min");
         Expr rmax = Variable::make(Int(32), p + ".max");
@@ -339,6 +340,7 @@ Stmt build_provide_loop_nest(string func_name,
                              string prefix,
                              int start_fuse,
                              const vector<string> &dims,
+                             const FuncSchedule &f_sched,
                              const Definition &def,
                              bool is_update) {
 
@@ -365,7 +367,7 @@ Stmt build_provide_loop_nest(string func_name,
     // Default schedule/values if there is no specialization
     Stmt stmt = build_provide_loop_nest_helper(
         func_name, prefix, start_fuse, dims, site, values,
-        def.split_predicate(), def.schedule(), is_update);
+        def.split_predicate(), f_sched, def.schedule(), is_update);
 
     // Make any specialized copies
     const vector<Specialization> &specializations = def.specializations();
@@ -375,7 +377,8 @@ Stmt build_provide_loop_nest(string func_name,
         const Definition &s_def = s.definition;
         Stmt then_case;
         if (s.failure_message.empty()) {
-            then_case = build_provide_loop_nest(func_name, prefix, start_fuse, dims, s_def, is_update);
+            then_case = build_provide_loop_nest(func_name, prefix, start_fuse, dims,
+                                                f_sched, s_def, is_update);
         } else {
             internal_assert(equal(c, const_true()));
             // specialize_fail() should only be possible on the final specialization
@@ -582,7 +585,7 @@ Stmt build_produce(Function f, const Target &target) {
 
         string prefix = f.name() + ".s0.";
         vector<string> dims = f.args();
-        return build_provide_loop_nest(f.name(), prefix, -1, dims, f.definition(), false);
+        return build_provide_loop_nest(f.name(), prefix, -1, dims, f.schedule(), f.definition(), false);
     }
 }
 
@@ -597,7 +600,7 @@ vector<Stmt> build_update(Function f) {
         string prefix = f.name() + ".s" + std::to_string(i+1) + ".";
 
         vector<string> dims = f.args();
-        Stmt loop = build_provide_loop_nest(f.name(), prefix, -1, dims, def, true);
+        Stmt loop = build_provide_loop_nest(f.name(), prefix, -1, dims, f.schedule(), def, true);
         updates.push_back(loop);
     }
 
@@ -617,7 +620,7 @@ pair<Stmt, Stmt> build_production(Function func, const Target &target) {
 // injects assertions that check that those bounds are sufficiently
 // large to cover the inferred bounds required.
 Stmt inject_explicit_bounds(Stmt body, Function func) {
-    const Schedule &s = func.schedule();
+    const FuncSchedule &s = func.schedule();
     for (size_t stage = 0; stage <= func.updates().size(); stage++) {
         for (size_t i = 0; i < s.bounds().size(); i++) {
             Bound b = s.bounds()[i];
@@ -1340,7 +1343,8 @@ private:
                 internal_assert(env.count(pair.func_2));
                 const Function &f2 = env.find(pair.func_2)->second;
                 const vector<Dim> &dims_2 =
-                    (pair.stage_2 == 0) ? f2.definition().schedule().dims() : f2.update(pair.stage_2-1).schedule().dims();
+                    (pair.stage_2 == 0) ? f2.definition().schedule().dims() :
+                                          f2.update(pair.stage_2-1).schedule().dims();
                 int dim2_idx = dims_2.size() - (dims.size() - i);
                 internal_assert(dim2_idx < (int)dims_2.size());
                 string var = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + dims_2[dim2_idx].var;
@@ -1352,7 +1356,8 @@ private:
         }
 
         const vector<string> f_args = f.args();
-        Stmt produce = build_provide_loop_nest(f.name(), prefix, start_fuse, f_args, def, is_update);
+        Stmt produce = build_provide_loop_nest(f.name(), prefix, start_fuse, f_args,
+                                               f.schedule(), def, is_update);
 
         // Strip off the containing lets. The bounds of the parent fused loops
         // (i.e. the union bounds) might refer to them, so we need to move them
@@ -1776,7 +1781,7 @@ bool validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
     }
 
     // Emit a warning if only some of the steps have been scheduled.
-    bool any_scheduled = f.schedule().touched();
+    bool any_scheduled = f.definition().schedule().touched();
     for (const Definition &r : f.updates()) {
         any_scheduled = any_scheduled || r.schedule().touched();
     }
@@ -1810,7 +1815,7 @@ bool validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
     }
 
     for (const Definition &def : definitions) {
-        const Schedule &s = def.schedule();
+        const StageSchedule &s = def.schedule();
         for (const Dim &d : s.dims()) {
             if (!target.supports_device_api(d.device_api)) {
                 user_error << "Schedule for Func " << f.name()
@@ -1926,10 +1931,10 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
             << func_1.name() << ", so it must not have any specializations.\n";
 
         // Verify that the functions being computed with are not scheduled inline.
-        user_assert(!func_1.definition().schedule().compute_level().is_inline())
+        user_assert(!func_1.schedule().compute_level().is_inline())
             << "Invalid compute_with: " << p.func_1 << ".s" << p.stage_1
             << " is scheduled inline.\n";
-        user_assert(!func_2.definition().schedule().compute_level().is_inline())
+        user_assert(!func_2.schedule().compute_level().is_inline())
             << "Invalid compute_with: " << p.func_2 << ".s" << p.stage_2
             << " is scheduled inline.\n";
 
@@ -1943,12 +1948,12 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
 
         // Verify that they are computed at the same loop level.
         user_assert((p.func_1 == p.func_2) ||
-                    (func_1.definition().schedule().compute_level() ==
-                     func_2.definition().schedule().compute_level()))
+                    (func_1.schedule().compute_level() ==
+                     func_2.schedule().compute_level()))
             << "Invalid compute_with: the compute levels of " << p.func_1 << ".s" << p.stage_1
-            << " (computed at " << func_1.definition().schedule().compute_level().to_string()
+            << " (computed at " << func_1.schedule().compute_level().to_string()
             << ") and " << p.func_2 << ".s" << p.stage_2 << " ("
-            << func_2.definition().schedule().compute_level().to_string() << ") do not match.\n";
+            << func_2.schedule().compute_level().to_string() << ") do not match.\n";
 
         const vector<Dim> &dims_1 = def_1.schedule().dims();
         const vector<Dim> &dims_2 = def_2.schedule().dims();
