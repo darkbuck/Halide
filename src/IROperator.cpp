@@ -358,6 +358,23 @@ Expr lossless_cast(Type t, Expr e) {
         }
     }
 
+    if (const Shuffle *s = e.as<Shuffle>()) {
+      std::vector<Expr> new_vectors;
+      const std::vector<Expr> &vectors = s->vectors;
+      if (s->is_concat() || s->is_slice()) {
+        for (auto v: vectors) {
+          Expr new_v = lossless_cast(t.with_lanes(v.type().lanes()), v);
+          if (new_v.defined()) {
+            new_vectors.push_back(new_v);
+          } else {
+            return Expr();
+          }
+        }
+        Expr new_shuffle =  Shuffle::make(new_vectors, s->indices);
+        return new_shuffle;
+      }
+    }
+
     return Expr();
 }
 
