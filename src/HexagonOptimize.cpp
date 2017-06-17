@@ -1903,6 +1903,398 @@ private:
         IRMutator::visit(op);
     }
 };
+
+// Can all the Exprs in vectors be lossless_cast into a type half as small and
+// such that all the vectors in new_vectors are of the same type.
+bool all_widening_casts(const std::vector<Expr> &vectors, std::vector<Expr> &new_vectors) {
+    for (auto v: vectors) {
+        debug(4) << "PDB: Checking if " << v << " is a widening cast\n";
+        const Cast *c = v.as<Cast>();
+        if (!c) {
+            debug(4) << v << " is not a cast at all \n";
+            return false;
+        }
+        if (c->type.bits() < c->value.type().bits()) {
+            return false;
+        } else {
+            new_vectors.push_back(c->value);
+        }
+    }
+    internal_assert(new_vectors.size() == vectors.size());
+    Type t = new_vectors[0].type();
+    for (unsigned i = 1; i < new_vectors.size(); ++i) {
+        if (t != new_vectors[i].type())
+            return false;
+    }
+    return true;
+}
+class FindWideningMultiply : public IRVisitor {
+    Scope<Expr> variables;
+    bool found;
+public:
+    using IRVisitor::visit;
+    template<typename T>
+    void visit_let(const T *op) {
+        variables.push(op->name, op->value);
+        op->body.accept(this);
+        variables.pop(op->name);
+    }
+
+    void visit(const Let *op) { visit_let(op); }
+    void visit(const LetStmt *op) { visit_let(op); }
+    bool is_widened_op(Expr e) {
+        debug(4) << "Checking " << e << "\n\n";
+        if (const Variable *v = e.as<Variable>()) {
+            if (variables.contains(v->name)) {
+                Expr value = variables.get(v->name);
+                debug(4) << "is_widened_op: checking the value of " << e << " which is " << value << "\n";
+                return is_widened_op(value);
+            }
+            return false;
+        }
+        Type e_type = e.type();
+        Type t_int = e_type.with_bits(e_type.bits()/2).with_code(Type::Int);
+        Type t_uint = e_type.with_bits(e_type.bits()/2).with_code(Type::UInt);
+        Expr int_expr = lossless_cast(t_int, e);
+        if (int_expr.defined()) {
+            debug(4) << "is_widened_op: " << e << " is a lossless_cast from " << t_int << "\n";
+            return true;
+        }
+        Expr uint_expr = lossless_cast(t_uint, e);
+        if (uint_expr.defined()) {
+            debug(4) << "is_widened_op: " << e << " is a lossless_cast from " << t_uint << "\n";
+            return true;
+        }
+        return false;
+    }
+    void visit(const Mul *op) {
+        if (op->type.is_vector()) {
+            debug(4) << "FindWideningMultiply: Checking " << (Expr) op << "\n";
+            if (is_widened_op(op->a) && is_widened_op(op->b)) {
+                debug(4) << ".... is widened\n";
+                found = true;
+                return;
+            }
+            debug(4) << "... can't say. visiting operands\n";
+        }
+        IRVisitor::visit(op);
+    }
+    bool found_widening_multiply() { return found; }
+    FindWideningMultiply() : found(false) {}
+};
+bool has_widening_multiply(Expr e) {
+    FindWideningMultiply f;
+    e.accept(&f);
+    return f.found_widening_multiply();
+}
+bool should_concat_and_add(const std::vector<Expr> &vectors,
+                        std::vector<Expr> &new_vectors_a,
+                        std::vector<Expr> &new_vectors_b) {
+    new_vectors_a.clear();
+    new_vectors_b.clear();
+    for (auto v: vectors) {
+        debug(4) << "In should_concat_and_add: Checking " << v << "\n";
+        const Add *add_v = v.as<Add>();
+        if (!add_v ||
+            (add_v && has_widening_multiply(v))) {
+            debug(4) << v << "is either not an add or is a widened mul_add operation\n";
+            new_vectors_a.clear();
+            new_vectors_b.clear();
+            return false;
+        } else {
+            debug(4) << v << "isn't a widened add\n";
+            new_vectors_a.push_back(add_v->a);
+            new_vectors_b.push_back(add_v->b);
+        }
+    }
+    return true;
+}
+bool should_concat_and_mul(const std::vector<Expr> &vectors,
+                           std::vector<Expr> &new_vectors_a,
+                           std::vector<Expr> &new_vectors_b) {
+    new_vectors_a.clear();
+    new_vectors_b.clear();
+    for (auto v: vectors) {
+        debug(4) << "In should_concat_and_mul: Checking " << v << "\n";
+        const Mul *mul_v = v.as<Mul>();
+        if (!mul_v) {
+            debug(4) << v << "is not a mul\n";
+            new_vectors_a.clear();
+            new_vectors_b.clear();
+            return false;
+        } else {
+            debug(4) << v << "is widened mul\n";
+            new_vectors_a.push_back(mul_v->a);
+            new_vectors_b.push_back(mul_v->b);
+        }
+    }
+    return true;
+}
+
+bool all_broadcasts_same_value(const std::vector<Expr> vectors, Expr &value) {
+    for (auto v: vectors) {
+        const Broadcast *bc = v.as<Broadcast>();
+        if (!bc) {
+            debug(4) << v << " is not a broadcast at all\n";
+            return false;
+        }
+        if (value.defined() && !bc->value.same_as(value)) {
+            debug(4) << v << " is a broadcast of a different value\n";
+            return false;
+        } else {
+            value = bc->value;
+        }
+    }
+    return true;
+}
+class FixupHoistShuffles : public IRMutator {
+    using IRMutator::visit;
+    struct VarInfo {
+        Expr replacement;
+        int old_uses, new_uses;
+    };
+
+    Scope<VarInfo> var_info;
+
+    template <typename NodeType, typename LetType>
+    void visit_let(NodeType &result, const LetType *op) {
+        internal_assert(!var_info.contains(op->name))
+            << "Repeated name: " << op->name << "\n";
+        Expr value = mutate(op->value);
+        NodeType body = op->body;
+
+        // Iteratively peel off certain operations from the let value and push them inside.
+        Expr new_value = value;
+        string new_name = op->name + ".us";
+        Expr new_var = Variable::make(new_value.type(), new_name);
+        Expr replacement = new_var;
+
+        debug(4) << "FixupHoistShuffles: Working on Let " << op->name << " = "
+                 << value << " in ... " << op->name << " ...\n";
+
+        while (1) {
+            const Shuffle *shuffle = new_value.as<Shuffle>();
+            const Variable *var = new_value.as<Variable>();
+            const Variable *var_b = nullptr;
+            const Variable *var_a = nullptr;
+            if (shuffle && shuffle->is_concat() &&
+                shuffle->vectors.size() == 2) {
+                var_a = shuffle->vectors[0].as<Variable>();
+                var_b = shuffle->vectors[1].as<Variable>();
+            }
+            if (is_const(new_value)) {
+                replacement = substitute(new_name, new_value, replacement);
+                new_value = Expr();
+                break;
+            } else if (var) {
+                replacement = substitute(new_name, var, replacement);
+                new_value = Expr();
+                break;
+            } else if (shuffle && shuffle->is_slice()) {
+                std::vector<int> slice_indices = shuffle->indices;
+                new_value = Shuffle::make_concat(shuffle->vectors);
+                new_var = Variable::make(new_value.type(), new_name);
+                replacement =
+                    substitute(new_name, Shuffle::make({new_var}, slice_indices), replacement);
+            } else if (shuffle && shuffle->is_concat()) {
+              if ((var_a && !var_b) || (!var_a && var_b)) {
+                new_var = Variable::make(var_a ? shuffle->vectors[1].type() : shuffle->vectors[0].type(), new_name);
+                Expr op_a = var_a ? shuffle->vectors[0] : new_var;
+                Expr op_b = var_a ? new_var : shuffle->vectors[1];
+                replacement = substitute(new_name, Shuffle::make_concat({op_a, op_b}), replacement);
+                new_value = var_a ? shuffle->vectors[1] : shuffle->vectors[0];
+              } else {
+                replacement = substitute(new_name, new_value, replacement);
+                new_value = Expr();
+              }
+            } else {
+                break;
+            }
+
+        }
+
+        if (new_value.same_as(value)) {
+            // Nothing to substitute
+            new_value = Expr();
+            replacement = Expr();
+        } else {
+            debug(4) << "FixupHoistShuffles: new let " << new_name << " = " << new_value << " in ... " << replacement << " ...\n";
+        }
+
+        VarInfo info;
+        info.old_uses = 0;
+        info.new_uses = 0;
+        info.replacement = replacement;
+        debug (4) << "FixupHoistShuffles: Pushing " << op->name << " -> " << info.replacement << "\n";
+        var_info.push(op->name, info);
+
+        body = mutate(body);
+
+        info = var_info.get(op->name);
+        var_info.pop(op->name);
+        debug (4) << "FixupHoistShuffles: Pushing " << op->name << " -> " << info.replacement << "\n";
+
+        NodeType res = body;
+
+        if (new_value.defined() && info.new_uses > 0) {
+            // The new name/value may be used
+            res = LetType::make(new_name, new_value, res);
+        }
+
+        if (info.old_uses > 0) {
+            // The old name is still in use. We'd better keep it as well.
+            res = LetType::make(op->name, value, res);
+            debug(4) << "Old name is still used: as " << res << "\n";
+        }
+
+        const LetType *new_op = res.template as<LetType>();
+        if (new_op &&
+            new_op->name == op->name &&
+            new_op->body.same_as(op->body) &&
+            new_op->value.same_as(op->value)) {
+            result = op;
+            return;
+        }
+        result = res;
+        return;
+    }
+    void visit(const Variable *op) {
+        if (var_info.contains(op->name)) {
+            VarInfo &info = var_info.ref(op->name);
+
+            // if replacement is defined, we should substitute it in (unless
+            // it's a var that has been hidden by a nested scope).
+            if (info.replacement.defined()) {
+                internal_assert(info.replacement.type() == op->type);
+                expr = info.replacement;
+                info.new_uses++;
+            } else {
+                // This expression was not something deemed
+                // substitutable - no replacement is defined.
+                expr = op;
+                info.old_uses++;
+            }
+        } else {
+            // We never encountered a let that defines this var. Must
+            // be a uniform. Don't touch it.
+            expr = op;
+        }
+    }
+    void found_buffer_reference(const string &name, size_t dimensions = 0) {
+        if (var_info.contains(name)) {
+            var_info.ref(name).old_uses++;
+        }
+    }
+    void visit(const Load *op) {
+        found_buffer_reference(op->name);
+        IRMutator::visit(op);
+    }
+    void visit(const Store *op) {
+        found_buffer_reference(op->name);
+        IRMutator::visit(op);
+    }
+
+    void visit(const Let *op) {
+      visit_let(expr, op);
+    }
+    void visit(const LetStmt *op) {
+        visit_let(stmt, op);
+    }
+
+    void visit(const Shuffle *op) {
+        if (op->is_slice()) {
+            debug(4) << "FixupHoistShuffles: Working on slice_vector-> " << (Expr) op <<  "\n\n";
+            std::vector<Expr> mutated_exprs;
+            for (auto v : op->vectors) {
+                mutated_exprs.push_back(mutate(v));
+            }
+            if (mutated_exprs.size() == 1 &&
+                (op->type.is_int()|| op->type.is_uint())) {
+
+                const Broadcast *bc = mutated_exprs[0].as<Broadcast>();
+                if (bc) {
+                    // slice_vector(x256(value), start, stride, lanes) ->
+                    // xlanes(value)
+                    int lanes = op->type.lanes();
+                    expr = Broadcast::make(bc->value, lanes);
+                    debug(4) << "FixupHoistShuffles: converting " << (Expr) op << " to " << expr << "\n\n";
+                    return;
+                }
+                const Mul *mul = mutated_exprs[0].as<Mul>();
+                if (mul) {
+                    Expr slice_a = mutate(Shuffle::make({mul->a}, op->indices));
+                    Expr slice_b = mutate(Shuffle::make({mul->b}, op->indices));
+                    expr = Mul::make(slice_a, slice_b);
+                    debug(4) << "FixupHoistShuffles: converting " << (Expr) op << " to " << expr << "\n\n";
+                    return;
+                }
+                const Add *add = mutated_exprs[0].as<Add>();
+                if (add) {
+                    Expr slice_a = mutate(Shuffle::make({add->a}, op->indices));
+                    Expr slice_b = mutate(Shuffle::make({add->b}, op->indices));
+                    expr = Add::make(slice_a, slice_b);
+                    debug(4) << "FixupHoistShuffles: converting " << (Expr) op << " to " << expr << "\n\n";
+                    return;
+                }
+            }
+            expr = Shuffle::make(mutated_exprs, op->indices);
+            debug(4) << "FixupHoistShuffles: converting " << (Expr) op << " to " << expr << "\n\n";
+            return;
+        } else if (op->is_concat()) {
+            std::vector<Expr> new_vectors;
+            std::vector<Expr> mutated_exprs;
+            Expr value;
+            debug(4) << "FixupHoistShuffles: Working on concat_vector-> " << (Expr) op <<  "\n\n";
+
+            for (auto v: op->vectors) {
+                mutated_exprs.push_back(mutate(v));
+            }
+
+            std::vector<Expr> new_vectors_a;
+            std::vector<Expr> new_vectors_b;
+            if (should_concat_and_add(mutated_exprs, new_vectors_a, new_vectors_b)) {
+                Expr new_cv_a = Shuffle::make_concat(new_vectors_a);
+                Expr new_cv_b = Shuffle::make_concat(new_vectors_b);
+                expr = mutate(Add::make(new_cv_a, new_cv_b));
+                debug(4) << "FixupHoistShuffles: converting " << (Expr) op << " to " << expr << "\n\n";
+                return;
+            }
+            // should_concat_and_mul is needed for vmpyi(): PDB: Fix this comment.
+            if (should_concat_and_mul(mutated_exprs, new_vectors_a, new_vectors_b)) {
+                std::vector<Expr> vec_a, vec_b;
+                Expr new_cv_a, new_cv_b;
+                bool cast_after = false;
+                if (all_widening_casts(new_vectors_a, vec_a) &&
+                    all_widening_casts(new_vectors_b, vec_b)) {
+                    new_cv_a = simplify(Shuffle::make_concat(vec_a));
+                    new_cv_b = simplify(Shuffle::make_concat(vec_b));
+                    cast_after = true;
+                } else {
+                    new_cv_a = Shuffle::make_concat(new_vectors_a);
+                    new_cv_b = Shuffle::make_concat(new_vectors_b);
+                }
+                if (cast_after) {
+                    Expr mul = Mul::make(new_cv_a, new_cv_b);
+                    Type t = mul.type().with_bits(op->type.bits());
+                    // do we mutate this?
+                    expr = Cast::make(t, mul);
+                } else {
+                    expr = mutate(Mul::make(new_cv_a, new_cv_b));
+                }
+                debug(4) << "FixupHoistShuffles: converting " << (Expr) op << " to " << expr << "\n\n";
+                return;
+            }
+            if (all_broadcasts_same_value(mutated_exprs, value)) {
+                expr = mutate(Broadcast::make(value, op->type.lanes()));
+                debug(4) << "FixupHoistShuffles: converting " << (Expr) op << " to " << expr << "\n\n";
+                return;
+            }
+            expr = Shuffle::make(mutated_exprs, op->indices);
+            return;
+        }
+        IRMutator::visit(op);
+    }
+};
 }  // namespace
 
 Stmt optimize_hexagon_shuffles(Stmt s, int lut_alignment) {
@@ -1910,6 +2302,12 @@ Stmt optimize_hexagon_shuffles(Stmt s, int lut_alignment) {
     // dynamic_shuffle (vlut) calls.
     return OptimizeShuffles(lut_alignment).mutate(s);
 }
+
+Stmt fixup_hoist_shuffles(Stmt s) {
+    s = FixupHoistShuffles().mutate(s);
+    return s;
+}
+
 
 Stmt vtmpy_generator(Stmt s) {
     // Generate vtmpy instruction if possible

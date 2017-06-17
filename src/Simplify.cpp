@@ -468,7 +468,47 @@ private:
         if (!const_int(mul->b, factor)) return Expr();
         return is_round_up_div(mul->a, *factor);
     }
-
+    // bin_op is a binary operation that is cast to type 't'. If 't' is
+    // wider than the type of bin_op and the operand of bin_op are themselves
+    // widening casts, then combine the casts to have only one cast.
+    // convert an expression like
+    // int32x32(int16x32(a) * x32((int16) 243)) ->
+    // int32x32(a) * x32((int32) 243)
+    template<typename T>
+    Expr handle_possibly_widened_binary_op(const T *bin_op, Type t) {
+        const Cast *cast_a = bin_op->a.template as<Cast>();
+        const Cast *cast_b = bin_op->b.template as<Cast>();
+        const Broadcast *broadcast_b = bin_op->b.template as<Broadcast>();
+        bool widening_cast_a, widening_cast_b, widening_cast_op;
+        if (cast_a) {
+          widening_cast_a = cast_a->type.bits() > cast_a->value.type().bits();
+        } else {
+          widening_cast_a = false;
+        }
+        if (cast_b) {
+          widening_cast_b = cast_b->type.bits() >  cast_b->value.type().bits();
+        } else {
+          widening_cast_b = is_simple_const(bin_op->b);
+        }
+        widening_cast_op = t.bits() > bin_op->type.bits();
+        if (widening_cast_a &&
+            widening_cast_b &&
+            widening_cast_op) {
+            Expr value_a = Cast::make(t, cast_a->value);
+            Expr value_b;
+            if (cast_b) {
+              value_b = Cast::make(t, cast_b->value);
+            } else if (broadcast_b) {
+              value_b = Broadcast::make(Cast::make(t.with_lanes(1), broadcast_b->value),
+                                        t.lanes());
+            } else {
+              // bin_op->b is_simple_const and a scalar.
+              value_b = Cast::make(t, bin_op->b);
+            }
+            return T::make(value_a, value_b);
+          }
+        return Expr();
+    }
     void visit(const Cast *op) {
         Expr value = mutate(op->value);
         if (propagate_indeterminate_expression(value, op->type, &expr)) {
@@ -479,6 +519,8 @@ private:
         const Ramp *ramp_value = value.as<Ramp>();
         const Add *add = value.as<Add>();
         const Shuffle *shuffle = value.as<Shuffle>();
+        const Mul *mul = value.as<Mul>();
+        const Sub *sub = value.as<Sub>();
         double f = 0.0;
         int64_t i = 0;
         uint64_t u = 0;
@@ -555,6 +597,45 @@ private:
             // In the interest of moving constants outwards so they
             // can cancel, pull the addition outside of the cast.
             expr = mutate(Cast::make(op->type, add->a) + add->b);
+        } else if (mul) {
+          // convert an expression like
+          // int32x32(int16x32(a) * x32((int16) 243)) ->
+          // int32x32(a) * x32((int32) 243)
+          Expr combined_casts = handle_possibly_widened_binary_op(mul, op->type);
+          if (combined_casts.defined()) {
+            expr = mutate(combined_casts);
+            return;
+          } else if (value.same_as(op->value)) {
+            expr = op;
+          } else {
+            expr = Cast::make(op->type, value);
+          }
+        } else if (add) {
+          // convert an expression like
+          // int32x32(int16x32(a) + x32((int16) 243)) ->
+          // int32x32(a) + x32((int32) 243)
+          Expr combined_casts = handle_possibly_widened_binary_op(add, op->type);
+          if (combined_casts.defined()) {
+            expr = mutate(combined_casts);
+            return;
+          } else if (value.same_as(op->value)) {
+            expr = op;
+          } else {
+            expr = Cast::make(op->type, value);
+          }
+        } else if (sub) {
+          // convert an expression like
+          // int32x32(int16x32(a) - x32((int16) 243)) ->
+          // int32x32(a) - x32((int32) 243)
+          Expr combined_casts = handle_possibly_widened_binary_op(sub, op->type);
+          if (combined_casts.defined()) {
+            expr = mutate(combined_casts);
+            return;
+          } else if (value.same_as(op->value)) {
+            expr = op;
+          } else {
+            expr = Cast::make(op->type, value);
+          }
         } else if (shuffle &&
                    (shuffle->is_slice() || shuffle->is_concat())) {
             vector<Expr> vectors;

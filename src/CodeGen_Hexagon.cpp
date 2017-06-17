@@ -227,6 +227,9 @@ void CodeGen_Hexagon::compile_func(const LoweredFunc &f,
     body = eliminate_bool_vectors(body);
     debug(2) << "Lowering after eliminating boolean vectors: " << body << "\n\n";
 
+    body = fixup_hoist_shuffles(body);
+    debug(2) << "Lowering after fixing hoist shuffles: " << body << "\n\n";
+
     // Optimize the IR for Hexagon.
     debug(1) << "Optimizing Hexagon instructions...\n";
     body = optimize_hexagon_instructions(body, target);
