@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
     halide_hexagon_power_hvx_on(NULL);
 
     printf("Running pipeline...\n");
-    double time = Halide::Tools::benchmark(iterations, 10, [&]() {
+    double time = Halide::Tools::benchmark(iterations, 100, [&]() {
         int result = pipeline(in, out);
         if (result != 0) {
             printf("pipeline failed! %d\n", result);
@@ -101,6 +101,7 @@ int main(int argc, char **argv) {
         uint8_t out_xy = out(x, y, c);
         if (blur != out_xy) {
             printf("Mismatch at %d %d %d: %d != %d\n", x, y, c, out_xy, blur);
+            fflush(stdout);
             abort();
         }
 

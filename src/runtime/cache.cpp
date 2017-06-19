@@ -190,8 +190,8 @@ WEAK uint32_t djb_hash(const uint8_t *key, size_t key_size)  {
 }
 
 WEAK halide_mutex memoization_lock;
-__attribute__((constructor)) 
-void init_memoization_lock() {
+__attribute__((constructor))
+WEAK void init_memoization_lock() {
     halide_mutex_init(&memoization_lock);
 }
 

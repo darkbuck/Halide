@@ -3035,98 +3035,15 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
 
     llvm::Type *args_t[] = {i8_t->getPointerTo(), i32_t, i8_t->getPointerTo()};
     FunctionType *task_t = FunctionType::get(i32_t, args_t, false);
+    llvm::Type *loop_args_t[] = {i8_t->getPointerTo(), i32_t, i32_t, i8_t->getPointerTo()};
+    FunctionType *loop_task_t = FunctionType::get(i32_t, loop_args_t, false);
 
     Value *result = nullptr;
 
     for (int i = 0; i < num_tasks; i++) {
-        const ParallelTask &t = tasks[i];
+        ParallelTask t = tasks[i];
 
-        // Make the array of semaphore acquisitions this task needs to do before it runs.
-        Value *semaphores;
-        Value *num_semaphores = ConstantInt::get(i32_t, (int)t.semaphores.size());
-        if (!t.semaphores.empty()) {
-            semaphores = create_alloca_at_entry(semaphore_acquire_t_type, (int)t.semaphores.size());
-            for (int i = 0; i < (int)t.semaphores.size(); i++) {
-                Value *semaphore = codegen(t.semaphores[i].semaphore);
-                semaphore = builder->CreatePointerCast(semaphore, semaphore_t_type->getPointerTo());
-                Value *count = codegen(t.semaphores[i].count);
-                Value *slot_ptr = builder->CreateConstGEP2_32(semaphore_acquire_t_type, semaphores, i, 0);
-                builder->CreateStore(semaphore, slot_ptr);
-                slot_ptr = builder->CreateConstGEP2_32(semaphore_acquire_t_type, semaphores, i, 1);
-                builder->CreateStore(count, slot_ptr);
-            }
-        } else {
-            semaphores = ConstantPointerNull::get(semaphore_acquire_t_type->getPointerTo());
-        }
-
-        // Make a new function that does the body
-        llvm::Function *containing_function = function;
-        function = llvm::Function::Create(task_t, llvm::Function::InternalLinkage,
-                                          t.name, module.get());
-
-        llvm::Value *task_ptr = builder->CreatePointerCast(function, task_t->getPointerTo());
-
-        #if LLVM_VERSION < 50
-        function->setDoesNotAlias(3);
-        #else
-        function->addParamAttr(2, Attribute::NoAlias);
-        #endif
-
-        set_function_attributes_for_target(function, target);
-
-        // Make the initial basic block and jump the builder into the new function
-        IRBuilderBase::InsertPoint call_site = builder->saveIP();
-        BasicBlock *block = BasicBlock::Create(*context, "entry", function);
-        builder->SetInsertPoint(block);
-
-        // Save the destructor block
-        BasicBlock *parent_destructor_block = destructor_block;
-        destructor_block = nullptr;
-
-        // Make a new scope to use
-        Scope<Value *> saved_symbol_table;
-        symbol_table.swap(saved_symbol_table);
-
-        // Get the function arguments
-
-        // The user context is first argument of the function; it's
-        // important that we override the name to be "__user_context",
-        // since the LLVM function has a random auto-generated name for
-        // this argument.
-        llvm::Function::arg_iterator iter = function->arg_begin();
-        sym_push("__user_context", iterator_to_pointer(iter));
-
-        // Next is the loop variable.
-        ++iter;
-        if (!t.loop_var.empty()) {
-            sym_push(t.loop_var, iterator_to_pointer(iter));
-        }
-
-        // The closure pointer is the third and last argument.
-        ++iter;
-        iter->setName("closure");
-        Value *closure_handle = builder->CreatePointerCast(iterator_to_pointer(iter),
-                                                           closure_t->getPointerTo());
-
-        // Load everything from the closure into the new scope
-        unpack_closure(closure, symbol_table, closure_t, closure_handle, builder);
-
-        // Generate the new function body
-        codegen(t.body);
-
-        // Return success
-        return_with_error_code(ConstantInt::get(i32_t, 0));
-
-        // Move the builder back to the main function.
-        builder->restoreIP(call_site);
-
-        // Now restore the scope
-        symbol_table.swap(saved_symbol_table);
-        function = containing_function;
-
-        // Restore the destructor block
-        destructor_block = parent_destructor_block;
-
+        // Analyze the task body
         class MayBlock : public IRVisitor {
             using IRVisitor::visit;
             void visit(const Acquire *op) {
@@ -3168,14 +3085,129 @@ void CodeGen_LLVM::do_parallel_tasks(const vector<ParallelTask> &tasks) {
         MinThreads min_threads;
         t.body.accept(&min_threads);
 
+        // Decide if we're going to call do_par_for or
+        // do_parallel_tasks. halide_do_par_for is simpler, but
+        // assumes a bunch of things. Programs that don't use async
+        // can also enter the task system via do_par_for.
+        bool use_do_par_for = (
+            num_tasks == 1 &&
+            min_threads.result == 1 &&
+            t.semaphores.empty() &&
+            !may_block.result);
+
+        // Make the array of semaphore acquisitions this task needs to do before it runs.
+        Value *semaphores;
+        Value *num_semaphores = ConstantInt::get(i32_t, (int)t.semaphores.size());
+        if (!t.semaphores.empty()) {
+            semaphores = create_alloca_at_entry(semaphore_acquire_t_type, (int)t.semaphores.size());
+            for (int i = 0; i < (int)t.semaphores.size(); i++) {
+                Value *semaphore = codegen(t.semaphores[i].semaphore);
+                semaphore = builder->CreatePointerCast(semaphore, semaphore_t_type->getPointerTo());
+                Value *count = codegen(t.semaphores[i].count);
+                Value *slot_ptr = builder->CreateConstGEP2_32(semaphore_acquire_t_type, semaphores, i, 0);
+                builder->CreateStore(semaphore, slot_ptr);
+                slot_ptr = builder->CreateConstGEP2_32(semaphore_acquire_t_type, semaphores, i, 1);
+                builder->CreateStore(count, slot_ptr);
+            }
+        } else {
+            semaphores = ConstantPointerNull::get(semaphore_acquire_t_type->getPointerTo());
+        }
+
+        FunctionType *fn_type = use_do_par_for ? task_t : loop_task_t;
+        int closure_arg_idx = use_do_par_for ? 2 : 3;
+
+        // Make a new function that does the body
+        llvm::Function *containing_function = function;
+        function = llvm::Function::Create(fn_type, llvm::Function::InternalLinkage,
+                                          t.name, module.get());
+
+        llvm::Value *task_ptr = builder->CreatePointerCast(function, fn_type->getPointerTo());
+
+        #if LLVM_VERSION < 50
+        function->setDoesNotAlias(closure_arg_idx + 1);
+        #else
+        function->addParamAttr(closure_arg_idx, Attribute::NoAlias);
+        #endif
+
+        set_function_attributes_for_target(function, target);
+
+        // Make the initial basic block and jump the builder into the new function
+        IRBuilderBase::InsertPoint call_site = builder->saveIP();
+        BasicBlock *block = BasicBlock::Create(*context, "entry", function);
+        builder->SetInsertPoint(block);
+
+        // Save the destructor block
+        BasicBlock *parent_destructor_block = destructor_block;
+        destructor_block = nullptr;
+
+        // Make a new scope to use
+        Scope<Value *> saved_symbol_table;
+        symbol_table.swap(saved_symbol_table);
+
+        // Get the function arguments
+
+        // The user context is first argument of the function; it's
+        // important that we override the name to be "__user_context",
+        // since the LLVM function has a random auto-generated name for
+        // this argument.
+        llvm::Function::arg_iterator iter = function->arg_begin();
+        sym_push("__user_context", iterator_to_pointer(iter));
+
+        if (use_do_par_for) {
+            // Next is the loop variable.
+            ++iter;
+            sym_push(t.loop_var, iterator_to_pointer(iter));
+        } else if (!t.loop_var.empty()) {
+            // We peeled off a loop. Wrap a new loop around the body
+            // that just does the slice given by the arguments.
+            string loop_min_name = unique_name('t');
+            string loop_extent_name = unique_name('t');
+            t.body = For::make(t.loop_var,
+                               Variable::make(Int(32), loop_min_name),
+                               Variable::make(Int(32), loop_extent_name),
+                               ForType::Serial,
+                               DeviceAPI::None,
+                               t.body);
+            ++iter;
+            sym_push(loop_min_name, iterator_to_pointer(iter));
+            ++iter;
+            sym_push(loop_extent_name, iterator_to_pointer(iter));
+        } else {
+            // This task is not any kind of loop, so skip these args.
+            ++iter;
+            ++iter;
+        }
+
+        // The closure pointer is the last argument.
+        ++iter;
+        iter->setName("closure");
+        Value *closure_handle = builder->CreatePointerCast(iterator_to_pointer(iter),
+                                                           closure_t->getPointerTo());
+
+        // Load everything from the closure into the new scope
+        unpack_closure(closure, symbol_table, closure_t, closure_handle, builder);
+
+        // Generate the new function body
+        codegen(t.body);
+
+        // Return success
+        return_with_error_code(ConstantInt::get(i32_t, 0));
+
+        // Move the builder back to the main function.
+        builder->restoreIP(call_site);
+
+        // Now restore the scope
+        symbol_table.swap(saved_symbol_table);
+        function = containing_function;
+
+        // Restore the destructor block
+        destructor_block = parent_destructor_block;
+
         Value *min = codegen(t.min);
         Value *extent = codegen(t.extent);
         Value *serial = codegen(cast(UInt(8), t.serial));
 
-        if (num_tasks == 1 && min_threads.result == 1 &&
-            t.semaphores.empty() && !may_block.result) {
-            // We can go into the task system through
-            // halide_do_par_for, which assumes these conditions.
+        if (use_do_par_for) {
             llvm::Function *do_par_for = module->getFunction("halide_do_par_for");
             internal_assert(do_par_for) << "Could not find halide_do_par_for in initial module\n";
             #if LLVM_VERSION < 50

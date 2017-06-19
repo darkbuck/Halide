@@ -6,6 +6,11 @@ namespace Halide { namespace Runtime { namespace Internal {
 
 struct work {
     halide_parallel_task_t task;
+
+    // If we come in to the task system via do_par_for we just have a
+    // halide_task_t, not a halide_loop_task_t.
+    halide_task_t task_fn;
+
     work *next_job;
     int *parent;
     void *user_context;
@@ -165,27 +170,65 @@ WEAK void worker_thread_already_locked(work *owned_job) {
 
         //print(NULL) << pthread_self() << " Working on " << job->task.name << "\n";
 
-        // Claim a task from it.
-        work myjob = *job;
-        job->task.min++;
-        job->task.extent--;
-
-        // If there were no more tasks pending for this job, remove it
-        // from the stack.
-        if (job->task.extent == 0) {
-            *prev_ptr = job->next_job;
-        }
-
         // Increment the active_worker count so that other threads
         // are aware that this job is still in progress even
         // though there are no outstanding tasks for it.
         job->active_workers++;
 
-        // Release the lock and do the task.
-        halide_mutex_unlock(&work_queue.mutex);
-        int result = halide_do_task(myjob.user_context, myjob.task.fn, myjob.task.min,
-                                    myjob.task.closure);
-        halide_mutex_lock(&work_queue.mutex);
+        int result = 0;
+
+        if (job->task.serial) {
+            // Remove it from the stack while we work on it
+            *prev_ptr = job->next_job;
+
+            // Release the lock and do the task.
+            halide_mutex_unlock(&work_queue.mutex);
+            int iters = 1;
+            while (result == 0) {
+                // Claim as many iterations as possible
+                while (job->task.extent > iters && job->make_runnable()) {
+                    iters++;
+                }
+                if (iters == 0) break;
+
+                // Do them
+                result = halide_do_loop_task(job->user_context, job->task.fn,
+                                             job->task.min, iters, job->task.closure);
+                job->task.min += iters;
+                job->task.extent -= iters;
+                iters = 0;
+            }
+            halide_mutex_lock(&work_queue.mutex);
+
+            // Put it back on the job stack
+            if (job->task.extent > 0) {
+                job->next_job = work_queue.jobs;
+                work_queue.jobs = job;
+            }
+
+        } else {
+            // Claim a task from it.
+            work myjob = *job;
+            job->task.min++;
+            job->task.extent--;
+
+            // If there were no more tasks pending for this job, remove it
+            // from the stack.
+            if (job->task.extent == 0) {
+                *prev_ptr = job->next_job;
+            }
+
+            // Release the lock and do the task.
+            halide_mutex_unlock(&work_queue.mutex);
+            if (myjob.task_fn) {
+                result = halide_do_task(myjob.user_context, myjob.task_fn,
+                                        myjob.task.min, myjob.task.closure);
+            } else {
+                result = halide_do_loop_task(myjob.user_context, myjob.task.fn,
+                                             myjob.task.min, 1, myjob.task.closure);
+            }
+            halide_mutex_lock(&work_queue.mutex);
+        }
 
         // If this task failed, set the exit status on the job.
         if (result) {
@@ -325,6 +368,11 @@ WEAK int halide_default_do_task(void *user_context, halide_task_t f, int idx,
     return f(user_context, idx, closure);
 }
 
+WEAK int halide_default_do_loop_task(void *user_context, halide_loop_task_t f,
+                                     int min, int extent, uint8_t *closure) {
+    return f(user_context, min, extent, closure);
+}
+
 WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
                                    int min, int size, uint8_t *closure) {
     if (size <= 0) {
@@ -332,7 +380,7 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     }
 
     work job;
-    job.task.fn = f;
+    job.task.fn = NULL;
     job.task.min = min;
     job.task.extent = size;
     job.task.may_block = false;
@@ -342,6 +390,7 @@ WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
     job.task.closure = closure;
     job.task.min_threads = 1;
     job.task.name = NULL;
+    job.task_fn = f;
     job.user_context = user_context;
     job.exit_status = 0;
     job.active_workers = 0;
@@ -365,6 +414,7 @@ WEAK int halide_default_do_parallel_tasks(void *user_context, int num_tasks,
             continue;
         }
         jobs[i].task = *tasks++;
+        jobs[i].task_fn = NULL;
         jobs[i].user_context = user_context;
         jobs[i].exit_status = 0;
         jobs[i].active_workers = 0;

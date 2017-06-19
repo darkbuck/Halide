@@ -167,6 +167,11 @@ private:
     }
 
     Stmt add_prefetch(string buf_name, const Parameter &param, const Box &box, Stmt body) {
+        // Walk inside any Acquire nodes
+        if (const Acquire *acq = body.as<Acquire>()) {
+            return Acquire::make(acq->semaphore, acq->count, add_prefetch(buf_name, param, box, acq->body));
+        }
+
         // Construct the region to be prefetched.
         Region bounds;
         for (size_t i = 0; i < box.size(); i++) {

@@ -144,6 +144,9 @@ typedef int (*halide_semaphore_init_t)(struct halide_semaphore_t *, int);
 typedef int (*halide_semaphore_release_t)(struct halide_semaphore_t *, int);
 typedef bool (*halide_semaphore_try_acquire_t)(struct halide_semaphore_t *, int);
 
+/** A task representing a serial for loop evaluated over some range. */
+typedef int (*halide_loop_task_t)(void *user_context, int min, int extent, uint8_t *closure);
+
 /** A parallel task to be passed to halide_do_parallel_tasks. That
  * tasks may recursively call halide_do_parallel_tasks, and there may
  * be complex dependencies between seemingly unrelated tasks expressed
@@ -151,8 +154,8 @@ typedef bool (*halide_semaphore_try_acquire_t)(struct halide_semaphore_t *, int)
  * be taken to avoid potential deadlock. This can be done by carefully
  * respecting the static metadata at the end of the task struct.*/
 struct halide_parallel_task_t {
-    // The function to call. It takes a user context, an index, and a closure.
-    halide_task_t fn;
+    // The function to call. It takes a user context, a min and extent, and a closure.
+    halide_loop_task_t fn;
 
     // The closure to pass it
     uint8_t *closure;
@@ -165,8 +168,8 @@ struct halide_parallel_task_t {
     struct halide_semaphore_acquire_t *semaphores;
     int num_semaphores;
 
-    // The function should be called 'extent' times, with index
-    // parameter set to min, min + 1, ... (min + extent - 1).
+    // The entire range the function should be called over. This range
+    // may be sliced up and the function called multiple times.
     int min, extent;
 
     // A parallel task provides two pieces of static metadata to
@@ -227,6 +230,15 @@ extern int halide_do_task(void *user_context, halide_task_t f, int idx,
                           uint8_t *closure);
 //@}
 
+/** The version of do_task called for loop tasks. By default calls the
+ * loop task with the same arguments. */
+// @{
+typedef int (*halide_do_loop_task_t)(void *, halide_loop_task_t, int, int, uint8_t *);
+extern halide_do_loop_task_t halide_set_custom_do_loop_task(halide_do_loop_task_t do_task);
+extern int halide_do_loop_task(void *user_context, halide_loop_task_t f, int min, int extent,
+                                uint8_t *closure);
+//@}
+
 /** Provide an entire custom tasking runtime via function
  * pointers. Note that do_task and semaphore_try_acquire are only ever
  * called by halide_default_do_par_for and
@@ -238,6 +250,7 @@ typedef int (*halide_do_parallel_tasks_t)(void *, int, struct halide_parallel_ta
 extern void halide_set_custom_parallel_runtime(
     halide_do_par_for_t,
     halide_do_task_t,
+    halide_do_loop_task_t,
     halide_do_parallel_tasks_t,
     halide_semaphore_init_t,
     halide_semaphore_try_acquire_t,
@@ -255,6 +268,8 @@ extern int halide_default_do_parallel_tasks(void *user_context,
                                             struct halide_parallel_task_t *tasks);
 extern int halide_default_do_task(void *user_context, halide_task_t f, int idx,
                                   uint8_t *closure);
+extern int halide_default_do_loop_task(void *user_context, halide_loop_task_t f,
+                                       int min, int extent, uint8_t *closure);
 extern int halide_default_semaphore_init(struct halide_semaphore_t *, int n);
 extern int halide_default_semaphore_release(struct halide_semaphore_t *, int n);
 extern bool halide_default_semaphore_try_acquire(struct halide_semaphore_t *, int n);
