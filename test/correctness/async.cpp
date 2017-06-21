@@ -300,6 +300,31 @@ int main(int argc, char **argv) {
             });
     }
 
+    // Sliding and folding over y, with a non-constant amount of stuff
+    // to acquire/release in the folding semaphore, and a flip in y
+    // (the footprint marches monotonically up the image instead of
+    // monotonically down the image).
+    if (1) {
+        Func producer, consumer;
+        Var x, y;
+
+        producer(x, y) = x + y;
+        consumer(x, y) = expensive(producer(x - 1, -min(y - 1, 15)) + producer(x + 1, -min(y + 1, 17)));
+        consumer.compute_root();
+        producer.store_root().fold_storage(y, 8, false).compute_at(consumer, y).async();
+
+        Buffer<int> out = consumer.realize(128, 128);
+
+        out.for_each_element([&](int x, int y) {
+                int correct = (x - 1 - std::min(y - 1, 15)) + (x + 1 - std::min(y + 1, 17));
+                if (out(x, y) != correct) {
+                    printf("out(%d, %d) = %d instead of %d\n",
+                           x, y, out(x, y), correct);
+                    exit(-1);
+                }
+            });
+    }
+
     // Downsample by 2x in y with sliding and folding over y
     if (1) {
         Func producer, consumer;
