@@ -381,7 +381,7 @@ class TightenProducerConsumerNodes : public IRMutator {
             // Check which sides it's used on
             bool first = stmt_uses_vars(block->first, scope);
             bool rest = stmt_uses_vars(block->rest, scope);
-            if (first && rest && is_producer) {
+            if (is_producer) {
                 return ProducerConsumer::make(name, is_producer, body);
             } else if (first && rest) {
                 return Block::make(make_producer_consumer(name, is_producer, block->first, scope),
@@ -537,7 +537,7 @@ class TightenForkNodes : public IRMutator {
     bool in_fork = false;
 };
 
-// TODO: merge semaphores
+// TODO: merge semaphores?
 
 Stmt fork_async_producers(Stmt s, const map<string, Function> &env) {
     s = TightenProducerConsumerNodes(env).mutate(s);

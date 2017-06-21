@@ -388,7 +388,31 @@ int main(int argc, char **argv) {
             });
     }
 
-    // TODO: downsample, upsample (by non-integer factors), sliding backwards
+    // Computing other stages at the outermost var of an async stage
+    // should include it in the async block.
+    if (1) {
+        Func producer, producer_friend, consumer;
+        Var x, y;
+
+        producer_friend(x, y) = x + y;
+        producer(x, y) = x + y + producer_friend(x, y);
+        consumer(x, y) = producer(x, y);
+
+        producer.compute_root().async();
+        consumer.compute_root();
+        producer_friend.compute_at(producer, Var::outermost());
+
+        Buffer<int> out = consumer.realize(256, 256);
+
+        out.for_each_element([&](int x, int y) {
+                int correct = 2*(x + y);
+                if (out(x, y) != correct) {
+                    printf("out(%d, %d) = %d instead of %d\n",
+                           x, y, out(x, y), correct);
+                    exit(-1);
+                }
+            });
+    }
 
     printf("Success!\n");
     return 0;
