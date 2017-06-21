@@ -713,6 +713,7 @@ class InjectBufferCopies : public IRMutator {
             else_case = do_copies(else_case);
         }
 
+        // Iterate over all buffers in the 'then' case, merging them into the else case.
         for (const pair<string, BufferInfo> &i : copy) {
             const string &buf_name = i.first;
 
@@ -720,8 +721,11 @@ class InjectBufferCopies : public IRMutator {
             const BufferInfo &else_state = state[buf_name];
             BufferInfo merged_state;
 
-            internal_assert(then_state.loop_level == else_state.loop_level)
-                << "then_state and else_state should have the same loop level for " << buf_name;
+            internal_assert(else_state.loop_level.empty() ||
+                            then_state.loop_level == else_state.loop_level)
+                << "then_state and else_state should have the same loop level for " << buf_name << "\n"
+                << "then_state: " << then_state.loop_level << "\n"
+                << "else_state: " << else_state.loop_level << "\n";
 
             merged_state.loop_level = then_state.loop_level;
             merged_state.host_touched   = then_state.host_touched || else_state.host_touched;
@@ -760,6 +764,17 @@ class InjectBufferCopies : public IRMutator {
             stmt = IfThenElse::make(cond, then_case, else_case);
         }
     }
+
+    void visit(const Fork *op) {
+        // Basically the same logic as an IfThenElse
+        Stmt equiv = IfThenElse::make(Variable::make(Bool(), "dummy"), op->first, op->rest);
+        equiv = mutate(equiv);
+        const IfThenElse *if_then_else = equiv.as<IfThenElse>();
+        internal_assert(if_then_else);
+        stmt = Fork::make(if_then_else->then_case, if_then_else->else_case);
+    }
+
+
 
     void visit(const Block *op) {
         if (device_api != DeviceAPI::Host) {
