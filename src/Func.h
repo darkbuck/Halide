@@ -53,7 +53,7 @@ class Stage {
     /** Reference to the Function this stage (or definition) belongs to. */
     Internal::Function func;
     Internal::Definition definition;
-    size_t stage;
+    size_t stage_index;
     /** Pure Vars of the Function (from the init definition). */
     std::vector<Var> dim_vars;
 
@@ -71,16 +71,16 @@ class Stage {
     Stage &compute_with(LoopLevel loop_level, const std::map<std::string, AlignStrategy> &align);
 
 public:
-    Stage(Internal::Function f, Internal::Definition d, size_t stage,
+    Stage(Internal::Function f, Internal::Definition d, size_t stage_index,
           const std::vector<Var> &args)
-            : func(f), definition(d), stage(stage), dim_vars(args) {
+            : func(f), definition(d), stage_index(stage_index), dim_vars(args) {
         internal_assert(definition.args().size() == dim_vars.size());
         definition.schedule().touched() = true;
     }
 
-    Stage(Internal::Function f, Internal::Definition d, size_t stage,
+    Stage(Internal::Function f, Internal::Definition d, size_t stage_index,
           const std::vector<std::string> &args)
-            : func(f), definition(d), stage(stage) {
+            : func(f), definition(d), stage_index(stage_index) {
         definition.schedule().touched() = true;
 
         std::vector<Var> dim_vars(args.size());

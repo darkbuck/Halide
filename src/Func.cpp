@@ -272,8 +272,8 @@ bool var_name_match(string candidate, string var) {
 }
 
 std::string Stage::name() const {
-    std::string stage_name =
-        (stage == 0) ? func.name() : func.name() + ".update(" + std::to_string(stage - 1) + ")";
+    std::string stage_name = (stage_index == 0) ?
+        func.name() : func.name() + ".update(" + std::to_string(stage_index - 1) + ")";
     return stage_name;
 }
 
@@ -856,41 +856,29 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     // Update value of the new update definition. It loads values from
     // the intermediate Func.
     vector<Expr> f_values(values.size());
-    if (values.size() > 1) {
-        // There might be cross-dependencies between tuple elements, so we need
-        // to collect all substitutions first.
-        map<string, Expr> replacement;
-        for (size_t i = 0; i < f_values.size(); ++i) {
-            internal_assert(!prover_result.ys[i].var.empty());
-            replacement.emplace(prover_result.ys[i].var, intm(f_load_args)[i]);
 
-            if (!prover_result.xs[i].var.empty()) {
-                Expr prev_val = Call::make(intm.output_types()[i], func_name,
-                                           f_store_args, Call::CallType::Halide,
-                                           nullptr, i);
-                replacement.emplace(prover_result.xs[i].var, prev_val);
-            } else {
-                user_warning << "Update definition of " << name() << " at index " << i
-                             << " doesn't depend on the previous value. This isn't a"
-                             << " reduction operation\n";
-            }
+    // There might be cross-dependencies between tuple elements, so we need
+    // to collect all substitutions first.
+    map<string, Expr> replacements;
+    for (size_t i = 0; i < f_values.size(); ++i) {
+        if (!prover_result.ys[i].var.empty()) {
+            Expr r = (values.size() == 1) ? Expr(intm(f_load_args)) : Expr(intm(f_load_args)[i]);
+            replacements.emplace(prover_result.ys[i].var, r);
         }
-        for (size_t i = 0; i < f_values.size(); ++i) {
-            f_values[i] = substitute(replacement, prover_result.pattern.ops[i]);
-        }
-    } else {
-        Expr prev_val = Call::make(intm.output_types()[0], func_name,
-                                   f_store_args, Call::CallType::Halide);
-        internal_assert(!prover_result.ys[0].var.empty());
-        Expr val = substitute(prover_result.ys[0].var, intm(f_load_args), prover_result.pattern.ops[0]);
-        if (!prover_result.xs[0].var.empty()) {
-            val = substitute(prover_result.xs[0].var, prev_val, val);
+
+        if (!prover_result.xs[i].var.empty()) {
+            Expr prev_val = Call::make(intm.output_types()[i], func_name,
+                                       f_store_args, Call::CallType::Halide,
+                                       nullptr, i);
+            replacements.emplace(prover_result.xs[i].var, prev_val);
         } else {
-            user_warning << "Update definition of " << name()
+            user_warning << "Update definition of " << name() << " at index " << i
                          << " doesn't depend on the previous value. This isn't a"
                          << " reduction operation\n";
         }
-        f_values[0] = val;
+    }
+    for (size_t i = 0; i < f_values.size(); ++i) {
+        f_values[i] = substitute(replacements, prover_result.pattern.ops[i]);
     }
 
     // Update the definition
@@ -1125,7 +1113,7 @@ Stage Stage::specialize(Expr condition) {
     const vector<Specialization> &specializations = definition.specializations();
     for (size_t i = 0; i < specializations.size(); i++) {
         if (equal(condition, specializations[i].condition)) {
-            return Stage(func, specializations[i].definition, stage, dim_vars);
+            return Stage(func, specializations[i].definition, stage_index, dim_vars);
         }
     }
 
@@ -1134,7 +1122,7 @@ Stage Stage::specialize(Expr condition) {
         << "Cannot add new specializations after specialize_fail().";
     const Specialization &s = definition.add_specialization(condition);
 
-    return Stage(func, s.definition, stage, dim_vars);
+    return Stage(func, s.definition, stage_index, dim_vars);
 }
 
 void Stage::specialize_fail(const std::string &message) {
@@ -1745,13 +1733,14 @@ Stage &Stage::prefetch(const Internal::Parameter &param, VarOrRVar var, Expr off
 Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy> &align) {
     user_assert(!loop_level.is_inline() && !loop_level.is_root())
         << "Undefined loop level to compute with\n";
-    user_assert((loop_level.func() != func.name()) || (loop_level.stage() == (int)stage-1))
+    user_assert((loop_level.func() != func.name()) ||
+                (loop_level.stage_index() == (int)stage_index-1))
         << "Cannot schedule " << name() << " to be computed with " << loop_level.to_string()
         << ". Can only schedule an update to be computed with its immediate previous stage\n";
 
     // We have to mark the fuse level on the "original" definition (the one
     // without the specialization) to ensure there is no competing compute_with.
-    Definition &original_def = (stage == 0) ? func.definition() : func.update(stage - 1);
+    Definition &original_def = (stage_index == 0) ? func.definition() : func.update(stage_index - 1);
     user_assert(original_def.specializations().empty())
             << "Func " << name() << " is scheduled to be computed with "
             << loop_level.func() << ", so it must not have any specializations.\n";
@@ -1780,11 +1769,11 @@ Stage &Stage::compute_with(LoopLevel loop_level, AlignStrategy align) {
 }
 
 Stage &Stage::compute_with(Stage s, VarOrRVar var, const vector<pair<VarOrRVar, AlignStrategy>> &align) {
-    return compute_with(LoopLevel(s.func, var, s.stage), align);
+    return compute_with(LoopLevel(s.func, var, s.stage_index), align);
 }
 
 Stage &Stage::compute_with(Stage s, VarOrRVar var, AlignStrategy align) {
-    return compute_with(LoopLevel(s.func, var, s.stage), align);
+    return compute_with(LoopLevel(s.func, var, s.stage_index), align);
 }
 
 void Func::invalidate_cache() {
