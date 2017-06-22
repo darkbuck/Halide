@@ -298,7 +298,7 @@ void do_one_task(execution_context *parent, execution_context *this_context, voi
             semaphore_acquire(this_context, task->semaphores[j].semaphore, task->semaphores[j].count);
         }
         big_lock.unlock();
-        task->fn(nullptr, i, task->closure);
+        task->fn(nullptr, i, 1, task->closure);
         big_lock.lock();
     }
     semaphore_release_already_locked(completion_sema, 1);
@@ -353,6 +353,7 @@ int main(int argc, char **argv) {
     halide_set_custom_parallel_runtime(
         nullptr, // This pipeline shouldn't call do_par_for
         nullptr, // our custom runtime never calls do_task
+        halide_default_do_loop_task, // default is fine
         do_par_tasks,
         semaphore_init,
         nullptr, // our custom runtime never calls try_acquire
