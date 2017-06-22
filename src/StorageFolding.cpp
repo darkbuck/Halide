@@ -93,63 +93,6 @@ struct Semaphore {
     Expr init;
 };
 
-#if 0
-class InjectSynchronization : public IRMutator {
-    const std::string &func;
-    Expr semaphore;
-
-    using IRMutator::visit;
-
-    void visit(const For *op) {
-        // Don't enter for loops. If there's another loop in between
-        // the currently folded loop and the produce/consume nodes,
-        // then it must be serial with no overlap between produced and
-        // consumed regions from one iteration to the next. This is
-        // outside the asynchronous producer, so we don't need
-        // synchronization over the current loop.
-        stmt = op;
-    }
-
-    void visit(const ProducerConsumer *op) {
-        if (op->name == func) {
-            semaphore_needed = true;
-            if (op->is_producer) {
-                // The sync that stops the producer from
-                // clobbering data that hasn't been used yet.
-                // TODO: How do I ensure this runs on the producer thread?
-                stmt = Acquire::make(semaphore, op);
-            } else {
-                Stmt release_producer =
-                    Evaluate::make(Call::make(Int(32), "halide_semaphore_release", {semaphore}, Call::Extern));
-                Stmt body = Block::make(op->body, release_producer);
-                stmt = ProducerConsumer::make(op->name, op->is_producer, body);
-            }
-        } else {
-            IRMutator::visit(op);
-        }
-    }
-
-public:
-    bool semaphore_needed = false;
-    InjectSynchronization(const std::string &f, Expr s) : func(f), semaphore(s) {}
-};
-
-std::pair<Stmt, Semaphore> inject_synchronization(Stmt body, const std::string &func, Expr init) {
-    Semaphore sema;
-    sema.name = func + ".folding_semaphore" + unique_name('_');
-    sema.var = Variable::make(type_of<halide_semaphore_t *>(), sema.name);
-    sema.init = init;
-
-    InjectSynchronization injector(func, sema.var);
-    body = injector.mutate(body);
-    if (injector.semaphore_needed) {
-        return {body, sema};
-    } else {
-        return {body, Semaphore{}};
-    }
-}
-#endif
-
 // Attempt to fold the storage of a particular function in a statement
 class AttemptStorageFoldingOfFunction : public IRMutator {
     Function func;
@@ -213,17 +156,24 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
 
             // First, attempt to detect if the loop is monotonically
             // increasing or decreasing (if we allow automatic folding).
-            bool min_monotonic_increasing = !explicit_only &&
-                (is_monotonic(min, op->name) == Monotonic::Increasing);
+            bool can_fold_forwards = false, can_fold_backwards = false;
 
-            bool max_monotonic_decreasing = !explicit_only &&
-                (is_monotonic(max, op->name) == Monotonic::Decreasing);
+            if (!explicit_only) {
+                // We can't clobber data that will be read later. If
+                // async, the producer can't un-release slots in the
+                // circular buffer.
+                can_fold_forwards = (is_monotonic(min, op->name) == Monotonic::Increasing);
+                can_fold_backwards = (is_monotonic(max, op->name) == Monotonic::Decreasing);
+                if (func.schedule().async()) {
+                    // Our semaphore acquire primitive can't take
+                    // negative values, so we can't un-acquire slots
+                    // in the circular buffer.
+                    can_fold_forwards &= (is_monotonic(max_provided, op->name) == Monotonic::Increasing);
+                    can_fold_backwards &= (is_monotonic(min_provided, op->name) == Monotonic::Decreasing);
+                }
+            }
 
-            // TODO: If async, also assert or prove max provided/min
-            // required monotonically increasing or min provided/max
-            // required monotonically decreasing
-
-            if (!min_monotonic_increasing && !max_monotonic_decreasing &&
+            if (!can_fold_forwards && !can_fold_backwards &&
                 explicit_factor.defined()) {
                 // If we didn't find a monotonic dimension, and we have an explicit fold factor,
                 // assert that the min/max do in fact monotonically increase/decrease.
@@ -233,16 +183,22 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                     Expr min_next = substitute(op->name, loop_var + 1, min);
                     condition = min_next >= min;
 
-                    // After we assert that the min increased, assume
-                    // the min is monotonically increasing.
-                    min_monotonic_increasing = true;
+                    if (func.schedule().async()) {
+                        Expr max_next = substitute(op->name, loop_var + 1, max_provided);
+                        condition = condition && (max_next >= max_provided);
+                    }
+
+                    can_fold_forwards = true;
                 } else {
                     Expr max_next = substitute(op->name, loop_var + 1, max);
                     condition = max_next <= max;
 
-                    // After we assert that the max decreased, assume
-                    // the max is monotonically decreasing.
-                    max_monotonic_decreasing = true;
+                    if (func.schedule().async()) {
+                        Expr min_next = substitute(op->name, loop_var + 1, min_provided);
+                        condition = condition && (min_next <= min_provided);
+                    }
+
+                    can_fold_backwards = true;
                 }
                 Expr error = Call::make(Int(32), "halide_error_bad_fold",
                                         {func.name(), storage_dim.var, op->name},
@@ -253,7 +209,7 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
 
             // The min or max has to be monotonic with the loop
             // variable, and should depend on the loop variable.
-            if (min_monotonic_increasing || max_monotonic_decreasing) {
+            if (can_fold_forwards || can_fold_backwards) {
                 Expr extent = simplify(max - min + 1);
                 Expr factor;
                 if (explicit_factor.defined()) {
@@ -294,10 +250,19 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                         sema.var = Variable::make(type_of<halide_semaphore_t *>(), sema.name);
                         sema.init = factor;
 
-                        Expr max_provided_prev = substitute(op->name, loop_var - 1, max_provided);
-                        Expr min_required_next = substitute(op->name, loop_var + 1, min_required);
-                        Expr to_acquire = max_provided - max_provided_prev; // This is the first time we use these entries
-                        Expr to_release = min_required_next - min_required; // This is the last time we use these entries
+                        Expr to_acquire, to_release;
+                        if (can_fold_forwards) {
+                            Expr max_provided_prev = substitute(op->name, loop_var - 1, max_provided);
+                            Expr min_required_next = substitute(op->name, loop_var + 1, min_required);
+                            to_acquire = max_provided - max_provided_prev; // This is the first time we use these entries
+                            to_release = min_required_next - min_required; // This is the last time we use these entries
+                        } else {
+                            internal_assert(can_fold_backwards);
+                            Expr min_provided_prev = substitute(op->name, loop_var - 1, min_provided);
+                            Expr max_required_next = substitute(op->name, loop_var + 1, max_required);
+                            to_acquire = min_provided_prev - min_provided; // This is the first time we use these entries
+                            to_release = max_required - max_required_next; // This is the last time we use these entries
+                        }
 
                         // Logically we acquire the entire extent on
                         // the first iteration:
@@ -308,16 +273,13 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                         // just reducing the initial value on the
                         // semaphore by the difference, as long as it
                         // doesn't lift any inner names out of scope.
+
                         Expr fudge = simplify(substitute(op->name, loop_min, extent - to_acquire));
                         if (is_const(fudge)) {
                             sema.init -= fudge;
                         } else {
                             to_acquire = select(loop_var > loop_min, likely(to_acquire), extent);
                         }
-
-                        // TODO: Do I need to release the entire window in the last iteration?
-
-                        // TODO: folding backwards
 
                         Expr release_producer =
                             Call::make(Int(32), "halide_semaphore_release", {sema.var, to_release}, Call::Extern);
