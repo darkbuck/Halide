@@ -103,21 +103,21 @@ inline float neg_inf_f32() {return -INFINITY;}
 inline float inf_f32() {return INFINITY;}
 inline bool is_nan_f32(float x) {return x != x;}
 inline bool is_nan_f64(double x) {return x != x;}
-template<typename A, typename B> 
-A reinterpret(const B &b) { 
+template<typename A, typename B>
+A reinterpret(const B &b) {
     #if __cplusplus >= 201103L
     static_assert(sizeof(A) == sizeof(B), "type size mismatch");
     #endif
-    A a; 
-    memcpy(&a, &b, sizeof(a)); 
+    A a;
+    memcpy(&a, &b, sizeof(a));
     return a;
 }
 inline float float_from_bits(uint32_t bits) {return reinterpret<float, uint32_t>(bits);}
 
-template<typename T> 
+template<typename T>
 inline T max(const T &a, const T &b) {return (a > b) ? a : b;}
 
-template<typename T> 
+template<typename T>
 inline T min(const T &a, const T &b) {return (a < b) ? a : b;}
 
 template<typename A, typename B>
@@ -410,11 +410,11 @@ void CodeGen_C::add_vector_typedefs(const std::set<Type> &vector_types) {
         const char *cpp_vector_decl = R"INLINE_CODE(
 #if !defined(__has_attribute)
     #define __has_attribute(x) 0
-#endif 
+#endif
 
 #if !defined(__has_builtin)
     #define __has_builtin(x) 0
-#endif 
+#endif
 
 template <typename ElementType_, size_t Lanes_>
 class CppVector {
@@ -507,17 +507,17 @@ public:
         return r;
     }
 
-    Vec replace(size_t i, const ElementType &b) const { 
+    Vec replace(size_t i, const ElementType &b) const {
         Vec r = *this;
         r.elements[i] = b;
-        return r; 
+        return r;
     }
 
-    ElementType operator[](size_t i) const { 
-        return elements[i]; 
+    ElementType operator[](size_t i) const {
+        return elements[i];
     }
 
-    Vec operator~() const { 
+    Vec operator~() const {
         Vec r(empty);
         for (size_t i = 0; i < Lanes; i++) {
             r.elements[i] = ~elements[i];
@@ -909,14 +909,14 @@ public:
     }
 
     // TODO: this should be improved by taking advantage of native operator support.
-    Vec replace(size_t i, const ElementType &b) const { 
+    Vec replace(size_t i, const ElementType &b) const {
         Vec r = *this;
         r.native_vector[i] = b;
-        return r; 
+        return r;
     }
 
-    ElementType operator[](size_t i) const { 
-        return native_vector[i]; 
+    ElementType operator[](size_t i) const {
+        return native_vector[i];
     }
 
     Vec operator~() const {
@@ -1629,9 +1629,9 @@ void CodeGen_C::compile(const Buffer<> &buffer) {
     Type t = buffer.type();
 
     // Emit the buffer struct. Note that although our shape and (usually) our host
-    // data is const, the buffer itself isn't: embedded buffers in one pipeline 
+    // data is const, the buffer itself isn't: embedded buffers in one pipeline
     // can be passed to another pipeline (e.g. for an extern stage), in which
-    // case the buffer objects need to be non-const, because the constness 
+    // case the buffer objects need to be non-const, because the constness
     // (from the POV of the extern stage) is a runtime property.
     stream << "static halide_buffer_t " << name << "_buffer_ = {"
            << "0, "             // device
@@ -1655,7 +1655,7 @@ string CodeGen_C::print_expr(Expr e) {
 string CodeGen_C::print_cast_expr(const Type &t, Expr e) {
     string value = print_expr(e);
     string type = print_type(t);
-    if (t.is_vector() && 
+    if (t.is_vector() &&
         t.lanes() == e.type().lanes() &&
         t != e.type()) {
         return print_assignment(t, type + "::convert_from<" + print_type(e.type()) + ">(" + value + ")");
@@ -2345,6 +2345,44 @@ void CodeGen_C::visit(const ProducerConsumer *op) {
         stream << "// consume " << op->name << '\n';
     }
     print_stmt(op->body);
+}
+
+void CodeGen_C::visit(const Fork *op) {
+    // TODO: This doesn't actually work with nested tasks
+    do_indent();
+    stream << "#pragma omp parallel\n";
+    open_scope();
+    do_indent();
+    stream << "#pragma omp single\n";
+    open_scope();
+    do_indent();
+    stream << "#pragma omp task\n";
+    open_scope();
+    print_stmt(op->first);
+    close_scope("");
+    do_indent();
+    stream << "#pragma omp task\n";
+    open_scope();
+    print_stmt(op->rest);
+    close_scope("");
+    do_indent();
+    stream << "#pragma omp taskwait\n";
+    close_scope("");
+    close_scope("");
+}
+
+void CodeGen_C::visit(const Acquire *op) {
+    string id_sem = print_expr(op->semaphore);
+    string id_count = print_expr(op->count);
+    open_scope();
+    do_indent();
+    stream << "while (!halide_semaphore_try_acquire(" << id_sem << ", " << id_count << "))\n";
+    open_scope();
+    do_indent();
+    stream << "#pragma omp taskyield\n";
+    close_scope("");
+    op->body.accept(this);
+    close_scope("");
 }
 
 void CodeGen_C::visit(const For *op) {
