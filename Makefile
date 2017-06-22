@@ -601,7 +601,7 @@ RUNTIME_CPP_COMPONENTS = \
   windows_tempfile \
   windows_threads \
   write_debug_image \
-  x86_cpu_features 
+  x86_cpu_features
 
 RUNTIME_LL_COMPONENTS = \
   aarch64 \
@@ -857,6 +857,9 @@ GENERATOR_AOTCPP_TESTS := $(filter-out generator_aotcpp_memory_profiler_mandelbr
 
 # https://github.com/halide/Halide/issues/2082
 GENERATOR_AOTCPP_TESTS := $(filter-out generator_aotcpp_matlab,$(GENERATOR_AOTCPP_TESTS))
+
+# https://github.com/halide/Halide/issues/2093
+GENERATOR_AOTCPP_TESTS := $(filter-out generator_aotcpp_async_coroutine,$(GENERATOR_AOTCPP_TESTS))
 
 test_aotcpp_generators: $(GENERATOR_AOTCPP_TESTS)
 test_generators: $(GENERATOR_AOT_TESTS) $(GENERATOR_AOTCPP_TESTS) $(GENERATOR_JIT_TESTS)
