@@ -263,7 +263,13 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
         // device, a copy-to-device is not actually necessary.
         bool needs_copy_to_device = (touched_on_device &&
                                      ((state.host_dirty != False) ||
-                                      state.current_device != touching_device));
+                                      (state.device_allocation_exists != False &&
+                                       state.current_device != touching_device)));
+
+        if (needs_copy_to_device) {
+            // halide_copy_to_device already does a halide_device_malloc if necessary.
+            needs_device_malloc = false;
+        }
 
         bool needs_copy_to_host = (touched_on_host &&
                                    (state.device_dirty != False));
@@ -283,6 +289,7 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
         if (needs_copy_to_device) {
             s = Block::make(make_copy_to_device(touching_device), s);
             state.host_dirty = False;
+            state.device_allocation_exists = True;
             state.current_device = touching_device;
         }
 
@@ -302,6 +309,10 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
             state.current_device = touching_device;
         }
 
+        if (!finder.devices_touched.empty()) {
+            last_use = s;
+        }
+
         return s;
     }
 
@@ -319,12 +330,14 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
     }
 
     void visit(const LetStmt *op) {
-        // Could be a letstmt that calls an extern stage, wrapping an AssertStmt that checks the result
-        Stmt body = mutate(op->body);
-        if (body.same_as(op->body)) {
-            stmt = do_copies(op);
+        // If the value uses a buffer, treat this as a single
+        // leaf. Otherwise we can recurse.
+        FindBufferUsage finder(buffer, DeviceAPI::Host);
+        op->value.accept(&finder);
+        if (finder.devices_touched.empty()) {
+            IRMutator::visit(op);
         } else {
-            stmt = LetStmt::make(op->name, op->value, body);
+            stmt = do_copies(op);
         }
     }
 
@@ -332,17 +345,26 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
         stmt = do_copies(op);
     }
 
+    class HasLoops : public IRVisitor {
+        using IRVisitor::visit;
+        void visit(const For *op) {
+            result = true;
+        }
+    public:
+        bool result = false;
+    };
+
     void visit(const Block *op) {
-        // If both sides of the block have the same usage pattern,
-        // treat it as a single leaf.
-        FindBufferUsage finder_first(buffer, DeviceAPI::Host);
-        FindBufferUsage finder_rest(buffer, DeviceAPI::Host);
-        op->first.accept(&finder_first);
-        op->rest.accept(&finder_rest);
-        if (finder_first.same_usage(finder_rest)) {
-            stmt = do_copies(op);
-        } else {
+        // If both sides of the block have no loops (and hence no
+        // device transitions), treat it as a single leaf. This stops
+        // host dirties from getting in between blocks of store stmts
+        // that could be interleaved.
+        HasLoops loops;
+        op->accept(&loops);
+        if (loops.result) {
             IRMutator::visit(op);
+        } else {
+            stmt = do_copies(op);
         }
     }
 
@@ -395,6 +417,8 @@ public:
             state.current_device = DeviceAPI::None;
         }
     }
+
+    Stmt last_use;
 };
 
 class FindInputsAndOutputs : public IRVisitor {
@@ -512,6 +536,23 @@ class InjectBufferCopies : public IRMutator {
             buffer(b), type(t), extents(e), condition(c), device_api(d) {}
     };
 
+    class FreeAfterLastUse : public IRMutator {
+        Stmt last_use;
+        Stmt free_stmt;
+    public:
+        using IRMutator::mutate;
+
+        Stmt mutate(const Stmt &s) {
+            if (s.same_as(last_use)) {
+                return Block::make(last_use, free_stmt);
+            } else {
+                return IRMutator::mutate(s);
+            }
+        }
+
+        FreeAfterLastUse(Stmt s, Stmt f) : last_use(s), free_stmt(f) {}
+    };
+
     void visit(const Allocate *op) {
         FindBufferUsage finder(op->name, DeviceAPI::Host);
         op->body.accept(&finder);
@@ -527,17 +568,13 @@ class InjectBufferCopies : public IRMutator {
 
         Stmt body = mutate(op->body);
 
-        body = InjectBufferCopiesForSingleBuffer(op->name, false).mutate(body);
+        InjectBufferCopiesForSingleBuffer injector(op->name, false);
+        body = injector.mutate(body);
 
-        if (finder.devices_touched.size() == 1) {
-            // Only touched on device.
+        string buffer_name = op->name + ".buffer";
+        Expr buffer = Variable::make(Handle(), buffer_name);
 
-            // Add a device destructor
-            body = InjectDeviceDestructor(op->name + ".buffer").mutate(body);
-
-            // Remove the host allocation
-            stmt = Allocate::make(op->name, op->type, op->extents, const_false(), body, op->new_expr, op->free_function);
-        } else if (touched_on_host && finder.devices_touched.size() == 2) {
+        if (touched_on_host && finder.devices_touched.size() == 2) {
             // Touched on a single device and the host. Use a combined allocation.
             DeviceAPI touching_device = DeviceAPI::None;
             for (DeviceAPI d : finder.devices_touched) {
@@ -546,15 +583,34 @@ class InjectBufferCopies : public IRMutator {
                 }
             }
 
+            // Make a device_and_host_free stmt
+            if (injector.last_use.defined()) {
+                Stmt device_free = call_extern_and_assert("halide_device_and_host_free", {buffer});
+                body = FreeAfterLastUse(injector.last_use, device_free).mutate(body);
+            }
+
             stmt = InjectCombinedAllocation(op->name, op->type, op->extents,
                                             op->condition, touching_device).mutate(body);
         } else {
-            // Touched on multiple devices. Do separate device and host allocations.
+            // Only touched on device, or touched on multiple
+            // devices. Do separate device and host allocations.
 
             // Add a device destructor
-            body = InjectDeviceDestructor(op->name + ".buffer").mutate(body);
+            body = InjectDeviceDestructor(buffer_name).mutate(body);
 
-            stmt = Allocate::make(op->name, op->type, op->extents, op->condition, body, op->new_expr, op->free_function);
+            // Make a device_free stmt
+            if (injector.last_use.defined()) {
+                Stmt device_free = call_extern_and_assert("halide_device_free", {buffer});
+                body = FreeAfterLastUse(injector.last_use, device_free).mutate(body);
+            }
+
+            Expr condition = op->condition;
+            if (finder.devices_touched.size() == 1) {
+                // Only touched on device
+                condition = const_false();
+            }
+
+            stmt = Allocate::make(op->name, op->type, op->extents, condition, body, op->new_expr, op->free_function);
         }
     }
 
@@ -569,17 +625,70 @@ class InjectBufferCopies : public IRMutator {
     }
 };
 
+// TODO: make sure not redundantly mallocing combined allocations
+
+// Find the site in the IR where we want to inject the copies/dirty
+// flags for the inputs and outputs. It's the innermost IR node that
+// contains all ProducerConsumer nodes. Often this is the outermost
+// ProducerConsumer node. Sometimes it's a Block or Fork containing a
+// pair of them.
+class FindOutermostProduce : public IRVisitor {
+    using IRVisitor::visit;
+
+    void visit(const Block *op) {
+        op->first.accept(this);
+        if (result.defined()) {
+            result = op;
+        } else {
+            op->rest.accept(this);
+        }
+    }
+
+    void visit(const Fork *op) {
+        result = op;
+    }
+
+    void visit(const ProducerConsumer *op) {
+        result = op;
+    }
+
+public:
+    Stmt result;
+};
+
+// Inject the buffer handling code for the inputs and outputs at the
+// site determined by the visitor above.
+class InjectBufferCopiesForInputsAndOutputs : public IRMutator {
+    Stmt site;
+public:
+    using IRMutator::mutate;
+
+    Stmt mutate(const Stmt &s) {
+        if (s.same_as(site)) {
+            FindInputsAndOutputs finder;
+            s.accept(&finder);
+            Stmt new_stmt = s;
+            for (const string &buf : finder.result) {
+                new_stmt = InjectBufferCopiesForSingleBuffer(buf, true).mutate(new_stmt);
+            }
+            return new_stmt;
+        } else {
+            return IRMutator::mutate(s);
+        }
+    }
+
+    InjectBufferCopiesForInputsAndOutputs(Stmt s) : site(s) {}
+};
+
 }  // namespace
 
 Stmt inject_host_dev_buffer_copies(Stmt s, const Target &t) {
     s = InjectBufferCopies().mutate(s);
 
     // Now handle inputs and outputs
-    FindInputsAndOutputs finder;
-    s.accept(&finder);
-    for (const string &buf : finder.result) {
-        s = InjectBufferCopiesForSingleBuffer(buf, true).mutate(s);
-    }
+    FindOutermostProduce outermost;
+    s.accept(&outermost);
+    s = InjectBufferCopiesForInputsAndOutputs(outermost.result).mutate(s);
 
     return s;
 }
