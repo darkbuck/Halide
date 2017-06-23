@@ -273,7 +273,7 @@ bool var_name_match(string candidate, string var) {
 
 std::string Stage::name() const {
     std::string stage_name = (stage_index == 0) ?
-        func.name() : func.name() + ".update(" + std::to_string(stage_index - 1) + ")";
+        function.name() : function.name() + ".update(" + std::to_string(stage_index - 1) + ")";
     return stage_name;
 }
 
@@ -590,7 +590,7 @@ Func Stage::rfactor(RVar r, Var v) {
 Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     user_assert(!definition.is_init()) << "rfactor() must be called on an update definition\n";
 
-    const string &func_name = func.name();
+    const string &func_name = function.name();
     vector<Expr> &args = definition.args();
     vector<Expr> &values = definition.values();
 
@@ -807,9 +807,9 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     // Copy over the storage order of the original pure dims
     vector<StorageDim> &intm_storage_dims = intm.function().schedule().storage_dims();
     internal_assert(intm_storage_dims.size() ==
-                    func.schedule().storage_dims().size() + vars_rename.size());
-    for (size_t i = 0; i < func.schedule().storage_dims().size(); ++i) {
-        intm_storage_dims[i] = func.schedule().storage_dims()[i];
+                    function.schedule().storage_dims().size() + vars_rename.size());
+    for (size_t i = 0; i < function.schedule().storage_dims().size(); ++i) {
+        intm_storage_dims[i] = function.schedule().storage_dims()[i];
     }
 
     for (size_t i = 0; i < rvars_kept.size(); ++i) {
@@ -1113,7 +1113,7 @@ Stage Stage::specialize(Expr condition) {
     const vector<Specialization> &specializations = definition.specializations();
     for (size_t i = 0; i < specializations.size(); i++) {
         if (equal(condition, specializations[i].condition)) {
-            return Stage(func, specializations[i].definition, stage_index, dim_vars);
+            return Stage(function, specializations[i].definition, stage_index, dim_vars);
         }
     }
 
@@ -1122,7 +1122,7 @@ Stage Stage::specialize(Expr condition) {
         << "Cannot add new specializations after specialize_fail().";
     const Specialization &s = definition.add_specialization(condition);
 
-    return Stage(func, s.definition, stage_index, dim_vars);
+    return Stage(function, s.definition, stage_index, dim_vars);
 }
 
 void Stage::specialize_fail(const std::string &message) {
@@ -1733,14 +1733,14 @@ Stage &Stage::prefetch(const Internal::Parameter &param, VarOrRVar var, Expr off
 Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy> &align) {
     user_assert(!loop_level.is_inline() && !loop_level.is_root())
         << "Undefined loop level to compute with\n";
-    user_assert((loop_level.func() != func.name()) ||
+    user_assert((loop_level.func() != function.name()) ||
                 (loop_level.stage_index() == (int)stage_index-1))
         << "Cannot schedule " << name() << " to be computed with " << loop_level.to_string()
         << ". Can only schedule an update to be computed with its immediate previous stage\n";
 
     // We have to mark the fuse level on the "original" definition (the one
     // without the specialization) to ensure there is no competing compute_with.
-    Definition &original_def = (stage_index == 0) ? func.definition() : func.update(stage_index - 1);
+    Definition &original_def = (stage_index == 0) ? function.definition() : function.update(stage_index - 1);
     user_assert(original_def.specializations().empty())
             << "Func " << name() << " is scheduled to be computed with "
             << loop_level.func() << ", so it must not have any specializations.\n";
@@ -1769,11 +1769,11 @@ Stage &Stage::compute_with(LoopLevel loop_level, AlignStrategy align) {
 }
 
 Stage &Stage::compute_with(Stage s, VarOrRVar var, const vector<pair<VarOrRVar, AlignStrategy>> &align) {
-    return compute_with(LoopLevel(s.func, var, s.stage_index), align);
+    return compute_with(LoopLevel(s.function, var, s.stage_index), align);
 }
 
 Stage &Stage::compute_with(Stage s, VarOrRVar var, AlignStrategy align) {
-    return compute_with(LoopLevel(s.func, var, s.stage_index), align);
+    return compute_with(LoopLevel(s.function, var, s.stage_index), align);
 }
 
 void Func::invalidate_cache() {

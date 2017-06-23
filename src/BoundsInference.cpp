@@ -280,7 +280,7 @@ public:
                                   string var, string consumer_name, int consumer_stage) {
             // Find the fused group this producing stage belongs to.
             int index = -1;
-            for (size_t i = 0; i < fused_groups.size(); ++i) {
+            for (int i = 0; i < (int)fused_groups.size(); ++i) {
                 const auto iter = std::find_if(fused_groups[i].begin(), fused_groups[i].end(),
                     [&producing_func](const Function& f) { return (f.name() == producing_func.name()); });
                 if (iter != fused_groups[i].end()) {
@@ -289,12 +289,12 @@ public:
                 }
 
             }
-            internal_assert(index >=0 && index < (int)fused_pairs.size());
+            internal_assert(index >= 0 && index < (int)fused_pairs.size());
 
             const vector<Dim> &dims = (producing_stage == 0) ? producing_func.definition().schedule().dims() :
                 producing_func.update(producing_stage-1).schedule().dims();
 
-            int var_index;
+            size_t var_index;
             {
                 const auto iter = std::find_if(dims.begin(), dims.end(),
                     [&var](const Dim& d) { return var_name_match(d.var, var); });
@@ -310,8 +310,8 @@ public:
                     const auto iter = std::find_if(dims.begin(), dims.end(),
                         [&pair](const Dim& d) { return var_name_match(d.var, pair.var_name); });
                     internal_assert(iter != dims.end());
-                    int index = iter - dims.begin();
-                    if (var_index >= index) {
+                    size_t idx = iter - dims.begin();
+                    if (var_index >= idx) {
                         return true;
                     }
                 }
@@ -940,7 +940,7 @@ public:
             if (starts_with(op->name, stages[i].stage_prefix)) {
                 producing = i;
                 f = stages[i].func;
-                stage_index = stages[i].stage;
+                stage_index = (int)stages[i].stage;
                 stage_name = stages[i].name + ".s" + std::to_string(stages[i].stage);
                 break;
             }
@@ -1069,19 +1069,19 @@ Stmt bounds_inference(Stmt s,
         funcs[i] = env.find(order[i])->second;
     }
 
-    vector<vector<Function>> fused_func_groups(fused_groups.size());
-    for (size_t i = 0; i < fused_groups.size(); ++i) {
-        vector<Function> fs(fused_groups[i].size());
-        for (size_t j = 0; j < fused_groups[i].size(); ++j) {
-            fs[j] = env.find(fused_groups[i][j])->second;
+    vector<vector<Function>> fused_func_groups;
+    for (const vector<string> &group : fused_groups) {
+        vector<Function> fs;
+        for (const string &fname : group) {
+            fs.push_back(env.find(fname)->second);
         }
-        fused_func_groups[i] = std::move(fs);
+        fused_func_groups.push_back(fs);
     }
 
     vector<set<FusedPair>> fused_pairs;
-    for (const auto &group : fused_groups) {
+    for (const vector<string> &group : fused_groups) {
         set<FusedPair> pairs;
-        for (const auto &fname : group) {
+        for (const string &fname : group) {
             Function f = env.find(fname)->second;
 
             std::copy(f.definition().schedule().fused_pairs().begin(),

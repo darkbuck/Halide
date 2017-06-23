@@ -147,14 +147,14 @@ public:
         } else if (get_target().has_feature(Target::HVX_128)) {
             vec = 64;
         }
-        auto apply_schedule_to_intermediate = [&](Func& f){
+        auto fold_vectorize_and_place = [&](Func& f){
             f.compute_at(intermed_compute_at)
                 .store_at(intermed_store_at)
                 .vectorize(x, 2*vec, TailStrategy::RoundUp)
                 .fold_storage(y, 4);
         };
-        apply_schedule_to_intermediate(g_b);
-        apply_schedule_to_intermediate(g_r);
+        fold_vectorize_and_place(g_b);
+        fold_vectorize_and_place(g_r);
         g_b.compute_with(g_r, x, {{x, AlignStrategy::AlignStart}, {y, AlignStrategy::AlignStart}});
         output.compute_at(output_compute_at)
             .vectorize(x)

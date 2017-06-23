@@ -337,41 +337,6 @@ int skip_test_1() {
     return 0;
 }
 
-int skip_test_2() {
-    Buffer<int> im_ref, im;
-    {
-        Var x("x"), y("y");
-        Func f("f"), g("g"), h("h");
-
-        f(x, y) = x + y;
-        g(x, y) = x - y;
-        h(x, y) = g(x - 1, y + 1);
-        im_ref = h.realize(200, 200);
-    }
-
-    {
-        Var x("x"), y("y");
-        Func f("f"), g("g"), h("h");
-
-        f(x, y) = x + y;
-        g(x, y) = x - y;
-        h(x, y) = g(x - 1, y + 1);
-
-        f.compute_root();
-        g.compute_root();
-        g.compute_with(f, x);
-        im = h.realize(200, 200);
-    }
-
-    auto func = [im_ref](int x, int y) {
-        return im_ref(x, y);
-    };
-    if (check_image(im, func)) {
-        return -1;
-    }
-    return 0;
-}
-
 int fuse_compute_at_test() {
     Buffer<int> im_ref, im;
     {
@@ -1054,11 +1019,6 @@ int main(int argc, char **argv) {
 
     printf("Running skip test 1\n");
     if (skip_test_1() != 0) {
-        return -1;
-    }
-
-    printf("Running skip test 2\n");
-    if (skip_test_2() != 0) {
         return -1;
     }
 

@@ -41,9 +41,9 @@ struct Container {
 };
 
 bool var_name_match(string v1, string v2) {
-    if (v1 == v2) return true;
-    if (Internal::ends_with(v1, "." + v2)) return true;
-    return Internal::ends_with(v2, "." + v1);
+    return ((v1 == v2) ||
+            Internal::ends_with(v1, "." + v2) ||
+            Internal::ends_with(v2, "." + v1));
 }
 
 } // anonymous namespace
@@ -160,14 +160,14 @@ Stmt build_provide_loop_nest_helper(string func_name,
     // otherwise, this may mess up the bounds_touched computation.
     int n_predicates_inner = 0;
     for (int i = start_fuse; (i >= 0) && (i < (int)stage_s.dims().size()-1); ++i) {
-        const Dim &dim = stage_s.dims()[i];
-        Expr var = Variable::make(Int(32), prefix + dim.var);
-        Expr max = Variable::make(Int(32), prefix + dim.var + ".loop_max");
-        Expr min = Variable::make(Int(32), prefix + dim.var + ".loop_min");
+        string dim_var = prefix + stage_s.dims()[i].var;
+        Expr var = Variable::make(Int(32), dim_var);
+        Expr max = Variable::make(Int(32), dim_var + ".loop_max");
+        Expr min = Variable::make(Int(32), dim_var + ".loop_min");
         // Use 'var' which bounds we're constraining as the container name, so
         // that we can use it later to check if a LetStmt value depends on 'var'.
-        Container c1 = {Container::IfInner, 0, prefix + dim.var, likely(min <= var)};
-        Container c2 = {Container::IfInner, 0, prefix + dim.var, likely(var <= max)};
+        Container c1 = {Container::IfInner, 0, dim_var, likely(min <= var)};
+        Container c2 = {Container::IfInner, 0, dim_var, likely(var <= max)};
         nest.push_back(c1);
         nest.push_back(c2);
         n_predicates_inner += 2;
@@ -690,7 +690,7 @@ class IsRealizedInStmt : public IRVisitor {
 
     void visit(const Realize *op) {
         IRVisitor::visit(op);
-        if (op->name == func) result = true;
+        result = result || (op->name == func);
     }
 
 public:
@@ -1255,7 +1255,7 @@ private:
                         continue;
                     }
 
-                    string parent_prefix = fuse_level.func() + ".s" + std::to_string(fuse_level.stage()) + ".";
+                    string parent_prefix = fuse_level.func() + ".s" + std::to_string(fuse_level.stage_index()) + ".";
 
                     if (iter->second == AlignStrategy::AlignStart) {
                         const auto &it1 = bounds.find(parent_prefix + var + ".loop_min");

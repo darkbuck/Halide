@@ -111,8 +111,8 @@ enum class PrefetchBoundStrategy {
  * dimensions. We schedule the inputs to that function by
  * recursively injecting realizations for them at particular sites
  * in this loop nest. A LoopLevel identifies such a site. The site
- * can either be a specific loopness within all stages of a function
- * or it can refer to a loopness within a particular function's
+ * can either be a specific loop nest within all stages of a function
+ * or it can refer to a loop nest within a particular function's
  * stage (initial definition or updates).
  */
 class LoopLevel {
@@ -122,7 +122,8 @@ class LoopLevel {
     Internal::IntrusivePtr<Internal::LoopLevelContents> contents;
 
     explicit LoopLevel(Internal::IntrusivePtr<Internal::LoopLevelContents> c) : contents(c) {}
-    EXPORT LoopLevel(const std::string &func_name, const std::string &var_name, bool is_rvar, int stage);
+    EXPORT LoopLevel(const std::string &func_name, const std::string &var_name,
+                     bool is_rvar, int stage_index);
 
     /** Mutate our contents to match the contents of 'other'. This is a potentially
      * dangerous operation to do if you aren't careful, and exists solely to make
@@ -130,14 +131,14 @@ class LoopLevel {
     EXPORT void copy_from(const LoopLevel &other);
 
 public:
-    /** Return the function stage associated with this loop level.
+    /** Return the index of the function stage associated with this loop level.
      * Asserts if undefined */
-    EXPORT int stage() const;
+    EXPORT int stage_index() const;
 
     /** Identify the loop nest corresponding to some dimension of some function */
     // @{
-    EXPORT LoopLevel(Internal::Function f, VarOrRVar v, int stage = -1);
-    EXPORT LoopLevel(Func f, VarOrRVar v, int stage = -1);
+    EXPORT LoopLevel(Internal::Function f, VarOrRVar v, int stage_level = -1);
+    EXPORT LoopLevel(Func f, VarOrRVar v, int stage_level = -1);
     // @}
 
     /** Construct an undefined LoopLevel. Calling any method on an undefined
@@ -187,6 +188,10 @@ public:
 
 struct FuseLoopLevel {
     LoopLevel level;
+    /** Contains alignment strategies for the fused dimensions (indexed by the
+     * dimension name). If not in the map, use the default alignment strategy
+     * to align the fused dimension (see \ref AlignStrategy::Auto).
+     */
     std::map<std::string, AlignStrategy> align;
 
     FuseLoopLevel() : level(LoopLevel::inlined()) {}
@@ -258,10 +263,11 @@ struct StorageDim {
     bool fold_forward;
 };
 
-/** This indicates two function stages which loopness are fused from outermost
- * to a specific loop level: "func_1" at stage "stage_1" is fused with "func_2"
- * at stage "stage_2" from outermost to loop level "var_name", and "func_1" is
- * to be computed before "func_2". */
+/** This represents two stages with fused loop nests from outermost to a specific
+ * loop level. The loops to compute func_1(stage_1) are fused with the loops to
+ * compute func_2(stage_2) from outermost to loop level var_name and the
+ * computation from stage_1 of func_1 occurs first.
+ */
 struct FusedPair {
     std::string func_1;
     std::string func_2;
@@ -445,11 +451,10 @@ public:
     std::vector<PrefetchDirective> &prefetches();
     // @}
 
-    /** Until which loop level (starting from outermost) we should fuse
-     * computation of this function stage with another function stage? The
-     * function we are fusing this function with and this function should
-     * be independent of each other. See \ref Func::compute_with and
-     * \ref Stage::compute_with */
+    /** Innermost loop level of fused loop nest for this function stage.
+     * Fusion runs from outermost to this loop level. The function we are
+     * fusing this function with and this function should be independent of
+     * each other. See \ref Func::compute_with and \ref Stage::compute_with */
     // @{
     const FuseLoopLevel &fuse_level() const;
     FuseLoopLevel &fuse_level();
@@ -458,7 +463,8 @@ public:
     /** List of function stages that are to be fused with this function stage
      * from the outermost loop to a certain loop level. Those function stages
      * are to be computed AFTER this function stage at the last fused loop level.
-     * See \ref Func::compute_with and \ref Stage::compute_with */
+     * This list is populated when realization_order() is called. See
+     * \ref Func::compute_with and \ref Stage::compute_with */
     // @{
     const std::vector<FusedPair> &fused_pairs() const;
     std::vector<FusedPair> &fused_pairs();
