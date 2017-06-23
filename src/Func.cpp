@@ -470,9 +470,9 @@ bool apply_fuse(const Split &s, vector<ReductionVariable> &rvars,
                 vector<Expr> &predicates, vector<Expr> &args,
                 vector<Expr> &values, map<string, Expr> &dim_extent_alignment) {
     internal_assert(s.is_fuse());
-    const auto iter_outer = std::find_if(rvars.begin(), rvars.end(),
+    const auto &iter_outer = std::find_if(rvars.begin(), rvars.end(),
         [&s](const ReductionVariable &rv) { return (s.outer == rv.var); });
-    const auto iter_inner = std::find_if(rvars.begin(), rvars.end(),
+    const auto &iter_inner = std::find_if(rvars.begin(), rvars.end(),
         [&s](const ReductionVariable &rv) { return (s.inner == rv.var); });
 
     Expr inner_min, inner_extent, outer_min, outer_extent;
@@ -507,7 +507,7 @@ bool apply_purify(const Split &s, vector<ReductionVariable> &rvars,
                   vector<Expr> &predicates, vector<Expr> &args,
                   vector<Expr> &values, map<string, Expr> &dim_extent_alignment) {
     internal_assert(s.is_purify());
-    const auto iter = std::find_if(rvars.begin(), rvars.end(),
+    const auto &iter = std::find_if(rvars.begin(), rvars.end(),
         [&s](const ReductionVariable &rv) { return (s.old_var == rv.var); });
     if (iter != rvars.end()) {
         debug(4) << "  Purify RVar " << iter->var << " into Var " << s.outer
@@ -528,7 +528,7 @@ bool apply_rename(const Split &s, vector<ReductionVariable> &rvars,
                   vector<Expr> &predicates, vector<Expr> &args,
                   vector<Expr> &values, map<string, Expr> &dim_extent_alignment) {
     internal_assert(s.is_rename());
-    const auto iter = std::find_if(rvars.begin(), rvars.end(),
+    const auto &iter = std::find_if(rvars.begin(), rvars.end(),
         [&s](const ReductionVariable &rv) { return (s.old_var == rv.var); });
     if (iter != rvars.end()) {
         debug(4) << "  Renaming " << iter->var << " into " << s.outer << "\n";
@@ -617,7 +617,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         const Var &v = i.second;
         {
             // Check that the RVar are in the dims list
-            const auto iter = std::find_if(dims.begin(), dims.end(),
+            const auto &iter = std::find_if(dims.begin(), dims.end(),
                 [&rv](const Dim &dim) { return var_name_match(dim.var, rv.name()); });
             user_assert((iter != dims.end()) && (*iter).is_rvar())
                 << "In schedule for " << name()
@@ -689,9 +689,9 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     // intermediate and new merge Funcs.
     std::sort(preserved.begin(), preserved.end(),
         [&](const pair<RVar, Var> &lhs, const pair<RVar, Var> &rhs){
-            const auto iter_lhs = std::find_if(rvars.begin(), rvars.end(),
+            const auto &iter_lhs = std::find_if(rvars.begin(), rvars.end(),
                 [&lhs](const ReductionVariable &rv) { return var_name_match(rv.var, lhs.first.name()); });
-            const auto iter_rhs = std::find_if(rvars.begin(), rvars.end(),
+            const auto &iter_rhs = std::find_if(rvars.begin(), rvars.end(),
                 [&rhs](const ReductionVariable &rv) { return var_name_match(rv.var, rhs.first.name()); });
             return iter_lhs < iter_rhs;
         }
@@ -763,7 +763,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         update_args[i + args.size()] = vars_rename[i];
         RVar rvar_kept = rvars_kept[i];
         // Find the full name of rvar_kept in rvars
-        const auto iter = std::find_if(rvars.begin(), rvars.end(),
+        const auto &iter = std::find_if(rvars.begin(), rvars.end(),
             [&rvar_kept](const ReductionVariable &rv) { return var_name_match(rv.var, rvar_kept.name()); });
         substitution_map[iter->var] = vars_rename[i];
     }
@@ -823,7 +823,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
     // Add pure Vars from the original init definition to the dims list
     // if they are not already in the list
     for (const Var &v : dim_vars) {
-        const auto iter = std::find_if(dims.begin(), dims.end(),
+        const auto &iter = std::find_if(dims.begin(), dims.end(),
             [&v](const Dim &dim) { return var_name_match(dim.var, v.name()); });
         if (iter == dims.end()) {
             Dim d = {v.name(), ForType::Serial, DeviceAPI::None, Dim::Type::PureVar};

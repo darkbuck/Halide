@@ -193,7 +193,7 @@ string print_loop_nest(const vector<Function> &output_funcs) {
 
     bool any_memoized = false;
     // Schedule the functions.
-    Stmt s = schedule_functions(outputs, order, fused_groups, env, target, any_memoized);
+    Stmt s = schedule_functions(outputs, fused_groups, env, target, any_memoized);
 
     // Now convert that to pseudocode
     std::ostringstream sstr;

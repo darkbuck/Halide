@@ -109,7 +109,7 @@ void realization_order_dfs(string current,
                            vector<string> &order) {
     visited.insert(current);
 
-    const auto iter = std::find_if(graph.begin(), graph.end(),
+    const auto &iter = std::find_if(graph.begin(), graph.end(),
         [&current](const pair<string, vector<string>> &p) { return (p.first == current); });
     internal_assert(iter != graph.end());
 
@@ -325,8 +325,8 @@ pair<vector<string>, vector<vector<string>>> realization_order(
     for (auto &group : fused_groups) {
         std::sort(group.begin(), group.end(),
             [&](const string &lhs, const string &rhs){
-                const auto iter_lhs = std::find(order.begin(), order.end(), lhs);
-                const auto iter_rhs = std::find(order.begin(), order.end(), rhs);
+                const auto &iter_lhs = std::find(order.begin(), order.end(), lhs);
+                const auto &iter_rhs = std::find(order.begin(), order.end(), rhs);
                 return iter_lhs < iter_rhs;
             }
         );

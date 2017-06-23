@@ -672,8 +672,7 @@ class IsUsedInStmt : public IRVisitor {
 
 public:
     bool result;
-    IsUsedInStmt(Function f) : func(f.name()), result(false) {
-    }
+    IsUsedInStmt(Function f) : func(f.name()), result(false) {}
 
 };
 
@@ -1109,17 +1108,20 @@ public:
 // to be fused into an existing loop nest using its schedule.
 class InjectGroupRealization : public IRMutator {
 public:
-    vector<Function> &group; // Member of the fused loop starting from the first to be realized to the last
-    const vector<bool> &is_output_list; // List of booleans indicating if group[i] is an output
+    // Member of the fused loop starting from the first to be realized to the last.
+    vector<Function> &group;
+    // List of booleans indicating if group[i] is an output
+    const vector<bool> &is_output_list;
     bool found_store_level, found_compute_level;
+    const map<string, Function> &env;
     const Target &target;
     LoopLevel compute_level;
     LoopLevel store_level;
-    const map<string, Function> &env;
 
-    InjectGroupRealization(vector<Function> &g, const vector<bool> &o, const Target &t,
-                           const vector<string> &order, const map<string, Function> &env)
-            : group(g), is_output_list(o), found_store_level(false), found_compute_level(false), target(t), env(env) {
+    InjectGroupRealization(vector<Function> &g, const vector<bool> &o,
+                           const map<string, Function> &env, const Target &t)
+            : group(g), is_output_list(o), found_store_level(false),
+              found_compute_level(false), env(env), target(t) {
         internal_assert(!group.empty());
         internal_assert(group.size() == is_output_list.size());
 
@@ -1198,16 +1200,14 @@ private:
                 }
             }
         }
-
-        ShiftLoops shifter(shifts);
-        produce = shifter.mutate(produce);
+        produce = ShiftLoops(shifts).mutate(produce);
 
         // Replace all the child fused loops with the appropriate bounds (i.e.
         // the min/max should refer to the parent loop vars and the extent should
         // be one).
         produce = substitute_fused_bounds(produce, replacements);
 
-        // Replace the bounds of parent fused loops with union of bound of
+        // Replace the bounds of parent fused loops with union of bounds of
         // the fused loops.
         produce = replace_parent_bound_with_union_bound(skip, group[parent_index], produce, subs.bounds);
 
@@ -1233,7 +1233,7 @@ private:
         if (!fuse_level.is_inline() && !fuse_level.is_root()) {
             if (!skip.find(fuse_level.func())->second) {
                 {
-                    const auto iter = std::find_if(dims.begin(), dims.end(),
+                    const auto &iter = std::find_if(dims.begin(), dims.end(),
                         [&fuse_level](const Dim &d) { return var_name_match(d.var, fuse_level.var().name()); });
                     internal_assert(iter != dims.end());
                     start_fuse = iter - dims.begin();
@@ -1313,7 +1313,7 @@ private:
         size_t start_fuse = dims.size();
         if (!fuse_level.is_inline() && !fuse_level.is_root()) {
             if (!skip.find(fuse_level.func())->second) {
-                const auto iter = std::find_if(dims.begin(), dims.end(),
+                const auto &iter = std::find_if(dims.begin(), dims.end(),
                     [&fuse_level](const Dim &d) { return var_name_match(d.var, fuse_level.var().name()); });
                 internal_assert(iter != dims.end());
                 start_fuse = iter - dims.begin();
@@ -1330,7 +1330,7 @@ private:
             if (skip.find(pair.func_2)->second) {
                 continue;
             }
-            const auto iter = std::find_if(dims.begin(), dims.end(),
+            const auto &iter = std::find_if(dims.begin(), dims.end(),
                 [&pair](const Dim &d) { return var_name_match(d.var, pair.var_name); });
             internal_assert(iter != dims.end());
             start_fuse = std::min(start_fuse, (size_t)(iter - dims.begin()));
@@ -1378,7 +1378,7 @@ private:
             if (skip.find(pair.func_2)->second) {
                 continue;
             }
-            const auto iter = env.find(pair.func_2);
+            const auto &iter = env.find(pair.func_2);
             if (iter == env.end()) {
                 continue;
             }
@@ -1400,7 +1400,7 @@ private:
             if (skip.find(pair.func_2)->second) {
                 continue;
             }
-            const auto iter = env.find(pair.func_2);
+            const auto &iter = env.find(pair.func_2);
             if (iter == env.end()) {
                 continue;
             }
@@ -1431,7 +1431,7 @@ private:
             if (skip.find(pair.func_2)->second) {
                 continue;
             }
-            const auto iter = std::find_if(dims.begin(), dims.end(),
+            const auto &iter = std::find_if(dims.begin(), dims.end(),
                 [&pair](const Dim &d) { return var_name_match(d.var, pair.var_name); });
             internal_assert(iter != dims.end());
             // Should ignore the __outermost dummy dimension.
@@ -1518,7 +1518,8 @@ private:
     using IRMutator::visit;
 
     void visit(const For *for_loop) {
-        debug(3) << "InjectGroupRealization of " << group << " entering for loop over " << for_loop->name << "\n";
+        debug(3) << "InjectGroupRealization of " << group << " entering for loop over "
+                 << for_loop->name << "\n";
 
         Stmt body = for_loop->body;
 
@@ -1907,23 +1908,20 @@ bool validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
     return true;
 }
 
-void validate_fused_group_schedule_helper(const string &fn, size_t stage,
+void validate_fused_group_schedule_helper(const string &fn, size_t stage_index,
                                           const Definition &def_1,
                                           const map<string, Function> &env) {
     for (const auto &p : def_1.schedule().fused_pairs()) {
-        internal_assert((fn == p.func_1) && (stage == p.stage_1));
+        internal_assert((fn == p.func_1) && (stage_index == p.stage_1));
 
-        const auto iter1 = env.find(p.func_1);
-        const auto iter2 = env.find(p.func_2);
-        internal_assert(iter1 != env.end());
-
-        if (iter2 == env.end()) { // The function is not used anywhere
-            continue;
-        }
+        const auto &iter1 = env.find(p.func_1);
+        const auto &iter2 = env.find(p.func_2);
+        internal_assert((iter1 != env.end()) && (iter2 != env.end()));
 
         const Function &func_1 = iter1->second;
         const Function &func_2 = iter2->second;
-        const Definition &def_2 = (p.stage_2 == 0) ? func_2.definition() : func_2.update(p.stage_2 - 1);
+        const Definition &def_2 =
+            (p.stage_2 == 0) ? func_2.definition() : func_2.update(p.stage_2-1);
 
         // f2.compute_with(f1, var) is allowed only if f2 has no specializations.
         user_assert(func_2.definition().specializations().empty())
@@ -1959,13 +1957,13 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
         const vector<Dim> &dims_2 = def_2.schedule().dims();
 
         // Assert that the variable specified in compute_with is in the dim list.
-        const auto iter_1 = std::find_if(dims_1.begin(), dims_1.end(),
+        const auto &iter_1 = std::find_if(dims_1.begin(), dims_1.end(),
             [&p](const Dim &d) { return var_name_match(d.var, p.var_name); });
         user_assert(iter_1 != dims_1.end())
             << "Invalid compute_with: cannot find " << p.var_name << " in "
             << p.func_1 << ".s" << p.stage_1 << "\n";
 
-        const auto iter_2 = std::find_if(dims_2.begin(), dims_2.end(),
+        const auto &iter_2 = std::find_if(dims_2.begin(), dims_2.end(),
             [&p](const Dim &d) { return var_name_match(d.var, p.var_name); });
         user_assert(iter_2 != dims_2.end())
             << "Invalid compute_with: cannot find " << p.var_name << " in "
@@ -1983,8 +1981,10 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
         for (int i = 0; i < n_fused; ++i) {
             const Dim &d1 = dims_1[start_fuse_1 + i];
             const Dim &d2 = dims_2[start_fuse_2 + i];
-            bool equal = var_name_match(d1.var, d2.var) && (d1.for_type == d2.for_type) &&
-               (d1.device_api == d2.device_api) && (d1.dim_type == d2.dim_type);
+            bool equal = var_name_match(d1.var, d2.var) &&
+                         (d1.for_type == d2.for_type) &&
+                         (d1.device_api == d2.device_api) &&
+                         (d1.dim_type == d2.dim_type);
             if (!equal) {
                 user_error << "Invalid compute_with: dims " << i << " of " << p.func_1 << ".s"
                            << p.stage_1 << "(" << dims_1[start_fuse_1 + i].var << ") and " << p.func_2
@@ -1992,52 +1992,43 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
             }
         }
 
-        // If both stages computed_with are from the same Func, verify that the dims
-        // computed with are the results of same application of splits/renames/etc.
+        // If both stages computed with are from the same Func, verify that the dims
+        // computed with are the results of the same application of splits/renames/etc.
         // Also, if it is a split dimension, verify that it doesn't use ShiftInwards
         // as tail strategy since this may affect correctness.
-        if (p.func_1 == p.func_2) { // Update and its preceeding stage are fused
-            const vector<string> pure_dims_1 = func_1.args();
+        if (p.func_1 == p.func_2) { // Update and its preceding stage are fused
+            vector<string> pure_dims_1 = func_1.args();
             const vector<ReductionVariable> &rvars_1 = def_1.schedule().rvars();
             const vector<Split> &splits_1 = def_1.schedule().splits();
             const vector<Split> &splits_2 = def_2.schedule().splits();
 
             for (int i = 0; i < n_fused; ++i) {
                 const string &var = dims_1[start_fuse_1 + i].var;
-                {
-                    const auto iter = std::find_if(pure_dims_1.begin(), pure_dims_1.end(),
-                        [&var](const string &d) { return (d == var); });
-                    if (iter != pure_dims_1.end()) {
-                        // It is a pure var, no need to check the schedule.
-                        continue;
-                    }
+                if (std::any_of(pure_dims_1.begin(), pure_dims_1.end(),
+                                [&var](const string &d) { return (d == var); })) {
+                    // It is a pure var, no need to check the schedule.
+                    continue;
                 }
-                {
-                    const auto iter = std::find_if(rvars_1.begin(), rvars_1.end(),
-                        [&var](const ReductionVariable &rv) { return (rv.var == var); });
-                    if (iter != rvars_1.end()) {
-                        // It is an rvar, no need to check the schedule.
-                        continue;
-                    }
+                if (std::any_of(rvars_1.begin(), rvars_1.end(),
+                                [&var](const ReductionVariable &rv) { return (rv.var == var); })) {
+                    // It is an rvar, no need to check the schedule.
+                    continue;
                 }
+
                 // Relevant splits that produce this dim if there is any
                 vector<Split> s_1, s_2;
                 {
                     vector<string> relevant_dims = {var};
                     for (size_t j = splits_1.size(); j > 0; --j) {
                         const Split &s = splits_1[j-1];
-                        bool relevant =
-                            std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                [&s](const string &d) { return (d == s.old_var); })
-                            != relevant_dims.end();
-                        relevant = relevant || (std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                                    [&s](const string &d) { return (d == s.outer); })
-                                                != relevant_dims.end());
+                        bool relevant = std::any_of(relevant_dims.begin(), relevant_dims.end(),
+                                                    [&s](const string &d) { return (d == s.old_var); });
+                        relevant = relevant || std::any_of(relevant_dims.begin(), relevant_dims.end(),
+                                                           [&s](const string &d) { return (d == s.outer); });
 
                         if (s.is_split() || s.is_fuse()) {
-                            relevant = relevant || (std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                                        [&s](const string &d) { return (d == s.inner); })
-                                                    != relevant_dims.end());
+                            relevant = relevant || std::any_of(relevant_dims.begin(), relevant_dims.end(),
+                                                               [&s](const string &d) { return (d == s.inner); });
                         }
                         if (relevant) {
                             relevant_dims.push_back(s.old_var);
@@ -2053,18 +2044,14 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
                     vector<string> relevant_dims = {var};
                     for (size_t j = splits_2.size(); j > 0; --j) {
                         const Split &s = splits_2[j-1];
-                        bool relevant =
-                            std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                [&s](const string &d) { return (d == s.old_var); })
-                            != relevant_dims.end();
-                        relevant = relevant || (std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                                    [&s](const string &d) { return (d == s.outer); })
-                                                != relevant_dims.end());
+                        bool relevant = std::any_of(relevant_dims.begin(), relevant_dims.end(),
+                                                    [&s](const string &d) { return (d == s.old_var); });
+                        relevant = relevant || std::any_of(relevant_dims.begin(), relevant_dims.end(),
+                                                           [&s](const string &d) { return (d == s.outer); });
 
                         if (s.is_split() || s.is_fuse()) {
-                            relevant = relevant || (std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                                        [&s](const string &d) { return (d == s.inner); })
-                                                    != relevant_dims.end());
+                            relevant = relevant || std::any_of(relevant_dims.begin(), relevant_dims.end(),
+                                                               [&s](const string &d) { return (d == s.inner); });
                         }
                         if (relevant) {
                             relevant_dims.push_back(s.old_var);
@@ -2086,8 +2073,11 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
                 for (size_t k = 0; k < s_1.size(); ++k) {
                     const Split &s1 = s_1[k];
                     const Split &s2 = s_2[k];
-                    bool match = (s1.split_type == s2.split_type) && (s1.old_var == s2.old_var) &&
-                        (s1.outer == s2.outer) && equal(s1.factor, s2.factor) && (s1.exact == s2.exact);
+                    bool match = (s1.split_type == s2.split_type) &&
+                                 (s1.old_var == s2.old_var) &&
+                                 (s1.outer == s2.outer) &&
+                                 equal(s1.factor, s2.factor) &&
+                                 (s1.exact == s2.exact);
 
                     if (s1.is_split() || s1.is_fuse()) {
                         match = match && (s1.inner == s2.inner);
@@ -2107,15 +2097,14 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
                 }
             }
         }
-
     }
 }
 
 void validate_fused_groups_schedule(const vector<vector<string>> &fused_groups,
-                                   const map<string, Function> &env) {
+                                    const map<string, Function> &env) {
     for (const vector<string> &group : fused_groups) {
         for (const auto &fn : group) {
-            const auto iter = env.find(fn);
+            const auto &iter = env.find(fn);
             internal_assert(iter != env.end());
 
             validate_fused_group_schedule_helper(
@@ -2153,7 +2142,6 @@ class RemoveLoopsOverOutermost : public IRMutator {
 };
 
 Stmt schedule_functions(const vector<Function> &outputs,
-                        const vector<string> &order,
                         const vector<vector<string>> &fused_groups,
                         const map<string, Function> &env,
                         const Target &target,
@@ -2172,11 +2160,12 @@ Stmt schedule_functions(const vector<Function> &outputs,
         vector<bool> is_output_list;
         for (const string &name: group) {
             Function f = env.find(name)->second;
-            bool is_output = false;
 
+            bool is_output = false;
             for (Function o : outputs) {
                 is_output = is_output | o.same_as(f);
             }
+
             bool necessary = validate_schedule(f, s, target, is_output, env);
             if (!necessary) {
                 // The way in which the function was referred to in the
@@ -2195,14 +2184,8 @@ Stmt schedule_functions(const vector<Function> &outputs,
             continue;
         }
 
-        int relevant_fused_pair = 0;
-        for (const auto &pair : funcs[0].definition().schedule().fused_pairs()) {
-            if (env.find(pair.func_2) == env.end()) {
-                continue;
-            }
-            relevant_fused_pair += 1;
-        }
-        if ((funcs.size() == 1) && (relevant_fused_pair == 0)) {
+        if ((funcs.size() == 1) &&
+            (funcs[0].definition().schedule().fused_pairs().size() == 0)) {
             // There is only one function in the group and there is
             // no loop fusion among its definition
             if (funcs[0].can_be_inlined() &&
@@ -2216,7 +2199,7 @@ Stmt schedule_functions(const vector<Function> &outputs,
                 internal_assert(injector.found_store_level && injector.found_compute_level);
             }
         } else {
-            InjectGroupRealization injector(funcs, is_output_list, target, order, env);
+            InjectGroupRealization injector(funcs, is_output_list, env, target);
             s = injector.mutate(s);
             internal_assert(injector.found_store_level && injector.found_compute_level);
         }
