@@ -25,8 +25,7 @@ bool var_name_match(string candidate, string var) {
     internal_assert(var.find('.') == string::npos)
         << "var_name_match expects unqualified names for the second argument. "
         << "Name passed: " << var << "\n";
-    if (candidate == var) return true;
-    return Internal::ends_with(candidate, "." + var);
+    return (candidate == var) || Internal::ends_with(candidate, "." + var);
 }
 
 class DependsOnBoundsInference : public IRVisitor {
@@ -119,8 +118,12 @@ Interval bounds_of_inner_var(string var, Stmt s) {
 class BoundsInference : public IRMutator {
 public:
     const vector<Function> &funcs;
-    const vector<vector<Function>> &fused_groups; // Group of functions which loops are fused
-    const vector<set<FusedPair>> &fused_pairs; // List of all fused stages within a group of functions that are fused
+    // Each element in the list indicates a group of functions which loops
+    // are fused together.
+    const vector<vector<Function>> &fused_groups;
+    // Contain list of all pairwise fused function stages for each fused group.
+    // The fused group is indexed in the same way as 'fused_groups'.
+    const vector<set<FusedPair>> &fused_pairs_in_groups;
     const FuncValueBounds &func_bounds;
     set<string> in_pipeline, inner_productions;
     const Target target;
@@ -273,42 +276,45 @@ public:
         }
 
         // Determine if the current producing stage are fused with other
-        // stage (i.e. the consumer stage) at 'var'.
+        // stage (i.e. the consumer stage) at dimension 'var'.
         bool is_fused_with_others(const vector<vector<Function>> &fused_groups,
-                                  const vector<set<FusedPair>> &fused_pairs,
-                                  const Function &producing_func, int producing_stage,
-                                  string var, string consumer_name, int consumer_stage) {
+                                  const vector<set<FusedPair>> &fused_pairs_in_groups,
+                                  const Function &producing_func, int producing_stage_index,
+                                  string consumer_name, int consumer_stage,
+                                  string var) {
             // Find the fused group this producing stage belongs to.
-            int index = -1;
-            for (int i = 0; i < (int)fused_groups.size(); ++i) {
-                const auto iter = std::find_if(fused_groups[i].begin(), fused_groups[i].end(),
-                    [&producing_func](const Function& f) { return (f.name() == producing_func.name()); });
-                if (iter != fused_groups[i].end()) {
-                    index = i;
-                    break;
-                }
-
+            size_t index;
+            {
+                const auto &iter = std::find_if(fused_groups.begin(), fused_groups.end(),
+                    [&producing_func](const vector<Function> &group) {
+                        return std::any_of(group.begin(), group.end(),
+                                    [&producing_func](const Function &f) {
+                                        return (f.name() == producing_func.name());
+                                    });
+                    });
+                internal_assert(iter != fused_groups.end());
+                index = iter - fused_groups.begin();
             }
-            internal_assert(index >= 0 && index < (int)fused_pairs.size());
 
-            const vector<Dim> &dims = (producing_stage == 0) ? producing_func.definition().schedule().dims() :
-                producing_func.update(producing_stage-1).schedule().dims();
+            const vector<Dim> &dims = (producing_stage_index == 0) ?
+                producing_func.definition().schedule().dims() :
+                producing_func.update(producing_stage_index-1).schedule().dims();
 
             size_t var_index;
             {
-                const auto iter = std::find_if(dims.begin(), dims.end(),
-                    [&var](const Dim& d) { return var_name_match(d.var, var); });
+                const auto &iter = std::find_if(dims.begin(), dims.end(),
+                    [&var](const Dim &d) { return var_name_match(d.var, var); });
                 internal_assert(iter != dims.end());
                 var_index = iter - dims.begin();
             }
 
-            // Iterate over the fused pair list to check if producer stage is
-            // fused with consumer stage at 'var'
-            for (const auto &pair : fused_pairs[index]) {
+            // Iterate over the fused pair list to check if the producer stage
+            // is fused with the consumer stage at 'var'
+            for (const auto &pair : fused_pairs_in_groups[index]) {
                 if (((pair.func_1 == consumer_name) && ((int)pair.stage_1 == consumer_stage)) ||
                     ((pair.func_2 == consumer_name) && ((int)pair.stage_2 == consumer_stage))) {
-                    const auto iter = std::find_if(dims.begin(), dims.end(),
-                        [&pair](const Dim& d) { return var_name_match(d.var, pair.var_name); });
+                    const auto &iter = std::find_if(dims.begin(), dims.end(),
+                        [&pair](const Dim &d) { return var_name_match(d.var, pair.var_name); });
                     internal_assert(iter != dims.end());
                     size_t idx = iter - dims.begin();
                     if (var_index >= idx) {
@@ -322,11 +328,11 @@ public:
         // Wrap a statement in let stmts defining the box
         Stmt define_bounds(Stmt s,
                            Function producing_func,
-                           string producing_stage,
-                           int producing_index,
+                           string producing_stage_index,
+                           int producing_stage_index_index,
                            string loop_level,
                            const vector<vector<Function>> &fused_groups,
-                           const vector<set<FusedPair>> &fused_pairs,
+                           const vector<set<FusedPair>> &fused_pairs_in_groups,
                            const set<string> &in_pipeline,
                            const set<string> inner_productions,
                            const Target &target) {
@@ -341,11 +347,13 @@ public:
 
             for (const pair<pair<string, int>, Box> &i : bounds) {
                 string func_name = i.first.first;
-                string stage_name = func_name + ".s" + std::to_string(i.first.second);
-                if (stage_name == producing_stage ||
+                int func_stage_index = i.first.second;
+                string stage_name = func_name + ".s" + std::to_string(func_stage_index);
+                if (stage_name == producing_stage_index ||
                     inner_productions.count(func_name) ||
-                    is_fused_with_others(fused_groups, fused_pairs, producing_func,
-                                         producing_index, var, func_name, i.first.second)) {
+                    is_fused_with_others(fused_groups, fused_pairs_in_groups,
+                                         producing_func, producing_stage_index_index,
+                                         func_name, func_stage_index, var)) {
                     merge_boxes(b, i.second);
                 }
             }
@@ -706,7 +714,7 @@ public:
                     const vector<Function> &outputs,
                     const FuncValueBounds &fb,
                     const Target &target) :
-        funcs(f), fused_groups(fg), fused_pairs(fp), func_bounds(fb), target(target) {
+        funcs(f), fused_groups(fg), fused_pairs_in_groups(fp), func_bounds(fb), target(target) {
         internal_assert(!f.empty());
 
         // Compute the intrinsic relationships between the stages of
@@ -978,7 +986,7 @@ public:
                     }
                     body = stages[i].define_bounds(
                         body, f, stage_name, stage_index, op->name, fused_groups,
-                        fused_pairs, in_pipeline, inner_productions, target);
+                        fused_pairs_in_groups, in_pipeline, inner_productions, target);
                 }
             }
 
@@ -1069,6 +1077,8 @@ Stmt bounds_inference(Stmt s,
         funcs[i] = env.find(order[i])->second;
     }
 
+    // Each element in 'fused_func_groups' indicates a group of functions
+    // which loops should be fused together.
     vector<vector<Function>> fused_func_groups;
     for (const vector<string> &group : fused_groups) {
         vector<Function> fs;
@@ -1078,7 +1088,8 @@ Stmt bounds_inference(Stmt s,
         fused_func_groups.push_back(fs);
     }
 
-    vector<set<FusedPair>> fused_pairs;
+    // For each fused group, collect the pairwise fused function stages.
+    vector<set<FusedPair>> fused_pairs_in_groups;
     for (const vector<string> &group : fused_groups) {
         set<FusedPair> pairs;
         for (const string &fname : group) {
@@ -1089,18 +1100,18 @@ Stmt bounds_inference(Stmt s,
                       std::inserter(pairs, pairs.end()));
 
             for (size_t i = 0; i < f.updates().size(); ++i) {
-                const Definition &def = f.updates()[i];
-                std::copy(def.schedule().fused_pairs().begin(),
-                          def.schedule().fused_pairs().end(),
+                std::copy(f.updates()[i].schedule().fused_pairs().begin(),
+                          f.updates()[i].schedule().fused_pairs().end(),
                           std::inserter(pairs, pairs.end()));
             }
         }
-        fused_pairs.push_back(std::move(pairs));
+        fused_pairs_in_groups.push_back(pairs);
     }
 
     // Add an outermost bounds inference marker
     s = For::make("<outermost>", 0, 1, ForType::Serial, DeviceAPI::None, s);
-    s = BoundsInference(funcs, fused_func_groups, fused_pairs, outputs, func_bounds, target).mutate(s);
+    s = BoundsInference(funcs, fused_func_groups, fused_pairs_in_groups,
+                        outputs, func_bounds, target).mutate(s);
     return s.as<For>()->body;
 }
 

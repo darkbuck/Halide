@@ -53,6 +53,8 @@ class Stage {
     /** Reference to the Function this stage (or definition) belongs to. */
     Internal::Function function;
     Internal::Definition definition;
+    /** Indicate which stage the definition belongs to (0 for initial
+     * definition, 1 for first update, etc.). */
     size_t stage_index;
     /** Pure Vars of the Function (from the init definition). */
     std::vector<Var> dim_vars;

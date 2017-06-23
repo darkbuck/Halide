@@ -111,7 +111,7 @@ enum class PrefetchBoundStrategy {
  * dimensions. We schedule the inputs to that function by
  * recursively injecting realizations for them at particular sites
  * in this loop nest. A LoopLevel identifies such a site. The site
- * can either be a specific loop nest within all stages of a function
+ * can either be a loop nest within all stages of a function
  * or it can refer to a loop nest within a particular function's
  * stage (initial definition or updates).
  */
@@ -452,9 +452,11 @@ public:
     // @}
 
     /** Innermost loop level of fused loop nest for this function stage.
-     * Fusion runs from outermost to this loop level. The function we are
-     * fusing this function with and this function should be independent of
-     * each other. See \ref Func::compute_with and \ref Stage::compute_with */
+     * Fusion runs from outermost to this loop level. If the fused stages
+     * are from different functions, they should not have producer/consumer
+     * relationship. If they are consecutive stages of the same function,
+     * they should not have loop-carried dependencies. See
+     * \ref Func::compute_with and \ref Stage::compute_with */
     // @{
     const FuseLoopLevel &fuse_level() const;
     FuseLoopLevel &fuse_level();

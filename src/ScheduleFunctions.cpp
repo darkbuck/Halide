@@ -759,11 +759,11 @@ public:
             // Need to find out if it is fused at 'var'
             const vector<Dim> &dims = def.schedule().dims();
             const auto it1 = std::find_if(dims.begin(), dims.end(),
-                [&fuse_level](const Dim& d) { return var_name_match(d.var, fuse_level.var().name()); });
+                [&fuse_level](const Dim &d) { return var_name_match(d.var, fuse_level.var().name()); });
             internal_assert(it1 != dims.end());
 
             const auto it2 = std::find_if(dims.begin(), dims.end(),
-                [&var](const Dim& d) { return var_name_match(d.var, var); });
+                [&var](const Dim &d) { return var_name_match(d.var, var); });
             internal_assert(it2 != dims.end());
 
             return it2 < it1;
@@ -1234,7 +1234,7 @@ private:
             if (!skip.find(fuse_level.func())->second) {
                 {
                     const auto iter = std::find_if(dims.begin(), dims.end(),
-                        [&fuse_level](const Dim& d) { return var_name_match(d.var, fuse_level.var().name()); });
+                        [&fuse_level](const Dim &d) { return var_name_match(d.var, fuse_level.var().name()); });
                     internal_assert(iter != dims.end());
                     start_fuse = iter - dims.begin();
                 }
@@ -1314,7 +1314,7 @@ private:
         if (!fuse_level.is_inline() && !fuse_level.is_root()) {
             if (!skip.find(fuse_level.func())->second) {
                 const auto iter = std::find_if(dims.begin(), dims.end(),
-                    [&fuse_level](const Dim& d) { return var_name_match(d.var, fuse_level.var().name()); });
+                    [&fuse_level](const Dim &d) { return var_name_match(d.var, fuse_level.var().name()); });
                 internal_assert(iter != dims.end());
                 start_fuse = iter - dims.begin();
             }
@@ -1331,7 +1331,7 @@ private:
                 continue;
             }
             const auto iter = std::find_if(dims.begin(), dims.end(),
-                [&pair](const Dim& d) { return var_name_match(d.var, pair.var_name); });
+                [&pair](const Dim &d) { return var_name_match(d.var, pair.var_name); });
             internal_assert(iter != dims.end());
             start_fuse = std::min(start_fuse, (size_t)(iter - dims.begin()));
             // Should ignore the __outermost dummy dimension.
@@ -1432,7 +1432,7 @@ private:
                 continue;
             }
             const auto iter = std::find_if(dims.begin(), dims.end(),
-                [&pair](const Dim& d) { return var_name_match(d.var, pair.var_name); });
+                [&pair](const Dim &d) { return var_name_match(d.var, pair.var_name); });
             internal_assert(iter != dims.end());
             // Should ignore the __outermost dummy dimension.
             for (size_t i = iter - dims.begin(); i < dims.size() - 1; ++i) {
@@ -1960,13 +1960,13 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
 
         // Assert that the variable specified in compute_with is in the dim list.
         const auto iter_1 = std::find_if(dims_1.begin(), dims_1.end(),
-            [&p](const Dim& d) { return var_name_match(d.var, p.var_name); });
+            [&p](const Dim &d) { return var_name_match(d.var, p.var_name); });
         user_assert(iter_1 != dims_1.end())
             << "Invalid compute_with: cannot find " << p.var_name << " in "
             << p.func_1 << ".s" << p.stage_1 << "\n";
 
         const auto iter_2 = std::find_if(dims_2.begin(), dims_2.end(),
-            [&p](const Dim& d) { return var_name_match(d.var, p.var_name); });
+            [&p](const Dim &d) { return var_name_match(d.var, p.var_name); });
         user_assert(iter_2 != dims_2.end())
             << "Invalid compute_with: cannot find " << p.var_name << " in "
             << p.func_2 << ".s" << p.stage_2 << "\n";
@@ -2006,7 +2006,7 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
                 const string &var = dims_1[start_fuse_1 + i].var;
                 {
                     const auto iter = std::find_if(pure_dims_1.begin(), pure_dims_1.end(),
-                        [&var](const string& d) { return (d == var); });
+                        [&var](const string &d) { return (d == var); });
                     if (iter != pure_dims_1.end()) {
                         // It is a pure var, no need to check the schedule.
                         continue;
@@ -2014,7 +2014,7 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
                 }
                 {
                     const auto iter = std::find_if(rvars_1.begin(), rvars_1.end(),
-                        [&var](const ReductionVariable& rv) { return (rv.var == var); });
+                        [&var](const ReductionVariable &rv) { return (rv.var == var); });
                     if (iter != rvars_1.end()) {
                         // It is an rvar, no need to check the schedule.
                         continue;
@@ -2028,15 +2028,15 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
                         const Split &s = splits_1[j-1];
                         bool relevant =
                             std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                [&s](const string& d) { return (d == s.old_var); })
+                                [&s](const string &d) { return (d == s.old_var); })
                             != relevant_dims.end();
                         relevant = relevant || (std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                                    [&s](const string& d) { return (d == s.outer); })
+                                                    [&s](const string &d) { return (d == s.outer); })
                                                 != relevant_dims.end());
 
                         if (s.is_split() || s.is_fuse()) {
                             relevant = relevant || (std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                                        [&s](const string& d) { return (d == s.inner); })
+                                                        [&s](const string &d) { return (d == s.inner); })
                                                     != relevant_dims.end());
                         }
                         if (relevant) {
@@ -2055,15 +2055,15 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage,
                         const Split &s = splits_2[j-1];
                         bool relevant =
                             std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                [&s](const string& d) { return (d == s.old_var); })
+                                [&s](const string &d) { return (d == s.old_var); })
                             != relevant_dims.end();
                         relevant = relevant || (std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                                    [&s](const string& d) { return (d == s.outer); })
+                                                    [&s](const string &d) { return (d == s.outer); })
                                                 != relevant_dims.end());
 
                         if (s.is_split() || s.is_fuse()) {
                             relevant = relevant || (std::find_if(relevant_dims.begin(), relevant_dims.end(),
-                                                        [&s](const string& d) { return (d == s.inner); })
+                                                        [&s](const string &d) { return (d == s.inner); })
                                                     != relevant_dims.end());
                         }
                         if (relevant) {
