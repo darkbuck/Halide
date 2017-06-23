@@ -656,7 +656,7 @@ WEAK int halide_cuda_copy_to_host(void *user_context, halide_buffer_t* buf) {
     uint64_t t_before = halide_current_time_ns(user_context);
     #endif
 
-    halide_assert(user_context, buf->device && buf->device);
+    halide_assert(user_context, buf->device && buf->device_interface);
     halide_assert(user_context, validate_device_pointer(user_context, buf));
 
     device_copy c = make_device_to_host_copy(buf);
