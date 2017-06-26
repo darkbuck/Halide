@@ -1062,46 +1062,27 @@ Stmt substitute_fused_bounds(Stmt s, const map<string, Expr> &replacements) {
     return s;
 }
 
-class ShiftLoops : public IRMutator {
+// Shift the iteration domain of a loop nest by some factor.
+class ShiftLoopNest : public IRMutator {
     const map<string, Expr> &shifts; // Add the shift factor to the old var
 
     using IRMutator::visit;
-
-    Expr shift_let(const string &name, Expr value) {
-        value = mutate(value);
-        const auto &iter = shifts.find(name);
-        if (iter != shifts.end()) {
-            value = simplify(value + iter->second);
-        }
-        return value;
-    }
 
     void visit(const For *op) {
         IRMutator::visit(op);
         const auto &iter = shifts.find(op->name);
         if (iter != shifts.end()) {
-            debug(5) << "...Shifting " << op->name << " by " << iter->second << "\n";
+            debug(5) << "...Shifting for loop \"" << op->name << "\" by " << iter->second << "\n";
             op = stmt.as<For>();
             internal_assert(op);
-            Expr adjusted = Variable::make(Int(32), op->name) - iter->second;
+            Expr adjusted = Variable::make(Int(32), op->name) + iter->second;
             Stmt body = substitute(op->name, adjusted, op->body);
             stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
         }
     }
 
-    void visit(const LetStmt *op) {
-        Expr value = shift_let(op->name, op->value);
-        Stmt body = mutate(op->body);
-        if (value.same_as(op->value) &&
-            body.same_as(op->body)) {
-            stmt = op;
-        } else {
-            stmt = LetStmt::make(op->name, value, body);
-        }
-    }
-
 public:
-    ShiftLoops(const map<string, Expr> &s) : shifts(s) {}
+    ShiftLoopNest(const map<string, Expr> &s) : shifts(s) {}
 };
 
 // Inject the allocation and realization of a group of functions which are
@@ -1188,7 +1169,7 @@ private:
         CollectBounds subs;
         produce.accept(&subs);
 
-        // Shifts the loops according to the alignment strategies.
+        // Shift the loops according to the alignment strategies.
         map<string, Expr> shifts;
         for (int i = (int)group.size() - 1; i >= 0; --i) {
             if (!skip[group[i].name()]) {
@@ -1200,7 +1181,7 @@ private:
                 }
             }
         }
-        produce = ShiftLoops(shifts).mutate(produce);
+        produce = ShiftLoopNest(shifts).mutate(produce);
 
         // Replace all the child fused loops with the appropriate bounds (i.e.
         // the min/max should refer to the parent loop vars and the extent should
@@ -1221,9 +1202,11 @@ private:
         return Block::make(produce, consume);
     }
 
+    // Compute the shift factor required to align iteration of
+    // a function stage with its fused parent loop nest.
     void compute_shift_factor(const map<string, bool> &skip, Function f,
                               const string &prefix, const Definition &def,
-                              const map<string, Expr> &bounds,
+                              map<string, Expr> &bounds,
                               map<string, Expr> &shifts) {
         const vector<Dim> &dims = def.schedule().dims(); // From inner to outer
         const LoopLevel &fuse_level = def.schedule().fuse_level().level;
@@ -1257,28 +1240,25 @@ private:
 
                     string parent_prefix = fuse_level.func() + ".s" + std::to_string(fuse_level.stage_index()) + ".";
 
+                    auto it_min = bounds.find(prefix + var + ".loop_min");
+                    auto it_max = bounds.find(prefix + var + ".loop_max");
+                    internal_assert((it_min != bounds.end()) && (it_max != bounds.end()));
+
+                    Expr min = Variable::make(Int(32), prefix + var + ".loop_min");
+                    Expr max = Variable::make(Int(32), prefix + var + ".loop_max");
+
                     if (iter->second == AlignStrategy::AlignStart) {
-                        const auto &it1 = bounds.find(parent_prefix + var + ".loop_min");
-                        internal_assert(it1 != bounds.end()) << "Can't find " << parent_prefix + var + ".loop_min" << "\n";
-                        Expr parent_min = it1->second;
-
-                        const auto &it2 = bounds.find(prefix + var + ".loop_min");
-                        internal_assert(it2 != bounds.end()) << "Can't find " << prefix + var + ".loop_min" + ".loop_min" << "\n";
-                        shift_val = parent_min - it2->second;
+                        Expr parent_min = Variable::make(Int(32), parent_prefix + var + ".loop_min");
+                        shift_val = parent_min - min;
                     } else {
-                        internal_assert(iter->second == AlignStrategy::AlignEnd);
-                        const auto &it1 = bounds.find(parent_prefix + var + ".loop_max");
-                        internal_assert(it1 != bounds.end());
-                        Expr parent_max = it1->second;
-
-                        const auto &it2 = bounds.find(prefix + var + ".loop_max");
-                        internal_assert(it2 != bounds.end());
-                        shift_val = parent_max - it2->second;
+                        Expr parent_max = Variable::make(Int(32), parent_prefix + var + ".loop_max");
+                        shift_val = parent_max - max;
                     }
 
                     internal_assert(shift_val.defined());
-                    shifts.emplace(prefix + var + ".loop_max", shift_val);
-                    shifts.emplace(prefix + var + ".loop_in", shift_val);
+                    shifts.emplace(prefix + var, simplify(-shift_val));
+                    it_min->second = simplify(shift_val + it_min->second);
+                    it_max->second = simplify(shift_val + it_max->second);
                 }
             }
         }
@@ -1436,17 +1416,19 @@ private:
             internal_assert(iter != dims.end());
             // Should ignore the __outermost dummy dimension.
             for (size_t i = iter - dims.begin(); i < dims.size() - 1; ++i) {
-                // The child's dim might have slightly different name from the parent, e.g
-                // y.yi and yi.
+                // The child's dim might have slightly different name from
+                // the parent, e.g. y.yi and yi.
                 internal_assert(env.count(pair.func_2));
                 const Function &f2 = env.find(pair.func_2)->second;
                 const vector<Dim> &dims_2 =
-                    (pair.stage_2 == 0) ? f2.definition().schedule().dims() : f2.update(pair.stage_2-1).schedule().dims();
+                    (pair.stage_2 == 0) ? f2.definition().schedule().dims() :
+                                          f2.update(pair.stage_2-1).schedule().dims();
                 int dim2_idx = dims_2.size() - (dims.size() - i);
                 internal_assert(dim2_idx < (int)dims_2.size());
 
-                string var_2 = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + dims_2[dim2_idx].var;
-                internal_assert(bounds.count(var_2 + ".loop_min")) << "Fail to find bound of " << var_2 + ".loop_min" << "\n";
+                string var_2 = pair.func_2 + ".s" + std::to_string(pair.stage_2) +
+                               "." + dims_2[dim2_idx].var;
+                internal_assert(bounds.count(var_2 + ".loop_min"));
                 internal_assert(bounds.count(var_2 + ".loop_max"));
                 internal_assert(bounds.count(var_2 + ".loop_extent"));
                 Expr min_2 = bounds.find(var_2 + ".loop_min")->second;
@@ -1473,7 +1455,8 @@ private:
                 replacements[var_1 + ".loop_min"] = simplify(min(min_1, min_2));
                 replacements[var_1 + ".loop_max"] = simplify(max(max_1, max_2));
                 replacements[var_1 + ".loop_extent"] =
-                    simplify((replacements[var_1 + ".loop_max"] + 1) - replacements[var_1 + ".loop_min"]);
+                    simplify((replacements[var_1 + ".loop_max"] + 1) -
+                             replacements[var_1 + ".loop_min"]);
             }
         }
 

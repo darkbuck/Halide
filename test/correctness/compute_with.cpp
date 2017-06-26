@@ -85,8 +85,8 @@ int fuse_updates_test() {
         f.split(x, xo, xi, split_size, TailStrategy::GuardWithIf);
         f.update(0).split(x, xo, xi, split_size, TailStrategy::GuardWithIf);
         f.update(1).split(x, xo, xi, split_size, TailStrategy::GuardWithIf);
-        f.update(0).compute_with(f, xo);
-        f.update(1).compute_with(f.update(0), xo);
+        f.update(0).compute_with(f, xo, AlignStrategy::AlignStart);
+        f.update(1).compute_with(f.update(0), xo, AlignStrategy::AlignEnd);
 
         g.compute_at(f, xo);
         h.compute_at(f, xi);
@@ -128,7 +128,7 @@ int fuse_test() {
 
         f.fuse(x, y, t).parallel(t);
         g.fuse(x, y, t).parallel(t);
-        g.compute_with(f, t);
+        g.compute_with(f, t, AlignStrategy::AlignEnd);
         im = h.realize(100, 100, 100);
     }
 
@@ -187,8 +187,8 @@ int multiple_fuse_group_test() {
         h.compute_with(p, t);
 
         h.update(1).compute_with(h.update(0), r.x);
-        g.update(0).compute_with(g, x);
-        f.update(0).compute_with(g, y);
+        g.update(0).compute_with(g, x, AlignStrategy::AlignStart);
+        f.update(0).compute_with(g, y, AlignStrategy::AlignEnd);
         f.compute_with(g, x);
 
         im = q.realize(200, 200);
@@ -204,7 +204,7 @@ int multiple_fuse_group_test() {
 }
 
 int multiple_outputs_test() {
-    const int f_size = 3;
+    const int f_size = 4;
     const int g_size = 4;
     Buffer<int> f_im(f_size, f_size), g_im(g_size, g_size);
     Buffer<int> f_im_ref(f_size, f_size), g_im_ref(g_size, g_size);
@@ -229,7 +229,7 @@ int multiple_outputs_test() {
         g(x, y) = x + input(x, y);
 
         input.compute_at(f, y);
-        g.compute_with(f, y);
+        g.compute_with(f, y, AlignStrategy::Auto);
 
         Pipeline({f, g}).realize({f_im, g_im});
     }
@@ -241,6 +241,7 @@ int multiple_outputs_test() {
         return -1;
     }
 
+    std::cout << "Comparing \"g\" results:\n";
     auto g_func = [g_im_ref](int x, int y) {
         return g_im_ref(x, y);
     };
@@ -279,8 +280,8 @@ int multiple_outputs_test_with_update() {
         g(x, y) = x + input(x, y);
 
         input.compute_at(f, y);
-        f.update(0).compute_with(f, x);
-        g.compute_with(f, y);
+        f.update(0).compute_with(f, x, AlignStrategy::AlignEnd);
+        g.compute_with(f, y, AlignStrategy::AlignStart);
 
         Pipeline({f, g}).realize({f_im, g_im});
     }
@@ -368,12 +369,12 @@ int fuse_compute_at_test() {
         h.compute_at(p, y);
         p.compute_root();
         q.compute_root();
-        q.compute_with(p, x);
+        q.compute_with(p, x, AlignStrategy::AlignEnd);
 
         Var xo("xo"), xi("xi");
         f.split(x, xo, xi, 7);
         g.split(x, xo, xi, 7);
-        g.compute_with(f, xo);
+        g.compute_with(f, xo, AlignStrategy::AlignStart);
         im = r.realize(200, 200);
     }
 
@@ -413,7 +414,7 @@ int double_split_fuse_test() {
         f.fuse(xoi, xi, t);
         f.update(0).fuse(xoi, xi, t);
         f.compute_at(g, y);
-        f.update(0).compute_with(f, t);
+        f.update(0).compute_with(f, t, AlignStrategy::AlignEnd);
 
         im = g.realize(200, 200);
     }
@@ -454,8 +455,8 @@ int rowsum_test() {
         RDom r(0, 100);
         rowsum(y) += f(r, y);
 
-        rowsum.compute_with(g, y);
-        rowsum.update(0).compute_with(rowsum, y);
+        rowsum.compute_with(g, y, AlignStrategy::AlignEnd);
+        rowsum.update(0).compute_with(rowsum, y, AlignStrategy::AlignStart);
 
         Pipeline({g, rowsum}).realize({g_im, rowsum_im});
     }
@@ -530,8 +531,8 @@ int rgb_yuv420_test() {
         u_part.vectorize(xi);
         v_part.vectorize(xi);
 
-        u_part.compute_with(y_part, x);
-        v_part.compute_with(u_part, x);
+        u_part.compute_with(y_part, x, AlignStrategy::AlignEnd);
+        v_part.compute_with(u_part, x, AlignStrategy::AlignEnd);
 
         Expr width = v_part.output_buffer().width();
         Expr height = v_part.output_buffer().height();
@@ -601,7 +602,7 @@ int vectorize_test() {
         g.split(x, xo, xi, 7);
         f.vectorize(xi);
         g.vectorize(xi);
-        g.compute_with(f, xi);
+        g.compute_with(f, xi, AlignStrategy::AlignStart);
         im = h.realize(200, 200);
     }
 
@@ -692,7 +693,7 @@ int multiple_outputs_on_gpu_test() {
         f.compute_root().gpu_tile(x, y, xi, yi, 8, 8);
         g.compute_root().gpu_tile(x, y, xi, yi, 8, 8);
 
-        g.compute_with(f, x);
+        g.compute_with(f, x, AlignStrategy::AlignEnd);
 
         Realization r(f_im, g_im);
         Pipeline({f, g}).realize(r);
@@ -760,8 +761,8 @@ int mixed_tile_factor_test() {
         g.tile(x, y, xi, yi, 7, 9, TailStrategy::GuardWithIf);
         h.tile(x, y, xi, yi, 4, 16, TailStrategy::RoundUp);
 
-        g.compute_with(f, yi);
-        h.compute_with(g, yi);
+        g.compute_with(f, yi, AlignStrategy::AlignEnd);
+        h.compute_with(g, yi, AlignStrategy::AlignStart);
 
         input.store_root();
         input.compute_at(f, y).vectorize(x, 8);
@@ -839,8 +840,8 @@ int multi_tile_mixed_tile_factor_test() {
         g.tile(xi, yi, xii, yii, 16, 8, TailStrategy::GuardWithIf);
         h.tile(xi, yi, xii, yii, 4, 16, TailStrategy::GuardWithIf);
 
-        g.compute_with(f, yii);
-        h.compute_with(g, yii);
+        g.compute_with(f, yii, AlignStrategy::AlignStart);
+        h.compute_with(g, yii, AlignStrategy::AlignEnd);
 
         input.store_root();
         input.compute_at(f, y).vectorize(x, 8);
@@ -911,7 +912,7 @@ int only_some_are_tiled_test() {
         Var xi("xi"), yi("yi");
         f.tile(x, y, xi, yi, 32, 16, TailStrategy::ShiftInwards);
 
-        g.compute_with(f, y);
+        g.compute_with(f, y, AlignStrategy::AlignEnd);
         h.compute_with(g, y);
 
         input.store_root();
