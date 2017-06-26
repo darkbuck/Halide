@@ -205,7 +205,7 @@ int multiple_fuse_group_test() {
 
 int multiple_outputs_test() {
     const int f_size = 4;
-    const int g_size = 4;
+    const int g_size = 6;
     Buffer<int> f_im(f_size, f_size), g_im(g_size, g_size);
     Buffer<int> f_im_ref(f_size, f_size), g_im_ref(g_size, g_size);
 
@@ -229,7 +229,7 @@ int multiple_outputs_test() {
         g(x, y) = x + input(x, y);
 
         input.compute_at(f, y);
-        g.compute_with(f, y, AlignStrategy::Auto);
+        g.compute_with(f, y, AlignStrategy::AlignStart);
 
         Pipeline({f, g}).realize({f_im, g_im});
     }
@@ -241,7 +241,6 @@ int multiple_outputs_test() {
         return -1;
     }
 
-    std::cout << "Comparing \"g\" results:\n";
     auto g_func = [g_im_ref](int x, int y) {
         return g_im_ref(x, y);
     };
@@ -987,6 +986,59 @@ int with_specialization_test() {
     return 0;
 }
 
+int nested_compute_with_test() {
+    const int g1_size = 20;
+    const int g2_size = 10;
+    Buffer<int> g1_im(g1_size, g1_size + 5), g2_im(g2_size, g2_size + 5);
+    Buffer<int> g1_im_ref(g1_size, g1_size + 10), g2_im_ref(g2_size, g2_size + 10);
+
+    {
+        Var x("x"), y("y");
+        Func input("input"), f1("f1"), f2("f2"), g1("g1"), g2("g2");
+
+        input(x, y) = x + y;
+        f1(x, y) = input(x, y) + 20;
+        f2(x, y) = input(x, y)*input(x, y);
+        g1(x, y) = f1(x, y) + x + y;
+        g2(x, y) = f1(x, y)*f2(x, y);
+        Pipeline({g1, g2}).realize({g1_im_ref, g2_im_ref});
+    }
+
+    {
+        Var x("x"), y("y");
+        Func input("input"), f1("f1"), f2("f2"), g1("g1"), g2("g2");
+
+        input(x, y) = x + y;
+        f1(x, y) = input(x, y) + 20;
+        f2(x, y) = input(x, y)*input(x, y);
+        g1(x, y) = f1(x, y) + x + y;
+        g2(x, y) = f1(x, y)*f2(x, y);
+
+        input.compute_at(f1, y);
+        f2.compute_with(f1, y, AlignStrategy::AlignEnd);
+        f1.compute_at(g1, y);
+        f2.compute_at(g1, y);
+        g2.compute_with(g1, x, AlignStrategy::AlignStart);
+
+        Pipeline({g1, g2}).realize({g1_im, g2_im});
+    }
+
+    auto g1_func = [g1_im_ref](int x, int y) {
+        return g1_im_ref(x, y);
+    };
+    if (check_image(g1_im, g1_func)) {
+        return -1;
+    }
+
+    auto g2_func = [g2_im_ref](int x, int y) {
+        return g2_im_ref(x, y);
+    };
+    if (check_image(g2_im, g2_func)) {
+        return -1;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     printf("Running split reorder test\n");
     if (split_test() != 0) {
@@ -1075,6 +1127,11 @@ int main(int argc, char **argv) {
 
     printf("Running with specialization test\n");
     if (with_specialization_test() != 0) {
+        return -1;
+    }
+
+    printf("Running nested compute with test\n");
+    if (nested_compute_with_test() != 0) {
         return -1;
     }
 
