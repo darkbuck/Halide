@@ -11,7 +11,7 @@
 #include "Scope.h"
 #include "Bounds.h"
 #include "Lerp.h"
-#include <unordered_map>
+#include "Deinterleave.h"
 
 namespace Halide {
 namespace Internal {
@@ -385,6 +385,65 @@ int find_mpy_ops(Expr op, Type a_ty, Type b_ty, int max_mpy_count,
     return 0;
 }
 
+// This function attempts to check if elements is an array of vectors
+// that can be interperpreted as sequentially increasing slices of an
+// underlying vector. For example, the following examples would return
+// true:
+//
+// elements = {
+//    input[ramp(x, 1, 64)],
+//    input[ramp(x + 1, 1, 64)],
+//    input[ramp(x + 2, 1, 64)],
+// };
+// elements = {
+//    slice_vector(x, 0, 1, 64),
+//    slice_vector(x, 1, 1, 64),
+//    slice_vector(x, 2, 1, 64),
+// };
+bool is_stencil(const std::vector<Expr> &elements) {
+    int stencil_size = static_cast<int>(elements.size());
+    // Begin by constructing the "union" of the stencil region using
+    // every vector as the base. This is done by taking the base, and
+    // prepending/appending elements from the first/last vector that
+    // are not available in the base.
+    std::vector<Expr> unions;
+    for (int i = 0; i < stencil_size; i++) {
+        std::vector<Expr> slices;
+        if (i > 0) {
+            slices.push_back(Shuffle::make_slice(elements[0], 0, 1, i));
+        }
+        slices.push_back(elements[i]);
+        if (i + 1 < (int)stencil_size) {
+            int end_slice_begin = elements.back().type().lanes() - stencil_size + i + 1;
+            slices.push_back(Shuffle::make_slice(elements.back(), end_slice_begin, 1, stencil_size - i - 1));
+        }
+        Expr u = Shuffle::make_concat(slices);
+        unions.push_back(u);
+    }
+
+    // If all of the unions are actually the same vector, we have a
+    // stencil. We do this by checking that each lane from all of the
+    // unions are the same expressions.
+    // TODO: Try to get the simplifier to simplify these to the same
+    // thing, it should be doable.
+    Expr first = unions.front();
+    int union_lanes = first.type().lanes();
+    for (int i = 1; i < stencil_size; i++) {
+        if (union_lanes != unions[i].type().lanes()) {
+            return false;
+        }
+    }
+    for (int i = 0; i < union_lanes; i++) {
+        Expr first_i = extract_lane(first, i);
+        for (int j = 1; j < stencil_size; j++) {
+            if (!equal(first_i, extract_lane(unions[j], i))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 // Perform peephole optimizations on the IR, adding appropriate
 // interleave and deinterleave calls.
 class OptimizePatterns : public IRMutator {
@@ -471,139 +530,235 @@ private:
         return Call::make(result_type, "halide.hexagon.add_4mpy" + suffix, {v01, c01}, Call::PureExtern);
     }
 
-    void visit(const Add *op) {
-        // vmpa, vdmpy, and vrmpy instructions are hard to match with
-        // patterns, do it manually here.
-        // Try to find vrmpy opportunities first, which consume 4 operands.
-        if (op->type.is_vector() && (op->type.bits() == 16 || op->type.bits() == 32)) {
-            int lanes = op->type.lanes();
-            vector<MulExpr> mpys;
-            Expr rest;
-            string suffix;
-            int mpy_count = 0;
+    static Expr halide_hexagon_vtmpy(Type result_type, string suffix, Expr v0, Expr v1, Expr c0, Expr c1) {
+        Expr call = Call::make(result_type, "halide.hexagon.vtmpy" + suffix, {v0, v1, c0, c1}, Call::PureExtern);
+        return native_interleave(call);
+    }
 
-            // Try to find a vector*scalar multiply first, which will
-            // match a subset of the expressions that vector*vector
-            // matches.
-            if (op->type.is_uint()) {
-                mpy_count = find_mpy_ops(op, UInt(8, lanes), UInt(8), 4, mpys, rest);
-                suffix = ".vub.ub";
-            } else {
-                mpy_count = find_mpy_ops(op, UInt(8, lanes), Int(8), 4, mpys, rest);
-                suffix = ".vub.b";
-            }
-
-            if (mpy_count > 0 && mpys.size() == 4) {
-                // TODO: It's possible that permuting the order of the
-                // multiply operands can simplify the shuffle away.
-                Expr a0123 = Shuffle::make_interleave({mpys[0].first, mpys[1].first, mpys[2].first, mpys[3].first});
-                a0123 = simplify(a0123);
-
-                // We can generate this op for 16 bits, but, it's only
-                // faster to do so if the interleave simplifies away.
-                if (op->type.bits() == 32 || !a0123.as<Shuffle>()) {
-                    Expr b0123 = Shuffle::make_interleave({mpys[0].second, mpys[1].second, mpys[2].second, mpys[3].second});
-                    b0123 = simplify(b0123);
-                    b0123 = reinterpret(Type(b0123.type().code(), 32, 1), b0123);
-                    Expr new_expr = halide_hexagon_add_4mpy(op->type, suffix, a0123, b0123);
-                    if (op->type.bits() == 16) {
-                        // It's actually safe to use this op on 16 bit
-                        // results, we just need to narrow the
-                        // result. Overflow can occur, but will still
-                        // produce the same result thanks to 2's
-                        // complement arithmetic.
-                        new_expr = Call::make(op->type, "halide.hexagon.pack.vw", {new_expr}, Call::PureExtern);
-                    }
-                    if (rest.defined()) {
-                        new_expr = Add::make(new_expr, rest);
-                    }
-                    expr = mutate(new_expr);
-                    return;
-                }
-            }
-
-            // Now try to match vector*vector vrmpy expressions.
-            mpys.clear();
-            rest = Expr();
-            if (op->type.is_uint()) {
-                mpy_count = find_mpy_ops(op, UInt(8, lanes), UInt(8, lanes), 4, mpys, rest);
-                suffix = ".vub.vub";
-            } else {
-                mpy_count = find_mpy_ops(op, Int(8, lanes), Int(8, lanes), 4, mpys, rest);
-                suffix = ".vb.vb";
-            }
-
-            // TODO: suffix = ".vub.vb"
-            if (mpy_count > 0 && mpys.size() == 4) {
-                // TODO: It's possible that permuting the order of the
-                // multiply operands can simplify the shuffle away.
-                Expr a0123 = Shuffle::make_interleave({mpys[0].first, mpys[1].first, mpys[2].first, mpys[3].first});
-                Expr b0123 = Shuffle::make_interleave({mpys[0].second, mpys[1].second, mpys[2].second, mpys[3].second});
-                a0123 = simplify(a0123);
-                b0123 = simplify(b0123);
-                // We can generate this op for 16 bits, but, it's only
-                // faster to do so if the interleave simplifies away.
-                if (op->type.bits() == 32 || (!a0123.as<Shuffle>() && !b0123.as<Shuffle>())) {
-                    Expr new_expr = halide_hexagon_add_4mpy(op->type, suffix, a0123, b0123);
-                    if (op->type.bits() == 16) {
-                        // It's actually safe to use this op on 16 bit
-                        // results, we just need to narrow the
-                        // result. Overflow can occur, but will still
-                        // produce the same result thanks to 2's
-                        // complement arithmetic.
-                        new_expr = Call::make(op->type, "halide.hexagon.pack.vw", {new_expr}, Call::PureExtern);
-                    }
-                    if (rest.defined()) {
-                        new_expr = Add::make(new_expr, rest);
-                    }
-                    expr = mutate(new_expr);
-                    return;
-                }
-            }
+    // Try to generate 4 operand horizontal reductions.
+    Expr try_vrmpy(const Add *op) {
+        if (!op->type.is_vector()) {
+            // We can only generate vrmpy for vector operands.
+            return Expr();
+        }
+        if (!(op->type.bits() == 16 || op->type.bits() == 32)) {
+            // We can only generate vrmpy if the result is 16 or 32 bits.
+            return Expr();
         }
 
-        // Find opportunities vdmpy or vmpa.
-        if (op->type.is_vector() && (op->type.bits() == 16 || op->type.bits() == 32)) {
-            int lanes = op->type.lanes();
+        int lanes = op->type.lanes();
+        vector<MulExpr> mpys;
+        Expr rest;
+        string suffix;
+        int mpy_count = 0;
 
-            vector<MulExpr> mpys;
-            Expr rest;
-            string vmpa_suffix;
-            string vdmpy_suffix;
-            int mpy_count = 0;
+        // Try to find a vector*scalar multiply first, which will
+        // match a subset of the expressions that vector*vector
+        // matches.
+        if (op->type.is_uint()) {
+            mpy_count = find_mpy_ops(op, UInt(8, lanes), UInt(8), 4, mpys, rest);
+            suffix = ".vub.ub";
+        } else {
+            mpy_count = find_mpy_ops(op, UInt(8, lanes), Int(8), 4, mpys, rest);
+            suffix = ".vub.b";
+        }
 
-            // Try to find vector*scalar multiplies.
-            if (op->type.bits() == 16) {
-                mpy_count = find_mpy_ops(op, UInt(8, lanes), Int(8), 2, mpys, rest);
-                vmpa_suffix = ".vub.vub.b.b";
-                vdmpy_suffix = ".vub.b";
-            } else if (op->type.bits() == 32) {
-                mpy_count = find_mpy_ops(op, Int(16, lanes), Int(8), 2, mpys, rest);
-                vmpa_suffix = ".vh.vh.b.b";
-                vdmpy_suffix = ".vh.b";
-            }
-            if (mpy_count > 0 && mpys.size() == 2) {
-                Expr a01 = Shuffle::make_interleave({mpys[0].first, mpys[1].first});
-                a01 = simplify(a01);
-                // TODO: This requires the operands to be in a
-                // particular order. It should be more robust... but
-                // this is pretty tough to do, other than simply
-                // trying all permutations.
-                Expr new_expr;
-                if (!a01.as<Shuffle>() || vmpa_suffix.empty()) {
-                    Expr b01 = Shuffle::make_interleave({mpys[0].second, mpys[1].second});
-                    b01 = simplify(b01);
-                    b01 = reinterpret(Type(b01.type().code(), 16, 1), b01);
-                    new_expr = halide_hexagon_add_2mpy(op->type, vdmpy_suffix, a01, b01);
-                } else {
-                    new_expr = halide_hexagon_add_2mpy(op->type, vmpa_suffix, mpys[0].first, mpys[1].first, mpys[0].second, mpys[1].second);
+        if (mpy_count > 0 && mpys.size() == 4) {
+            // TODO: It's possible that permuting the order of the
+            // multiply operands can simplify the shuffle away.
+            Expr a0123 = Shuffle::make_interleave({mpys[0].first, mpys[1].first, mpys[2].first, mpys[3].first});
+            a0123 = simplify(a0123);
+
+            // We can generate this op for 16 bits, but, it's only
+            // faster to do so if the interleave simplifies away.
+            if (op->type.bits() == 32 || !a0123.as<Shuffle>()) {
+                Expr b0123 = Shuffle::make_interleave({mpys[0].second, mpys[1].second, mpys[2].second, mpys[3].second});
+                b0123 = simplify(b0123);
+                b0123 = reinterpret(Type(b0123.type().code(), 32, 1), b0123);
+                Expr new_expr = halide_hexagon_add_4mpy(op->type, suffix, a0123, b0123);
+                if (op->type.bits() == 16) {
+                    // It's actually safe to use this op on 16 bit
+                    // results, we just need to narrow the
+                    // result. Overflow can occur, but will still
+                    // produce the same result thanks to 2's
+                    // complement arithmetic.
+                    new_expr = Call::make(op->type, "halide.hexagon.pack.vw", {new_expr}, Call::PureExtern);
                 }
                 if (rest.defined()) {
                     new_expr = Add::make(new_expr, rest);
                 }
-                expr = mutate(new_expr);
-                return;
+                return new_expr;
             }
+        }
+
+        // Now try to match vector*vector vrmpy expressions.
+        mpys.clear();
+        rest = Expr();
+        if (op->type.is_uint()) {
+            mpy_count = find_mpy_ops(op, UInt(8, lanes), UInt(8, lanes), 4, mpys, rest);
+            suffix = ".vub.vub";
+        } else {
+            mpy_count = find_mpy_ops(op, Int(8, lanes), Int(8, lanes), 4, mpys, rest);
+            suffix = ".vb.vb";
+        }
+
+        // TODO: suffix = ".vub.vb"
+        if (mpy_count > 0 && mpys.size() == 4) {
+            // TODO: It's possible that permuting the order of the
+            // multiply operands can simplify the shuffle away.
+            Expr a0123 = Shuffle::make_interleave({mpys[0].first, mpys[1].first, mpys[2].first, mpys[3].first});
+            Expr b0123 = Shuffle::make_interleave({mpys[0].second, mpys[1].second, mpys[2].second, mpys[3].second});
+            a0123 = simplify(a0123);
+            b0123 = simplify(b0123);
+            // We can generate this op for 16 bits, but, it's only
+            // faster to do so if the interleave simplifies away.
+            if (op->type.bits() == 32 || (!a0123.as<Shuffle>() && !b0123.as<Shuffle>())) {
+                Expr new_expr = halide_hexagon_add_4mpy(op->type, suffix, a0123, b0123);
+                if (op->type.bits() == 16) {
+                    // It's actually safe to use this op on 16 bit
+                    // results, we just need to narrow the
+                    // result. Overflow can occur, but will still
+                    // produce the same result thanks to 2's
+                    // complement arithmetic.
+                    new_expr = Call::make(op->type, "halide.hexagon.pack.vw", {new_expr}, Call::PureExtern);
+                }
+                if (rest.defined()) {
+                    new_expr = Add::make(new_expr, rest);
+                }
+                return new_expr;
+            }
+        }
+        return Expr();
+    }
+
+    // Try 3 operand horizontal reductions.
+    Expr try_vtmpy(const Add *op) {
+        if (!op->type.is_vector()) {
+            // We can only generate vtmpy for vector operands.
+            return Expr();
+        }
+        if (!op->type.is_int()) {
+            // We only have signed result variants of vtmpy.
+            return Expr();
+        }
+        if (!(op->type.bits() == 16 || op->type.bits() == 32)) {
+            // We can only generate vtmpy if the result is 16 or 32 bits.
+            return Expr();
+        }
+
+        int lanes = op->type.lanes();
+        vector<MulExpr> mpys;
+        Expr rest;
+        string suffix;
+
+        // Try to find a vector*scalar multiply first, which will
+        // match a subset of the expressions that vector*vector
+        // matches.
+        if (op->type.bits() == 16) {
+            find_mpy_ops(op, UInt(8, lanes), Int(8), 3, mpys, rest);
+            suffix = ".vub.vub.b.b";
+            if (mpys.size() == 0) {
+                rest = Expr();
+                find_mpy_ops(op, Int(8, lanes), Int(8), 3, mpys, rest);
+                suffix = ".vb.vb.b.b";
+            }
+        } else {
+            internal_assert(op->type.bits() == 32);
+            find_mpy_ops(op, Int(16, lanes), Int(8), 3, mpys, rest);
+            suffix = ".vh.vh.b.b";
+        }
+
+        if (mpys.size() == 3 && is_one(mpys[2].second)) {
+            if (is_stencil({mpys[0].first, mpys[1].first, mpys[2].first})) {
+                Expr new_expr = halide_hexagon_vtmpy(op->type, suffix,
+                                                     mpys[0].first, mpys[2].first,
+                                                     mpys[0].second, mpys[1].second);
+                if (rest.defined()) {
+                    new_expr = Add::make(new_expr, rest);
+                }
+                return new_expr;
+            }
+        }
+        return Expr();
+    }
+
+    // Try 2 operand horizontal reductions.
+    Expr try_vdmpy_vmpa(const Add *op) {
+        if (!op->type.is_vector()) {
+            // We can only generate vdmpy or vmpa for vector operands.
+            return Expr();
+        }
+        if (!(op->type.bits() == 16 || op->type.bits() == 32)) {
+            // We can only generate vdmpy or vmpa if the result is 16 or 32 bits.
+            return Expr();
+        }
+
+        int lanes = op->type.lanes();
+
+        vector<MulExpr> mpys;
+        Expr rest;
+        string vmpa_suffix;
+        string vdmpy_suffix;
+        int mpy_count = 0;
+
+        // Try to find vector*scalar multiplies.
+        if (op->type.bits() == 16) {
+            mpy_count = find_mpy_ops(op, UInt(8, lanes), Int(8), 2, mpys, rest);
+            vmpa_suffix = ".vub.vub.b.b";
+            vdmpy_suffix = ".vub.b";
+        } else if (op->type.bits() == 32) {
+            mpy_count = find_mpy_ops(op, Int(16, lanes), Int(8), 2, mpys, rest);
+            vmpa_suffix = ".vh.vh.b.b";
+            vdmpy_suffix = ".vh.b";
+        }
+        if (mpy_count > 0 && mpys.size() == 2) {
+            Expr a01 = Shuffle::make_interleave({mpys[0].first, mpys[1].first});
+            a01 = simplify(a01);
+            // TODO: This requires the operands to be in a
+            // particular order. It should be more robust... but
+            // this is pretty tough to do, other than simply
+            // trying all permutations.
+            Expr new_expr;
+            if (!a01.as<Shuffle>() || vmpa_suffix.empty()) {
+                Expr b01 = Shuffle::make_interleave({mpys[0].second, mpys[1].second});
+                b01 = simplify(b01);
+                b01 = reinterpret(Type(b01.type().code(), 16, 1), b01);
+                new_expr = halide_hexagon_add_2mpy(op->type, vdmpy_suffix, a01, b01);
+            } else {
+                new_expr = halide_hexagon_add_2mpy(op->type, vmpa_suffix,
+                                                   mpys[0].first, mpys[1].first,
+                                                   mpys[0].second, mpys[1].second);
+            }
+            if (rest.defined()) {
+                new_expr = Add::make(new_expr, rest);
+            }
+            return new_expr;
+        }
+        return Expr();
+    }
+
+    void visit(const Add *op) {
+        // vmpa, vdmpy, vtmpy, and vrmpy instructions are hard to match with
+        // patterns, do it manually here.
+        // Try to find vrmpy opportunities first, which consume 4 operands.
+        Expr vrmpy = try_vrmpy(op);
+        if (vrmpy.defined()) {
+            expr = mutate(vrmpy);
+            return;
+        }
+
+        // Try to find vtmpy opportunities next, which consume 3 operands.
+        Expr vtmpy = try_vtmpy(op);
+        if (vtmpy.defined()) {
+            expr = mutate(vtmpy);
+            return;
+        }
+
+        // Try to find vdmpy or vmpa last, which consume 2 operands.
+        Expr vdmpy_vmpa = try_vdmpy_vmpa(op);
+        if (vdmpy_vmpa.defined()) {
+            expr = mutate(vdmpy_vmpa);
+            return;
         }
 
         static const vector<Pattern> adds = {
@@ -1620,216 +1775,12 @@ public:
     OptimizeShuffles(int lut_alignment) : lut_alignment(lut_alignment) {}
 };
 
-// Attempt to generate vtmpy instructions. This requires that all lets
-// be substituted prior to running, and so must be an IRGraphMutator.
-class VtmpyGenerator : public IRGraphMutator {
-private:
-    using IRMutator::visit;
-    typedef pair<Expr, size_t> LoadIndex;
-
-    // Check if vectors a and b point to the same buffer with the base of a
-    // shifted by diff i.e. base(a) = base(b) + diff.
-    bool is_base_shifted(const Expr &a, const Expr &b, int diff) {
-        Expr maybe_load_a = calc_load(a);
-        Expr maybe_load_b = calc_load(b);
-
-        if (maybe_load_a.defined() && maybe_load_b.defined()) {
-            const Load* load_a = maybe_load_a.as<Load>();
-            const Load* load_b = maybe_load_b.as<Load>();
-            if (load_a->name == load_b->name) {
-                Expr base_diff = simplify(load_a->index - load_b->index - diff);
-                if (is_const(base_diff, 0)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    // Return the load expression of first vector if all vector in exprs are
-    // contiguous vectors pointing to the same buffer.
-    Expr are_contiguous_vectors(const vector<Expr> exprs) {
-        if (exprs.size() == 0) {
-            return Expr();
-        }
-        // If the shuffle simplifies then the vectors are contiguous.
-        // If not, check if the bases of adjacent vectors differ by
-        // vector size.
-        Expr concat = simplify(Shuffle::make_concat(exprs));
-        const Shuffle *maybe_shuffle = concat.as<Shuffle>();
-        if(!maybe_shuffle || !maybe_shuffle->is_concat()) {
-            return calc_load(exprs[0]);
-        }
-        return Expr();
-    }
-
-    // Returns the load indicating vector start index. If the vector is sliced
-    // return load with shifted ramp by slice_begin expr.
-    Expr calc_load(const Expr &e) {
-        if (const Cast *maybe_cast = e.as<Cast>()) {
-            return calc_load(maybe_cast->value);
-        }
-        if (const Shuffle *maybe_shuffle = e.as<Shuffle>()) {
-            if (maybe_shuffle->is_slice() && maybe_shuffle->slice_stride() == 1) {
-                Expr maybe_load = calc_load(maybe_shuffle->vectors[0]);
-                if (!maybe_load.defined()) {
-                    return Expr();
-                }
-                const Load *res = maybe_load.as<Load>();
-                Expr shifted_load = Load::make(res->type, res->name, res->index + maybe_shuffle->slice_begin(),
-                                                res->image, res->param, res->predicate);
-                return shifted_load;
-            } else if (maybe_shuffle->is_concat()) {
-                return are_contiguous_vectors(maybe_shuffle->vectors);
-            }
-        }
-        if (const Load *maybe_load = e.as<Load>()) {
-            const Ramp *maybe_ramp = maybe_load->index.as<Ramp>();
-            if (maybe_ramp && is_const(maybe_ramp->stride, 1)) {
-                return maybe_load;
-            }
-        }
-        return Expr();
-    }
-
-    // Loads comparator for sorting Load Expr of the same buffer.
-    static bool loads_comparator(LoadIndex a, LoadIndex b) {
-        if (a.first.defined() && b.first.defined()) {
-            const Load* load_a = a.first.as<Load>();
-            const Load* load_b = b.first.as<Load>();
-            if (load_a->name == load_b->name) {
-                Expr base_diff = simplify(load_b->index - load_a->index);
-                if (is_positive_const(base_diff)) {
-                    return true;
-                }
-            } else {
-                return load_a->name < load_b->name;
-            }
-        }
-        return false;
-    }
-
-    // Vtmpy helps in sliding window ops of the form a*v0 + b*v1 + v2.
-    // Conditions required:
-    //      v0, v1 and v2 start indices differ by vector stride
-    // Current supported value of stride is 1.
-    // TODO: Add support for any stride.
-    void visit(const Add *op) {
-        // Find opportunities vtmpy
-        if (op && op->type.is_vector() && (op->type.bits() == 16 || op->type.bits() == 32)) {
-            int lanes = op->type.lanes();
-            vector<MulExpr> mpys;
-            Expr rest;
-            string vtmpy_suffix;
-
-            // Finding more than 100 such expresssions is rare.
-            // Setting it to 100 makes sure we dont miss anything
-            // in most cases and also dont spend unreasonable time while
-            // just looking for vtmpy patterns.
-            const int max_mpy_ops = 100;
-            if (op->type.bits() == 16) {
-                find_mpy_ops(op, UInt(8, lanes), Int(8), max_mpy_ops, mpys, rest);
-                vtmpy_suffix = ".vub.vub.b.b";
-                if (mpys.size() < 3) {
-                    mpys.clear();
-                    rest = Expr();
-                    find_mpy_ops(op, Int(8, lanes), Int(8), max_mpy_ops, mpys, rest);
-                    vtmpy_suffix = ".vb.vb.b.b";
-                }
-            } else if (op->type.bits() == 32) {
-                find_mpy_ops(op, Int(16, lanes), Int(8), max_mpy_ops, mpys, rest);
-                vtmpy_suffix = ".vh.vh.b.b";
-            }
-
-            if (mpys.size() >= 3) {
-                const size_t mpy_size = mpys.size();
-                // Used to put loads with different buffers in different buckets.
-                std::unordered_map<string, vector<LoadIndex> > loads;
-                // To keep track of indices selected for vtmpy.
-                std::unordered_map<size_t, bool> vtmpy_indices;
-                vector<Expr> vtmpy_exprs;
-                Expr new_expr;
-
-                for(size_t i = 0; i < mpy_size; i++) {
-                    Expr curr_load = calc_load(mpys[i].first);
-                    if (curr_load.defined()) {
-                        loads[curr_load.as<Load>()->name].emplace_back(curr_load, i);
-                    } else {
-                        new_expr = new_expr.defined() ? new_expr + curr_load : curr_load;
-                    }
-                }
-
-                for (auto iter = loads.begin(); iter != loads.end(); iter++) {
-                    // Sort the bucket and compare bases of 3 adjacent vectors
-                    // at a time. If they differ by vector stride, we've
-                    // found a vtmpy
-                    std::sort(iter->second.begin(), iter->second.end(), loads_comparator);
-                    size_t vec_size = iter->second.size();
-                    for(size_t i = 0; i + 2 < vec_size; i++) {
-                        Expr v0 = iter->second[i].first;
-                        Expr v1 = iter->second[i+1].first;
-                        Expr v2 = iter->second[i+2].first;
-                        size_t v0_idx = iter->second[i].second;
-                        size_t v1_idx = iter->second[i+1].second;
-                        size_t v2_idx = iter->second[i+2].second;
-                        if (is_const(mpys[v2_idx].second, 1) &&
-                            is_base_shifted(v2, v1, 1) &&
-                            is_base_shifted(v1, v0, 1)) {
-
-                            vtmpy_indices[v0_idx] = true;
-                            vtmpy_indices[v1_idx] = true;
-                            vtmpy_indices[v2_idx] = true;
-
-                            vtmpy_exprs.emplace_back(native_interleave(Call::make(op->type,
-                                "halide.hexagon.vtmpy" + vtmpy_suffix,
-                                { mpys[v0_idx].first, mpys[v2_idx].first,
-                                  mpys[v0_idx].second, mpys[v1_idx].second },
-                                Call::PureExtern)));
-                            // As we cannot test the same indices again
-                            i = i+2;
-                        }
-                    }
-                }
-                // If we found any vtmpy's then recombine Expr using
-                // vtmpy_expr, non_vtmpy_exprs and rest.
-                if (vtmpy_exprs.size() > 0) {
-                    for (size_t i = 0; i < mpy_size; i++) {
-                        if (vtmpy_indices[i]) {
-                            continue;
-                        }
-                        Expr mpy_a = lossless_cast(op->type, mpys[i].first);
-                        Expr mpy_b = lossless_cast(op->type, mpys[i].second);
-                        Expr mpy_res = mpy_a * mpy_b;
-                        new_expr = new_expr.defined() ? new_expr + mpy_res : mpy_res;
-                    }
-                    for (size_t i = 0; i < vtmpy_exprs.size(); i++) {
-                        new_expr = new_expr.defined() ? new_expr + vtmpy_exprs[i] : vtmpy_exprs[i];
-                    }
-                    if (rest.defined()) {
-                        new_expr = new_expr + rest;
-                    }
-                    expr = mutate(new_expr);
-                    return;
-                }
-            }
-        }
-        IRMutator::visit(op);
-    }
-};
 }  // namespace
 
 Stmt optimize_hexagon_shuffles(Stmt s, int lut_alignment) {
     // Replace indirect and other complicated loads with
     // dynamic_shuffle (vlut) calls.
     return OptimizeShuffles(lut_alignment).mutate(s);
-}
-
-Stmt vtmpy_generator(Stmt s) {
-    // Generate vtmpy instruction if possible
-    s = substitute_in_all_lets(s);
-    s = VtmpyGenerator().mutate(s);
-    s = common_subexpression_elimination(s);
-    return s;
 }
 
 Stmt optimize_hexagon_instructions(Stmt s, Target t) {

@@ -713,6 +713,7 @@ struct Shuffle : public ExprNode<Shuffle> {
     /** Check if this shuffle is extracting a scalar from the vector
      * arguments. */
     EXPORT bool is_extract_element() const;
+    int extract_element_lane() const { return indices[0]; }
 
     static const IRNodeType _node_type = IRNodeType::Shuffle;
 };
