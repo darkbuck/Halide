@@ -1,5 +1,5 @@
 #include "HalideRuntime.h"
-#include "halide_image.h"
+#include "HalideBuffer.h"
 
 // Grab the internal device_interface functions
 #define WEAK
@@ -10,13 +10,13 @@
 
 #include "cleanup_on_error.h"
 
-using namespace Halide::Tools;
+using namespace Halide::Runtime;
 
 const int size = 64;
 
 int successful_mallocs = 0, failed_mallocs = 0, frees = 0, errors = 0, device_mallocs = 0, device_frees = 0;
 
- void *my_halide_malloc(void *user_context, size_t x) {
+void *my_halide_malloc(void *user_context, size_t x) {
     // Only the first malloc succeeds
     if (successful_mallocs) {
         failed_mallocs++;
@@ -43,14 +43,16 @@ void my_halide_error(void *user_context, const char *msg) {
 #ifndef _WIN32
 // These two can't be overridden on windows, so we'll just check that
 // the number of calls to free matches the number of calls to malloc.
-extern "C" int halide_device_free(void *user_context, struct buffer_t *buf) {
+extern "C" int halide_device_free(void *user_context, struct halide_buffer_t *buf) {
     device_frees++;
-    const halide_device_interface *interface = halide_get_device_interface(buf->dev);
-    return interface->device_free(user_context, buf);
+    return buf->device_interface->device_free(user_context, buf);
 }
 
-extern "C" int halide_device_malloc(void *user_context, struct buffer_t *buf, const halide_device_interface *interface) {
-    device_mallocs++;
+extern "C" int halide_device_malloc(void *user_context, struct halide_buffer_t *buf,
+                                    const halide_device_interface_t *interface) {
+    if (!buf->device) {
+        device_mallocs++;
+    }
     return interface->device_malloc(user_context, buf);
 }
 #endif
@@ -61,11 +63,15 @@ int main(int argc, char **argv) {
     halide_set_custom_free(&my_halide_free);
     halide_set_error_handler(&my_halide_error);
 
-    Image<int32_t> output(size);
+    Buffer<int32_t> output(size);
     int result = cleanup_on_error(output);
 
-    if (result != halide_error_code_out_of_memory) {
-        printf("The exit status was %d instead of %d\n", result, halide_error_code_out_of_memory);
+    if (result != halide_error_code_out_of_memory &&
+        result != halide_error_code_device_malloc_failed) {
+        printf("The exit status was %d instead of %d or %d\n",
+               result,
+               halide_error_code_out_of_memory,
+               halide_error_code_device_malloc_failed);
         return -1;
     }
 
@@ -85,8 +91,7 @@ int main(int argc, char **argv) {
     }
 
     if (errors != 1) {
-        // There's one error from the malloc failing
-        printf("There was supposed to be one error\n");
+        printf("%d errors. There was supposed to be one error\n", errors);
         return -1;
     }
 
