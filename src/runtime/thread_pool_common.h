@@ -171,6 +171,11 @@ WEAK int halide_default_do_task(void *user_context, halide_task_t f, int idx,
 
 WEAK int halide_default_do_par_for(void *user_context, halide_task_t f,
                                    int min, int size, uint8_t *closure) {
+    // Our for loops are expected to gracefully handle sizes <= 0
+    if (size <= 0) {
+        return 0;
+    }
+
     work_queue_t &work_queue(*(work_queue_t *)halide_get_thread_pool(user_context));
 
     // Grab the lock. If it hasn't been initialized yet, then the
