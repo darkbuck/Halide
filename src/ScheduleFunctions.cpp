@@ -14,6 +14,8 @@
 #include "IREquality.h"
 #include "ApplySplit.h"
 #include "IREquality.h"
+#include "ExprUsesVar.h"
+#include "Solve.h"
 
 #include <algorithm>
 
@@ -166,7 +168,7 @@ Stmt build_provide_loop_nest_helper(string func_name,
         Expr min = Variable::make(Int(32), dim_var + ".loop_min");
         // Use 'var' which bounds we're constraining as the container name, so
         // that we can use it later to check if a LetStmt value depends on 'var'.
-        Container c1 = {Container::IfInner, 0, dim_var, likely(min <= var)};
+        Container c1 = {Container::IfInner, 0, dim_var, likely(var >= min)};
         Container c2 = {Container::IfInner, 0, dim_var, likely(var <= max)};
         nest.push_back(c1);
         nest.push_back(c2);
@@ -676,6 +678,7 @@ public:
 
 };
 
+// Check if function 'f' is ever used in Stmt 's'.
 bool function_is_used_in_stmt(Function f, Stmt s) {
     IsUsedInStmt is_called(f);
     s.accept(&is_called);
@@ -1062,6 +1065,28 @@ Stmt substitute_fused_bounds(Stmt s, const map<string, Expr> &replacements) {
     return s;
 }
 
+// Place 'var' in an IfThenElse as far to the left as possible
+class SolveIfThenElse : public IRMutator {
+    string var;
+
+    using IRMutator::visit;
+
+    void visit(const IfThenElse *op) {
+        IRMutator::visit(op);
+        op = stmt.as<IfThenElse>();
+        internal_assert(op);
+        if (expr_uses_var(op->condition, var)) {
+            Expr condition = solve_expression(op->condition, var).result;
+            if (!condition.same_as(op->condition)) {
+                stmt = IfThenElse::make(condition, op->then_case, op->else_case);
+            }
+        }
+    }
+
+public:
+    SolveIfThenElse(const string &v) : var(v) {}
+};
+
 // Shift the iteration domain of a loop nest by some factor.
 class ShiftLoopNest : public IRMutator {
     const map<string, Expr> &shifts; // Add the shift factor to the old var
@@ -1077,6 +1102,7 @@ class ShiftLoopNest : public IRMutator {
             internal_assert(op);
             Expr adjusted = Variable::make(Int(32), op->name) + iter->second;
             Stmt body = substitute(op->name, adjusted, op->body);
+            body = SolveIfThenElse(op->name).mutate(body);
             stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
         }
     }
