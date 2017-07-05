@@ -985,7 +985,11 @@ private:
     using IRVisitor::visit;
 
     void visit(const LetStmt *op) {
-        bounds.emplace(op->name, op->value);
+        if (ends_with(op->name, ".loop_min") ||
+            ends_with(op->name, ".loop_max") ||
+            ends_with(op->name, ".loop_extent")) {
+            bounds.emplace(op->name, Variable::make(Int(32), op->name));
+        }
         IRVisitor::visit(op);
     }
 };
@@ -1195,7 +1199,9 @@ private:
         CollectBounds subs;
         produce.accept(&subs);
 
-        // Shift the loops according to the alignment strategies.
+        // Compute the shift factors according to the alignment strategies
+        // starting from the the parent (root loop) to the children. The root
+        // loop bounds should be unchanged.
         map<string, Expr> shifts;
         for (int i = (int)group.size() - 1; i >= 0; --i) {
             if (!skip[group[i].name()]) {
@@ -1207,6 +1213,7 @@ private:
                 }
             }
         }
+        // Shift the loops.
         produce = ShiftLoopNest(shifts).mutate(produce);
 
         // Replace all the child fused loops with the appropriate bounds (i.e.
@@ -1270,15 +1277,14 @@ private:
                     auto it_max = bounds.find(prefix + var + ".loop_max");
                     internal_assert((it_min != bounds.end()) && (it_max != bounds.end()));
 
-                    Expr min = Variable::make(Int(32), prefix + var + ".loop_min");
-                    Expr max = Variable::make(Int(32), prefix + var + ".loop_max");
-
                     if (iter->second == AlignStrategy::AlignStart) {
-                        Expr parent_min = Variable::make(Int(32), parent_prefix + var + ".loop_min");
-                        shift_val = parent_min - min;
+                        const auto &parent_min = bounds.find(parent_prefix + var + ".loop_min");
+                        internal_assert(parent_min != bounds.end());
+                        shift_val = parent_min->second - it_min->second;
                     } else {
-                        Expr parent_max = Variable::make(Int(32), parent_prefix + var + ".loop_max");
-                        shift_val = parent_max - max;
+                        const auto &parent_max = bounds.find(parent_prefix + var + ".loop_max");
+                        internal_assert(parent_max != bounds.end());
+                        shift_val = parent_max->second - it_max->second;
                     }
 
                     internal_assert(shift_val.defined());
