@@ -963,7 +963,7 @@ public:
      * original, with holes compacted away. */
     Buffer<T, D> copy(void *(*allocate_fn)(size_t) = nullptr,
                       void (*deallocate_fn)(void *) = nullptr) const {
-        Buffer<T, D> dst = make_with_shape_of(*this);
+        Buffer<T, D> dst = make_with_shape_of(*this, allocate_fn, deallocate_fn);
         dst.copy_from(*this);
         return dst;
     }
@@ -1172,11 +1172,7 @@ public:
     Buffer<T, D> embedded(int d, int pos) const {
         assert(d >= 0 && d <= dimensions());
         Buffer<T, D> im(*this);
-        im.add_dimension();
-        im.translate(im.dimensions() - 1, pos);
-        for (int i = im.dimensions(); i > d; i--) {
-            im.transpose();
-        }
+        im.embed(d, pos);
         return im;
     }
 
@@ -1424,7 +1420,7 @@ public:
         }
 
         Buffer<T, D> dst(nullptr, src.dimensions(), shape);
-        dst.allocate();
+        dst.allocate(allocate_fn, deallocate_fn);
 
         return dst;
     }
