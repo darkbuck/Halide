@@ -28,35 +28,6 @@ Stmt call_extern_and_assert(const string& name, const vector<Expr>& args) {
 
 namespace {
 
-Expr make_device_interface_call(DeviceAPI device_api) {
-    std::string interface_name;
-    switch (device_api) {
-    case DeviceAPI::CUDA:
-        interface_name = "halide_cuda_device_interface";
-        break;
-    case DeviceAPI::OpenCL:
-        interface_name = "halide_opencl_device_interface";
-        break;
-    case DeviceAPI::Metal:
-        interface_name = "halide_metal_device_interface";
-        break;
-    case DeviceAPI::GLSL:
-        interface_name = "halide_opengl_device_interface";
-        break;
-    case DeviceAPI::OpenGLCompute:
-        interface_name = "halide_openglcompute_device_interface";
-        break;
-    case DeviceAPI::Hexagon:
-        interface_name = "halide_hexagon_device_interface";
-        break;
-    default:
-        internal_error << "Bad DeviceAPI " << static_cast<int>(device_api) << "\n";
-        break;
-    }
-    return Call::make(type_of<const char *>(), interface_name, {}, Call::Extern);
-}
-
-
 class FindBufferUsage : public IRVisitor {
     using IRVisitor::visit;
 
@@ -65,7 +36,6 @@ class FindBufferUsage : public IRVisitor {
             // Passing the buffer variable out of Halide counts
             // as a read/write.
             devices_touched.insert(current_device_api);
-            devices_reading.insert(current_device_api);
             devices_writing.insert(current_device_api);
         }
     }
@@ -74,7 +44,6 @@ class FindBufferUsage : public IRVisitor {
         IRVisitor::visit(op);
         if (op->name == buffer) {
             devices_touched.insert(current_device_api);
-            devices_reading.insert(current_device_api);
         }
     }
 
@@ -95,7 +64,6 @@ class FindBufferUsage : public IRVisitor {
         if (op->is_intrinsic(Call::image_load)) {
             internal_assert(op->args.size() >= 1);
             if (is_buffer_var(op->args[1])) {
-                devices_reading.insert(current_device_api);
                 devices_touched.insert(current_device_api);
             }
             for (size_t i = 0; i < op->args.size(); i++) {
@@ -105,7 +73,6 @@ class FindBufferUsage : public IRVisitor {
         } else if (op->is_intrinsic(Call::image_store)) {
             internal_assert(op->args.size() >= 1);
             if (is_buffer_var(op->args[1])) {
-                devices_reading.insert(current_device_api);
                 devices_touched.insert(current_device_api);
             }
             for (size_t i = 0; i < op->args.size(); i++) {
@@ -123,12 +90,12 @@ class FindBufferUsage : public IRVisitor {
             for (size_t i = 0; i < op->args.size(); i++) {
                 if (is_buffer_var(op->args[i])) {
                     DeviceAPI extern_device_api = f.extern_function_device_api();
-                    devices_touched.insert(extern_device_api);
-                    if (i < f.extern_arguments().size()) {
-                        // An input
-                        devices_reading.insert(extern_device_api);
-                    } else {
-                        // An output
+                    touched_by_extern = true;
+                    if (i >= f.extern_arguments().size()) {
+                        // An output. The extern stage is responsible
+                        // for dealing with any device transitions for
+                        // inputs.
+                        devices_touched.insert(extern_device_api);
                         devices_writing.insert(extern_device_api);
                     }
                 } else {
@@ -154,18 +121,20 @@ class FindBufferUsage : public IRVisitor {
     string buffer;
     DeviceAPI current_device_api;
 public:
-    std::set<DeviceAPI> devices_reading, devices_writing, devices_touched;
-
-    bool same_usage(const FindBufferUsage &other) const {
-        return
-            ((devices_reading == other.devices_reading) &&
-             (devices_writing == other.devices_writing) &&
-             (devices_touched == other.devices_touched));
-    }
+    std::set<DeviceAPI> devices_writing, devices_touched;
+    // Any buffer passed to an extern stage may have had its dirty
+    // bits and device allocation messed with.
+    bool touched_by_extern = false;
 
     FindBufferUsage(const std::string &buf, DeviceAPI d) : buffer(buf), current_device_api(d) {}
 };
 
+// Inject the device copies, mallocs, and dirty flag setting for a
+// single allocation. Sticks to the same loop level as the original
+// allocation and treats the stmt as a serial sequence of leaf
+// stmts. We walk this sequence of leaves, tracking what we know about
+// the buffer as we go, sniffing usage within each leaf using
+// FindBufferUsage, and injecting device buffer logic as needed.
 class InjectBufferCopiesForSingleBuffer : public IRMutator {
     using IRMutator::visit;
 
@@ -242,8 +211,6 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
         // First figure out what happened
         bool touched_on_host = finder.devices_touched.count(DeviceAPI::Host);
         bool touched_on_device = finder.devices_touched.size() > (touched_on_host ? 1 : 0);
-        //bool read_on_host = finder.devices_reading.count(DeviceAPI::Host);
-        //bool read_on_device = finder.devices_reading.size() > (touched_on_host ? 1 : 0);
         bool written_on_host = finder.devices_writing.count(DeviceAPI::Host);
         bool written_on_device = finder.devices_writing.size() > (touched_on_host ? 1 : 0);
 
@@ -309,7 +276,24 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
             state.current_device = touching_device;
         }
 
-        if (!finder.devices_touched.empty()) {
+        if (finder.touched_by_extern) {
+            // This buffer was passed to an extern stage. Unless we
+            // explicitly marked it after the stmt ran, we no longer
+            // know the state of the dirty bits.
+            if (!needs_host_dirty) {
+                state.host_dirty = Unknown;
+            }
+            if (!needs_device_dirty) {
+                state.device_dirty = Unknown;
+            }
+            // Also, the extern stage may have gifted a host
+            // allocation, or flipped the buffer to another device.
+            state.device_allocation_exists = Unknown;
+            state.current_device = DeviceAPI::None;
+        }
+
+        if (!finder.devices_touched.empty() ||
+            finder.touched_by_extern) {
             last_use = s;
         }
 
@@ -325,16 +309,21 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
         stmt = do_copies(op);
     }
 
+    void visit(const Fork *op) {
+        stmt = do_copies(op);
+    }
+
     void visit(const Evaluate *op) {
         stmt = do_copies(op);
     }
 
     void visit(const LetStmt *op) {
-        // If the value uses a buffer, treat this as a single
-        // leaf. Otherwise we can recurse.
+        // If op->value uses the buffer, we need to treat this as a
+        // single leaf. Otherwise we can recurse.
         FindBufferUsage finder(buffer, DeviceAPI::Host);
         op->value.accept(&finder);
-        if (finder.devices_touched.empty()) {
+        if (finder.devices_touched.empty() &&
+            !finder.touched_by_extern) {
             IRMutator::visit(op);
         } else {
             stmt = do_copies(op);
@@ -345,6 +334,8 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
         stmt = do_copies(op);
     }
 
+    // Check if a stmt has any for loops (and hence possible device
+    // transitions).
     class HasLoops : public IRVisitor {
         using IRVisitor::visit;
         void visit(const For *op) {
@@ -365,28 +356,6 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator {
             IRMutator::visit(op);
         } else {
             stmt = do_copies(op);
-        }
-    }
-
-    void visit(const Fork *op) {
-        // If both sides of the fork have the same usage pattern,
-        // treat it as a single leaf.
-        FindBufferUsage finder_first(buffer, DeviceAPI::Host);
-        FindBufferUsage finder_rest(buffer, DeviceAPI::Host);
-        op->first.accept(&finder_first);
-        op->rest.accept(&finder_rest);
-        if (finder_first.same_usage(finder_rest)) {
-            stmt = do_copies(op);
-        } else {
-            // The sides could run in any order, so just be maximally
-            // conservative for now and forget everything we know at
-            // every point.
-            state = State{};
-            Stmt first = mutate(op->first);
-            state = State{};
-            Stmt rest = mutate(op->rest);
-            state = State{};
-            stmt = Fork::make(first, rest);
         }
     }
 
@@ -421,40 +390,8 @@ public:
     Stmt last_use;
 };
 
-class FindInputsAndOutputs : public IRVisitor {
-    using IRVisitor::visit;
-
-    void include(const Parameter &p) {
-        if (p.defined()) {
-            result.insert(p.name());
-        }
-    }
-
-    void include(const Buffer<> &b) {
-        if (b.defined()) {
-            result.insert(b.name());
-        }
-    }
-
-    void visit(const Variable *op) {
-        include(op->param);
-    }
-
-    void visit(const Load *op) {
-        include(op->param);
-        include(op->image);
-        IRVisitor::visit(op);
-    }
-
-    void visit(const Store *op) {
-        include(op->param);
-        IRVisitor::visit(op);
-    }
-
-public:
-    set<string> result;
-};
-
+// Inject the buffer-handling logic for all internal
+// allocations. Inputs and outputs are handled below.
 class InjectBufferCopies : public IRMutator {
     using IRMutator::visit;
 
@@ -560,7 +497,7 @@ class InjectBufferCopies : public IRMutator {
         bool touched_on_host = finder.devices_touched.count(DeviceAPI::Host);
         bool touched_on_device = finder.devices_touched.size() > (touched_on_host ? 1 : 0);
 
-        if (!touched_on_device) {
+        if (!touched_on_device && !finder.touched_by_extern) {
             // Boring.
             IRMutator::visit(op);
             return;
@@ -573,6 +510,8 @@ class InjectBufferCopies : public IRMutator {
 
         string buffer_name = op->name + ".buffer";
         Expr buffer = Variable::make(Handle(), buffer_name);
+
+        // Device what type of allocation to make.
 
         if (touched_on_host && finder.devices_touched.size() == 2) {
             // Touched on a single device and the host. Use a combined allocation.
@@ -592,7 +531,8 @@ class InjectBufferCopies : public IRMutator {
             stmt = InjectCombinedAllocation(op->name, op->type, op->extents,
                                             op->condition, touching_device).mutate(body);
         } else {
-            // Only touched on device, or touched on multiple
+            // Only touched on host but passed to an extern stage, or
+            // only touched on device, or touched on multiple
             // devices. Do separate device and host allocations.
 
             // Add a device destructor
@@ -605,9 +545,15 @@ class InjectBufferCopies : public IRMutator {
             }
 
             Expr condition = op->condition;
-            if (finder.devices_touched.size() == 1) {
-                // Only touched on device
+            if (finder.devices_touched.size() == 1 &&
+                !touched_on_host &&
+                !finder.touched_by_extern) {
+                // Only touched on one device, and never passed to an extern stage.
                 condition = const_false();
+                // There's no host allocation, so substitute any
+                // references to it (e.g. the one in the make_buffer
+                // call) with NULL.
+                body = substitute(op->name, reinterpret(Handle(), make_zero(UInt(64))), body);
             }
 
             stmt = Allocate::make(op->name, op->type, op->extents, condition, body, op->new_expr, op->free_function);
@@ -625,13 +571,11 @@ class InjectBufferCopies : public IRMutator {
     }
 };
 
-// TODO: make sure not redundantly mallocing combined allocations
-
 // Find the site in the IR where we want to inject the copies/dirty
 // flags for the inputs and outputs. It's the innermost IR node that
 // contains all ProducerConsumer nodes. Often this is the outermost
-// ProducerConsumer node. Sometimes it's a Block or Fork containing a
-// pair of them.
+// ProducerConsumer node. Sometimes it's a Block containing a pair of
+// them.
 class FindOutermostProduce : public IRVisitor {
     using IRVisitor::visit;
 
@@ -644,10 +588,6 @@ class FindOutermostProduce : public IRVisitor {
         }
     }
 
-    void visit(const Fork *op) {
-        result = op;
-    }
-
     void visit(const ProducerConsumer *op) {
         result = op;
     }
@@ -657,9 +597,45 @@ public:
 };
 
 // Inject the buffer handling code for the inputs and outputs at the
-// site determined by the visitor above.
+// appropriate site.
 class InjectBufferCopiesForInputsAndOutputs : public IRMutator {
     Stmt site;
+
+    // Find all references to external buffers.
+    class FindInputsAndOutputs : public IRVisitor {
+        using IRVisitor::visit;
+
+        void include(const Parameter &p) {
+            if (p.defined()) {
+                result.insert(p.name());
+            }
+        }
+
+        void include(const Buffer<> &b) {
+            if (b.defined()) {
+                result.insert(b.name());
+            }
+        }
+
+        void visit(const Variable *op) {
+            include(op->param);
+        }
+
+        void visit(const Load *op) {
+            include(op->param);
+            include(op->image);
+            IRVisitor::visit(op);
+        }
+
+        void visit(const Store *op) {
+            include(op->param);
+            IRVisitor::visit(op);
+        }
+
+    public:
+        set<string> result;
+    };
+
 public:
     using IRMutator::mutate;
 
@@ -683,12 +659,17 @@ public:
 }  // namespace
 
 Stmt inject_host_dev_buffer_copies(Stmt s, const Target &t) {
+    // Handle internal allocations
     s = InjectBufferCopies().mutate(s);
 
-    // Now handle inputs and outputs
+    // Handle inputs and outputs
     FindOutermostProduce outermost;
     s.accept(&outermost);
-    s = InjectBufferCopiesForInputsAndOutputs(outermost.result).mutate(s);
+    if (outermost.result.defined()) {
+        // If the entire pipeline simplified away, or just dispatches
+        // to another pipeline, there may be no outermost produce.
+        s = InjectBufferCopiesForInputsAndOutputs(outermost.result).mutate(s);
+    }
 
     return s;
 }

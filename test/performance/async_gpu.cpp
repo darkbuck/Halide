@@ -40,22 +40,15 @@ int main(int argc, char **argv) {
 
         // Assume GPU memory is limited, and compute the GPU stage one
         // frame at a time. Hoist the allocation to the top level.
-        gpu.compute_at(gpu.in(), t).store_root().gpu_tile(x, y, xi, yi, 8, 8);
+        gpu.compute_at(cpu, t).store_root().gpu_tile(x, y, xi, yi, 8, 8);
 
         // Stage the copy-back of the GPU result into a host-side
         // double-buffer.
-        gpu.in().compute_at(cpu, t).store_root().fold_storage(t, 2);
-
-        // We need copy-elision before this schedule really makes
-        // sense. Once we have that, gpu.in() will be implemented by
-        // a call to a cross-device buffer copy runtime function, and
-        // gpu will never be copied to host. Nevertheless, we can
-        // benchmark it with and without async and just do a
-        // well-scheduled host->host memcpy in both.
-        gpu.in().vectorize(x, 8);
+        gpu.in().copy_to_host().compute_at(cpu, t).store_root();//.fold_storage(t, 2);
 
         if (use_async) {
             gpu.in().async();
+            gpu.async();
         }
 
         in.set(Buffer<float>(800, 800, 16));

@@ -1242,6 +1242,7 @@ class ExternCallPrototypes : public IRGraphVisitor {
     std::map<string, const Call *> c_externs;
     std::set<std::string> processed;
     std::set<std::string> internal_linkage;
+    std::set<std::string> destructors;
 
     using IRGraphVisitor::visit;
 
@@ -1262,6 +1263,20 @@ class ExternCallPrototypes : public IRGraphVisitor {
                 namespace_map->insert({name, NamespaceOrCall(op)});
             }
             processed.insert(op->name);
+        }
+
+        if (op->is_intrinsic(Call::register_destructor)) {
+            internal_assert(op->args.size() == 2);
+            const StringImm *fn = op->args[0].as<StringImm>();
+            internal_assert(fn);
+            destructors.insert(fn->value);
+        }
+    }
+
+    void visit(const Allocate *op) {
+        IRGraphVisitor::visit(op);
+        if (!op->free_function.empty()) {
+            destructors.insert(op->free_function);
         }
     }
 
@@ -1345,6 +1360,9 @@ public:
     void emit_c_declarations(ostream &stream) const {
         for (const auto &call : c_externs) {
             emit_function_decl(stream, call.second, call.first);
+        }
+        for (const auto &d : destructors) {
+            stream << "void " << d << "(void *, void *);\n";
         }
         stream << "\n";
     }
@@ -1489,12 +1507,10 @@ void CodeGen_C::compile(const LoweredFunc &f) {
     }
 
     if (!namespaces.empty()) {
-        const char *separator = "";
         for (const auto &ns : namespaces) {
-            stream << separator << "namespace " << ns << " {";
-            separator = " ";
+            stream << "namespace " << ns << " {\n";
         }
-        stream << "\n\n";
+        stream << "\n";
     }
 
     // Emit the function prototype
@@ -1562,17 +1578,34 @@ void CodeGen_C::compile(const LoweredFunc &f) {
 
     if (!namespaces.empty()) {
         stream << "\n";
-        for (size_t i = 0; i < namespaces.size(); i++) {
-            stream << "}";
+        for (size_t i = namespaces.size(); i > 0; i--) {
+            stream << "}  // namespace " << namespaces[i-1] << "\n";
         }
-        stream << " // Close namespaces ";
-        const char *separator = "";
-        for (const auto &ns : namespaces) {
-            stream << separator << ns;
-            separator = "::";
-        }
+        stream << "\n";
+    }
 
-        stream << "\n\n";
+    if (is_header() && f.linkage == LoweredFunc::ExternalPlusMetadata) {
+        // C syntax for function-that-returns-function-pointer is fun.
+        const string getter = R"INLINE_CODE(
+
+// This allows the includer of this file to get the argv/metadata entry points
+// for this file without needing to know the specific function names;
+// if HALIDE_GET_STANDARD_ARGV_FUNCTION is defined before this file is
+// included, an inline function with that name is provided that return
+// a function pointer to the _argv() entry point (similarly, 
+// HALIDE_GET_STANDARD_METADATA_FUNCTION -> _metadata() entry point).
+#ifdef HALIDE_GET_STANDARD_ARGV_FUNCTION
+inline int (*HALIDE_GET_STANDARD_ARGV_FUNCTION())(void**) {
+    return $NAME$_argv;
+}
+#endif
+#ifdef HALIDE_GET_STANDARD_METADATA_FUNCTION
+inline const struct halide_filter_metadata_t* (*HALIDE_GET_STANDARD_METADATA_FUNCTION())() {
+    return $NAME$_metadata;
+}
+#endif
+)INLINE_CODE";
+        stream << replace_all(getter, "$NAME$", f.name) << "\n\n";
     }
 }
 

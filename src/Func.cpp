@@ -365,8 +365,6 @@ class SubstituteSelfReference : public IRMutator {
         internal_assert(c);
 
         if ((c->call_type == Call::Halide) && (func == c->name)) {
-            internal_assert(!c->func.defined())
-                << "func should not have been defined for a self-reference\n";
             debug(4) << "...Replace call to Func \"" << c->name << "\" with "
                      << "\"" << substitute.name() << "\"\n";
             vector<Expr> args;
@@ -872,7 +870,7 @@ Func Stage::rfactor(vector<pair<RVar, Var>> preserved) {
         if (!prover_result.xs[i].var.empty()) {
             Expr prev_val = Call::make(intm.output_types()[i], func_name,
                                        f_store_args, Call::CallType::Halide,
-                                       nullptr, i);
+                                       FunctionPtr(), i);
             replacements.emplace(prover_result.xs[i].var, prev_val);
         } else {
             user_warning << "Update definition of " << stage_name << " at index " << i
@@ -1742,16 +1740,16 @@ void Func::invalidate_cache() {
 Func Func::in(const Func &f) {
     invalidate_cache();
     user_assert(name() != f.name()) << "Cannot call 'in()' on itself\n";
-    const map<string, IntrusivePtr<FunctionContents>> &wrappers = func.wrappers();
+    const map<string, FunctionPtr> &wrappers = func.wrappers();
     const auto &iter = wrappers.find(f.name());
     if (iter == wrappers.end()) {
-        Func wrapper(name() + "_in_" + f.name());
+        Func wrapper(func.new_function_in_same_group(name() + "_in_" + f.name()));
         wrapper(args()) = (*this)(args());
         func.add_wrapper(f.name(), wrapper.func);
         return wrapper;
     }
 
-    IntrusivePtr<FunctionContents> wrapper_contents = iter->second;
+    FunctionPtr wrapper_contents = iter->second;
     internal_assert(wrapper_contents.defined());
 
     // Make sure that no other Func shares the same wrapper as 'f'
@@ -1776,7 +1774,7 @@ Func Func::in(const vector<Func>& fs) {
 
     // Either all Funcs have the same wrapper or they don't already have any wrappers.
     // Otherwise, throw an error.
-    const map<string, IntrusivePtr<FunctionContents>> &wrappers = func.wrappers();
+    const map<string, FunctionPtr> &wrappers = func.wrappers();
 
     const auto &iter = wrappers.find(fs[0].name());
     if (iter == wrappers.end()) {
@@ -1786,7 +1784,7 @@ Func Func::in(const vector<Func>& fs) {
                 << "Cannot define the wrapper since " << fs[i].name()
                 << " already has a wrapper while " << fs[0].name() << " doesn't \n";
         }
-        Func wrapper(name() + "_wrapper");
+        Func wrapper(func.new_function_in_same_group(name() + "_wrapper"));
         wrapper(args()) = (*this)(args());
         for (const Func &f : fs) {
             user_assert(name() != f.name()) << "Cannot call 'in()' on itself\n";
@@ -1795,7 +1793,7 @@ Func Func::in(const vector<Func>& fs) {
         return wrapper;
     }
 
-    IntrusivePtr<FunctionContents> wrapper_contents = iter->second;
+    FunctionPtr wrapper_contents = iter->second;
     internal_assert(wrapper_contents.defined());
 
     // Make sure all the other Funcs in 'fs' share the same wrapper and no other
@@ -1825,20 +1823,91 @@ Func Func::in(const vector<Func>& fs) {
 
 Func Func::in() {
     invalidate_cache();
-    const map<string, IntrusivePtr<FunctionContents>> &wrappers = func.wrappers();
+    const map<string, FunctionPtr> &wrappers = func.wrappers();
     const auto &iter = wrappers.find("");
     if (iter == wrappers.end()) {
-        Func wrapper(name() + "_global_wrapper");
+        Func wrapper(func.new_function_in_same_group(name() + "_global_wrapper"));
         wrapper(args()) = (*this)(args());
         func.add_wrapper("", wrapper.func);
         return wrapper;
     }
 
-    IntrusivePtr<FunctionContents> wrapper_contents = iter->second;
+    FunctionPtr wrapper_contents = iter->second;
     internal_assert(wrapper_contents.defined());
     Function wrapper(wrapper_contents);
     internal_assert(wrapper.frozen());
     return Func(wrapper);
+}
+
+Func Func::copy_to_device(DeviceAPI d) {
+    user_assert(defined())
+        << "copy_to_device on Func " << name() << " with no definition\n";
+    user_assert(outputs() == 1)
+        << "copy_to_device on a Tuple-valued Func " << name() << " not yet supported\n";
+    user_assert(!has_update_definition())
+        << "copy_to_device on Func " << name() << " with update definition\n";
+    user_assert(!is_extern())
+        << "copy_to_device on Func " << name() << " with extern definition\n";
+    Expr rhs = value();
+    const Call *call = rhs.as<Call>();
+    user_assert(call)
+        << "Func " << name() << " is scheduled as copy_to_host/device, "
+        << "but has value: " << rhs << "\n"
+        << "Expected a single call to another Func.\n";
+    user_assert(call->args.size() == args().size())
+        << "Func " << name() << " has a different dimensionality to the "
+        << "Func it calls, so cannot be scheduled as copy_to_host/device.\n";
+    // TODO: it would be good to support translations, transpositions, slices, embeds, etc.
+    vector<Expr> expected_args;
+    for (Var v : args()) {
+        expected_args.push_back(v);
+    }
+    // TODO: allow reinterpret casts
+    Expr expected_rhs =
+        Call::make(call->type, call->name, expected_args, call->call_type,
+                   call->func, call->value_index, call->image, call->param);
+    user_assert(equal(rhs, expected_rhs))
+        << "Func " << name() << " cannot be scheduled as copy_to_host/device. "
+        << "Its value is not of the required form.\n"
+        << "value: " << rhs << "\n"
+        << "expected value: " << expected_rhs << "\n";
+
+    // We'll preserve the pure vars
+    func.definition().values().clear();
+    func.extern_definition_proxy_expr() = rhs;
+    string buffer_name = call->name;
+    if (Function(call->func).outputs() > 1) {
+        buffer_name += "." + std::to_string(call->value_index);
+    }
+    buffer_name += ".buffer";
+    ReductionDomain rdom;
+    ExternFuncArgument buffer;
+    if (call->call_type == Call::Halide) {
+        buffer = call->func;
+    } else if (call->image.defined()) {
+        buffer = call->image;
+    } else {
+        internal_assert(call->param.defined());
+        buffer = call->param;
+    }
+
+    ExternFuncArgument device_interface = make_device_interface_call(d);
+    func.define_extern("halide_buffer_copy", {buffer, device_interface},
+                       {call->type}, (int)call->args.size(),
+                       NameMangling::C, d, false);
+    return *this;
+}
+
+Func Func::copy_to_host() {
+    user_assert(defined())
+        << "copy_to_host on Func " << name() << " with no definition\n";
+    user_assert(outputs() == 1)
+        << "copy_to_host on a Tuple-valued Func " << name() << " not yet supported\n";
+    user_assert(!has_update_definition())
+        << "copy_to_host on Func " << name() << " with update definition\n";
+    user_assert(!is_extern())
+        << "copy_to_host on Func " << name() << " with extern definition\n";
+    return copy_to_device(DeviceAPI::Host);
 }
 
 Func &Func::split(VarOrRVar old, VarOrRVar outer, VarOrRVar inner, Expr factor, TailStrategy tail) {
