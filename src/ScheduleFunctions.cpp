@@ -716,12 +716,12 @@ public:
     const Target &target;
     const map<string, Function> &env;
 
-    InjectRealization(const Function &f, bool o, const Target &t, const map<string, Function> &env) :
-            func(f), is_output(o),
-            found_store_level(false), found_compute_level(false),
-            target(t), env(env) {
-    }
+    InjectRealization(const Function &f, bool o, const Target &t,
+                      const map<string, Function> &env)
+        : func(f), is_output(o), found_store_level(false),
+          found_compute_level(false), target(t), env(env) {}
 
+private:
     // Determine if 'loop_name' is the right level to inject produce/realize node
     // of 'func'. If 'loop_name' is a fused group, we should inject it at the
     // fused parent loop of the group.
@@ -732,8 +732,8 @@ public:
 
         vector<string> v = split_string(loop_name, ".");
         internal_assert(v.size() > 2);
-        string func_name = v[0];
-        string var = v[v.size()-1];
+        const string &func_name = v[0];
+        const string &var = v[v.size()-1];
 
         int stage = -1;
         for (size_t i = 1; i < v.size() - 1; ++i) {
@@ -747,7 +747,7 @@ public:
         }
         internal_assert(stage >= 0);
 
-        const auto it = env.find(func_name);
+        const auto &it = env.find(func_name);
         internal_assert(it != env.end());
         const Function &f = it->second;
         internal_assert(stage <= (int)f.updates().size());
@@ -760,11 +760,11 @@ public:
         } else {
             // Need to find out if it is fused at 'var'
             const vector<Dim> &dims = def.schedule().dims();
-            const auto it1 = std::find_if(dims.begin(), dims.end(),
+            const auto &it1 = std::find_if(dims.begin(), dims.end(),
                 [&fuse_level](const Dim &d) { return var_name_match(d.var, fuse_level.var().name()); });
             internal_assert(it1 != dims.end());
 
-            const auto it2 = std::find_if(dims.begin(), dims.end(),
+            const auto &it2 = std::find_if(dims.begin(), dims.end(),
                 [&var](const Dim &d) { return var_name_match(d.var, var); });
             internal_assert(it2 != dims.end());
 
@@ -772,8 +772,6 @@ public:
         }
         return false;
     }
-
-private:
 
     Stmt build_pipeline(Stmt consumer) {
         pair<Stmt, Stmt> realization = build_production(func, target);
@@ -976,7 +974,7 @@ Stmt inject_stmt(Stmt root, Stmt injected, const LoopLevel &level) {
     return root;
 }
 
-// Collect all let stmts.
+// Collect all let stmts that define the loop min, max, and extent.
 class CollectBounds : public IRVisitor {
 public:
     map<string, Expr> bounds;
@@ -1008,13 +1006,13 @@ private:
         if (min_var && extent_var) {
             Expr min_val, extent_val;
             {
-                const auto it = replacements.find(min_var->name);
+                const auto &it = replacements.find(min_var->name);
                 if (it != replacements.end()) {
                     min_val = it->second;
                 }
             }
             {
-                const auto it = replacements.find(extent_var->name);
+                const auto &it = replacements.find(extent_var->name);
                 if (it != replacements.end()) {
                     extent_val = it->second;
                 }
@@ -1032,8 +1030,8 @@ private:
             string new_var = op->name.substr(0, last_dot) + ".fused." + op->name.substr(last_dot + 1);
 
             // If this is the child fused loop, might as well clear the for-loop
-            // scheduling flag (parallel, vectorize, or unrolled) since it is of
-            // extent one anyway.
+            // scheduling flag (parallel, vectorize, or unrolled) since its
+            // loop extent is one anyway.
             ForType for_type = op->for_type;
             DeviceAPI device_api = op->device_api;
             if (is_one(extent_val)) {
@@ -1058,38 +1056,15 @@ private:
 };
 
 // The bounds of every loop exist in 'replacements' should be replaced. The
-// loop is also renamed by adding ".fused" in the original name before the
+// loop is also renamed by adding '.fused' in the original name before the
 // variable name.
 Stmt substitute_fused_bounds(Stmt s, const map<string, Expr> &replacements) {
     if (!s.defined()) {
         return s;
+    } else {
+        return SubstituteFusedBounds(replacements).mutate(s);
     }
-    SubstituteFusedBounds subs(replacements);
-    s = subs.mutate(s);
-    return s;
 }
-
-// Place 'var' in an IfThenElse as far to the left as possible
-class SolveIfThenElse : public IRMutator {
-    string var;
-
-    using IRMutator::visit;
-
-    void visit(const IfThenElse *op) {
-        IRMutator::visit(op);
-        op = stmt.as<IfThenElse>();
-        internal_assert(op);
-        if (expr_uses_var(op->condition, var)) {
-            Expr condition = solve_expression(op->condition, var).result;
-            if (!condition.same_as(op->condition)) {
-                stmt = IfThenElse::make(condition, op->then_case, op->else_case);
-            }
-        }
-    }
-
-public:
-    SolveIfThenElse(const string &v) : var(v) {}
-};
 
 // Shift the iteration domain of a loop nest by some factor.
 class ShiftLoopNest : public IRMutator {
@@ -1106,7 +1081,6 @@ class ShiftLoopNest : public IRMutator {
             internal_assert(op);
             Expr adjusted = Variable::make(Int(32), op->name) + iter->second;
             Stmt body = substitute(op->name, adjusted, op->body);
-            body = SolveIfThenElse(op->name).mutate(body);
             stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
         }
     }
@@ -1120,7 +1094,7 @@ public:
 class InjectGroupRealization : public IRMutator {
 public:
     // Member of the fused loop starting from the first to be realized to the last.
-    vector<Function> &group;
+    const vector<Function> &group;
     // List of booleans indicating if group[i] is an output
     const vector<bool> &is_output_list;
     bool found_store_level, found_compute_level;
@@ -1129,7 +1103,7 @@ public:
     LoopLevel compute_level;
     LoopLevel store_level;
 
-    InjectGroupRealization(vector<Function> &g, const vector<bool> &o,
+    InjectGroupRealization(const vector<Function> &g, const vector<bool> &o,
                            const map<string, Function> &env, const Target &t)
             : group(g), is_output_list(o), found_store_level(false),
               found_compute_level(false), env(env), target(t) {
@@ -1199,9 +1173,9 @@ private:
         CollectBounds subs;
         produce.accept(&subs);
 
-        // Compute the shift factors according to the alignment strategies
+        // Compute the shift factors based on the alignment strategies
         // starting from the the parent (root loop) to the children. The root
-        // loop bounds should be unchanged.
+        // loop bounds should remain unchanged.
         map<string, Expr> shifts;
         for (int i = (int)group.size() - 1; i >= 0; --i) {
             if (!skip[group[i].name()]) {
@@ -1216,9 +1190,9 @@ private:
         // Shift the loops.
         produce = ShiftLoopNest(shifts).mutate(produce);
 
-        // Replace all the child fused loops with the appropriate bounds (i.e.
-        // the min/max should refer to the parent loop vars and the extent should
-        // be one).
+        // Replace all the child fused loops with the appropriate bounds
+        // (i.e. the min/max should refer to the parent loop vars and the
+        // extent should be one).
         produce = substitute_fused_bounds(produce, replacements);
 
         // Replace the bounds of parent fused loops with union of bounds of
@@ -1237,7 +1211,7 @@ private:
 
     // Compute the shift factor required to align iteration of
     // a function stage with its fused parent loop nest.
-    void compute_shift_factor(const map<string, bool> &skip, Function f,
+    void compute_shift_factor(const map<string, bool> &skip, const Function &f,
                               const string &prefix, const Definition &def,
                               map<string, Expr> &bounds,
                               map<string, Expr> &shifts) {
@@ -1245,7 +1219,7 @@ private:
         const LoopLevel &fuse_level = def.schedule().fuse_level().level;
         const map<string, AlignStrategy> &align_strategy = def.schedule().fuse_level().align;
 
-        size_t start_fuse = dims.size();
+        int start_fuse = (int)dims.size();
         if (!fuse_level.is_inline() && !fuse_level.is_root()) {
             if (!skip.find(fuse_level.func())->second) {
                 {
@@ -1296,7 +1270,7 @@ private:
         }
     }
 
-    Stmt build_produce(const map<string, bool> &skip, Function f, Stmt produce,
+    Stmt build_produce(const map<string, bool> &skip, const Function &f, Stmt produce,
                        map<string, Expr> &replacements, vector<pair<string, Expr>> &add_lets) {
         string prefix = f.name() + ".s0.";
         produce = inject_stmt(produce,
@@ -1315,7 +1289,7 @@ private:
         return produce;
     }
 
-    Stmt build_produce_definition(const map<string, bool> &skip, Function f,
+    Stmt build_produce_definition(const map<string, bool> &skip, const Function &f,
                                   const string &prefix, const Definition &def,
                                   bool is_update, map<string, Expr> &replacements,
                                   vector<pair<string, Expr>> &add_lets) {
@@ -1336,12 +1310,15 @@ private:
         // parent fused loops. Here, we are only collecting the ones we should
         // replace. The actual replacement is done later.
         for (const FusedPair &pair : def.schedule().fused_pairs()) {
-            if (env.find(pair.func_2) == env.end()) {
-                continue;
-            }
             if (skip.find(pair.func_2)->second) {
                 continue;
             }
+            const auto &f2_it = env.find(pair.func_2);
+            internal_assert(f2_it != env.end());
+            const vector<Dim> &dims_2 =
+                (pair.stage_2 == 0) ? f2_it->second.definition().schedule().dims() :
+                                      f2_it->second.update(pair.stage_2-1).schedule().dims();
+
             const auto &iter = std::find_if(dims.begin(), dims.end(),
                 [&pair](const Dim &d) { return var_name_match(d.var, pair.var_name); });
             internal_assert(iter != dims.end());
@@ -1351,12 +1328,6 @@ private:
                 string var_orig = pair.func_1 + ".s" + std::to_string(pair.stage_1) + "." + dims[i].var;
                 Expr val = Variable::make(Int(32), var_orig);
 
-
-                internal_assert(env.count(pair.func_2));
-                const Function &f2 = env.find(pair.func_2)->second;
-                const vector<Dim> &dims_2 =
-                    (pair.stage_2 == 0) ? f2.definition().schedule().dims() :
-                                          f2.update(pair.stage_2-1).schedule().dims();
                 int dim2_idx = dims_2.size() - (dims.size() - i);
                 internal_assert(dim2_idx < (int)dims_2.size());
                 string var = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + dims_2[dim2_idx].var;
@@ -1391,9 +1362,7 @@ private:
                 continue;
             }
             const auto &iter = env.find(pair.func_2);
-            if (iter == env.end()) {
-                continue;
-            }
+            internal_assert(iter != env.end());
             const Function &f = iter->second;
             string prefix_2 = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + pair.var_name;
             if (visited.find(prefix_2) == visited.end()) {
@@ -1413,9 +1382,7 @@ private:
                 continue;
             }
             const auto &iter = env.find(pair.func_2);
-            if (iter == env.end()) {
-                continue;
-            }
+            internal_assert(iter != env.end());
             const Function &f = iter->second;
             string prefix = pair.func_2 + ".s" + std::to_string(pair.stage_2) + "." + pair.var_name;
             if (visited.find(prefix) == visited.end()) {
@@ -1428,7 +1395,7 @@ private:
 
     // Replace the bounds of the parent fused loop (i.e. the first one to be
     // realized in the group) with union of the bounds of the fused group.
-    Stmt replace_parent_bound_with_union_bound(const map<string, bool> &skip, Function f,
+    Stmt replace_parent_bound_with_union_bound(const map<string, bool> &skip, const Function &f,
                                                Stmt produce, const map<string, Expr> &bounds) {
         string prefix = f.name() + ".s0";
         const Definition &def = f.definition();
@@ -1443,18 +1410,20 @@ private:
             if (skip.find(pair.func_2)->second) {
                 continue;
             }
+            const auto &f2_it = env.find(pair.func_2);
+            internal_assert(f2_it != env.end());
+            const vector<Dim> &dims_2 =
+                (pair.stage_2 == 0) ? f2_it->second.definition().schedule().dims() :
+                                      f2_it->second.update(pair.stage_2-1).schedule().dims();
+
             const auto &iter = std::find_if(dims.begin(), dims.end(),
                 [&pair](const Dim &d) { return var_name_match(d.var, pair.var_name); });
             internal_assert(iter != dims.end());
+
             // Should ignore the __outermost dummy dimension.
             for (size_t i = iter - dims.begin(); i < dims.size() - 1; ++i) {
                 // The child's dim might have slightly different name from
                 // the parent, e.g. y.yi and yi.
-                internal_assert(env.count(pair.func_2));
-                const Function &f2 = env.find(pair.func_2)->second;
-                const vector<Dim> &dims_2 =
-                    (pair.stage_2 == 0) ? f2.definition().schedule().dims() :
-                                          f2.update(pair.stage_2-1).schedule().dims();
                 int dim2_idx = dims_2.size() - (dims.size() - i);
                 internal_assert(dim2_idx < (int)dims_2.size());
 
@@ -1473,15 +1442,15 @@ private:
                 internal_assert(bounds.count(var_1 + ".loop_extent"));
 
                 Expr min_1, max_1, extent_1;
-                const auto it = replacements.find(var_1 + ".loop_min");
+                const auto &it = replacements.find(var_1 + ".loop_min");
                 if (it == replacements.end()) {
                     min_1 = bounds.find(var_1 + ".loop_min")->second;
                     max_1 = bounds.find(var_1 + ".loop_max")->second;
                     extent_1 = bounds.find(var_1 + ".loop_extent")->second;
                 } else {
-                    min_1 = replacements[var_1 + ".loop_min"];
-                    max_1 = replacements[var_1 + ".loop_max"];
-                    extent_1 = replacements[var_1 + ".loop_extent"];
+                    min_1 = replacements.find(var_1 + ".loop_min")->second;
+                    max_1 = replacements.find(var_1 + ".loop_max")->second;
+                    extent_1 = replacements.find(var_1 + ".loop_extent")->second;
                 }
 
                 replacements[var_1 + ".loop_min"] = simplify(min(min_1, min_2));

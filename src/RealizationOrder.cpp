@@ -146,7 +146,7 @@ void validate_fused_pair(const string &fn, size_t stage_index,
     }
 
     // Assert no dependencies among the functions that are computed_with.
-    // Self-dependecy is allowed in if and only if there is no loop-carried
+    // Self-dependecy is allowed if and only if there is no loop-carried
     // dependence, e.g. f(x, y) = f(x, y) + 2 is okay but
     // f(x, y) = f(x, y - 1) + 2 is not.
     if (p.func_1 != p.func_2) {
@@ -220,8 +220,8 @@ void populate_fused_pairs_list(const string &func, const Definition &def,
     }
 }
 
-// Make sure we don't have cyclic compute_with: if Func f is computed after
-// Func g, Func g should not be computed after Func f.
+// Make sure we don't have cyclic compute_with: if Func 'f' is computed after
+// Func 'g', Func 'g' should not be computed after Func 'f'.
 void check_no_cyclic_compute_with(const map<string, vector<FusedPair>> &fused_pairs_graph) {
     for (const auto &iter : fused_pairs_graph) {
         for (const auto &pair : iter.second) {
