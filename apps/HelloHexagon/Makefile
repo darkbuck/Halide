@@ -26,7 +26,7 @@ all: $(BIN)/process-host $(BIN)/process-arm-64-android $(BIN)/process-arm-32-and
 
 $(BIN)/pipeline: pipeline.cpp $(GENERATOR_DEPS)
 	@-mkdir -p $(BIN)
-	$(CXX) $(CXXFLAGS) -g -fno-rtti $(filter-out %.h,$^) -o $@ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -g -fno-rtti $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HALIDE_SYSTEM_LDFLAGS)
 
 $(BIN)/%/pipeline_cpu.o: $(BIN)/pipeline
 	@-mkdir -p $(BIN)/$*
@@ -51,6 +51,7 @@ run-%-android: $(BIN)/process-%-android
 	adb push $(BIN)/process-$*-android $(DEVICE_PATH)
 	adb push $(HEXAGON_RUNTIME_PATH)/bin/$*-android/libhalide_hexagon_host.so $(DEVICE_PATH)
 	adb push $(HEXAGON_RUNTIME_PATH)/bin/v60/signed_by_debug/libhalide_hexagon_remote_skel.so $(DEVICE_PATH)
+	adb shell cp /system/lib/rfsa/adsp/testsig* $(DEVICE_PATH) > /dev/null || true
 	adb shell chmod +x $(DEVICE_PATH)/process-$*-android
 	adb shell $(DEVICE_ENV) $(DEVICE_PATH)/process-$*-android cpu 10
 	adb shell $(DEVICE_ENV) $(DEVICE_PATH)/process-$*-android hvx64 10
