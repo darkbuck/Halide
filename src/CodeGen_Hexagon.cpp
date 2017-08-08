@@ -1303,9 +1303,9 @@ string CodeGen_Hexagon::mcpu() const {
 string CodeGen_Hexagon::mattrs() const {
     std::stringstream attrs;
     if (target.has_feature(Halide::Target::HVX_128)) {
-        attrs << "+hvx-double";
+        attrs << "+hvx-length128b";
     } else {
-        attrs << "+hvx";
+        attrs << "+hvx-length64b";
     }
     attrs << ",+long-calls";
     return attrs.str();
