@@ -73,9 +73,9 @@ GENERATOR_FILTER_DEPS ?=
 # The Generator to use to produce a target; usually %.generator,
 # but can vary when we produces multiple different filters
 # from the same Generator (by changing target, generator_args, etc)
-GENERATOR_GENERATOR_EXECUTABLE=$(GENERATOR_BIN_DIR)/$*.generator
+GENERATOR_GENERATOR_EXECUTABLE ?= $(GENERATOR_BIN_DIR)/$*.generator
 
-GENERATOR_RUNTIME_LIB = $(GENERATOR_FILTERS_DIR)/runtime.a
+GENERATOR_RUNTIME_LIB ?= $(GENERATOR_FILTERS_DIR)/runtime.a
 
 # ------------------------------------------------------------------------------
 

@@ -1105,10 +1105,7 @@ GENERATOR_AOTTEST_INCLUDES=-I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I$(ROOT_DIR) -I $(
 # Runtime libraries to link in (if any)
 GENERATOR_AOTTEST_RUNTIME_LIBS=$(GENERATOR_RUNTIME_LIB)
 
-GENERATOR_AOTTEST_EXTRA_LD_FLAGS=
-
-GENERATOR_AOTTEST_EXTRA_DEPS=
-GENERATOR_AOTTEST_DEPS=$(FILTERS_DIR)/$*.a $(FILTERS_DIR)/$*.h $(GENERATOR_AOTTEST_EXTRA_DEPS)
+GENERATOR_AOTTEST_DEPS=$(FILTERS_DIR)/$*.a $(FILTERS_DIR)/$*.h
 
 GENERATOR_JITTEST_DEPS=$(FILTERS_DIR)/$*.stub.h $(BUILD_DIR)/$*_generator.o
 
@@ -1121,12 +1118,12 @@ endif
 # By default, %_aottest.cpp depends on $(FILTERS_DIR)/%.a/.h (but not libHalide).
 $(BIN_DIR)/$(TARGET)/generator_aot_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(RUNTIME_EXPORTED_INCLUDES) $$(GENERATOR_AOTTEST_DEPS) $$(GENERATOR_AOTTEST_RUNTIME_LIBS)
 	@mkdir -p $(BIN_DIR)/$(TARGET)
-	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOTTEST_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
+	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOTTEST_LD_FLAGS) -o $@
 
 # Also make AOT testing targets that depends on the .cpp output (rather than .a).
 $(BIN_DIR)/$(TARGET)/generator_aotcpp_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(FILTERS_DIR)/%.cpp $(FILTERS_DIR)/%.h $(RUNTIME_EXPORTED_INCLUDES) $$(GENERATOR_AOTTEST_RUNTIME_LIBS)
 	@mkdir -p $(BIN_DIR)/$(TARGET)
-	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOTTEST_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
+	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOTTEST_LD_FLAGS) -o $@
 
 # By default, %_jittest.cpp depends on libHalide, plus the stubs for the Generator. These are external tests that use the JIT.
 $(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $$(GENERATOR_JITTEST_DEPS)
@@ -1135,10 +1132,10 @@ $(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/
 # ------------------------------------------------------------------------------
 
 # also depends on cxx_mangling_gpu
-$(BIN_DIR)/$(TARGET)/generator_aot_cxx_mangling: GENERATOR_AOTTEST_EXTRA_DEPS=$(FILTERS_DIR)/cxx_mangling_gpu.a
+$(BIN_DIR)/$(TARGET)/generator_aot_cxx_mangling: GENERATOR_AOTTEST_DEPS += $(FILTERS_DIR)/cxx_mangling_gpu.a
 
 # also depends on metadata_tester_ucon
-$(BIN_DIR)/$(TARGET)/generator_aot_metadata_tester: GENERATOR_AOTTEST_EXTRA_DEPS=$(FILTERS_DIR)/metadata_tester_ucon.a
+$(BIN_DIR)/$(TARGET)/generator_aot_metadata_tester: GENERATOR_AOTTEST_DEPS += $(FILTERS_DIR)/metadata_tester_ucon.a
 
 # MSAN test doesn't use the standard runtime
 $(BIN_DIR)/$(TARGET)/generator_aot_msan: GENERATOR_AOTTEST_RUNTIME_LIBS=
@@ -1153,9 +1150,9 @@ $(BIN_DIR)/$(TARGET)/generator_aot_nested_externs: GENERATOR_AOTTEST_DEPS=\
 # The matlab tests needs "-matlab" in the runtime
 $(BIN_DIR)/$(TARGET)/generator_aot_matlab: GENERATOR_AOTTEST_RUNTIME_LIBS=$(BIN_DIR)/$(TARGET)-matlab/build/runtime.a
 
-$(BIN_DIR)/$(TARGET)/generator_aot_acquire_release: GENERATOR_AOTTEST_EXTRA_LD_FLAGS=$(OPENCL_LD_FLAGS) $(CUDA_LD_FLAGS)
+$(BIN_DIR)/$(TARGET)/generator_aot_acquire_release: GENERATOR_AOTTEST_LD_FLAGS += $(OPENCL_LD_FLAGS) $(CUDA_LD_FLAGS)
 
-$(BIN_DIR)/$(TARGET)/generator_aot_define_extern_opencl: GENERATOR_AOTTEST_EXTRA_LD_FLAGS=$(OPENCL_LD_FLAGS)
+$(BIN_DIR)/$(TARGET)/generator_aot_define_extern_opencl: GENERATOR_AOTTEST_LD_FLAGS += $(OPENCL_LD_FLAGS)
 
 # TODO -- yuck
 $(BIN_DIR)/$(TARGET)/generator_aotcpp_external_code: GENERATOR_AOTTEST_DEPS=$(FILTERS_DIR)/external_code_cpp.a
