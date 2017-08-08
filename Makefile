@@ -982,7 +982,8 @@ $(GENERATOR_FILTERS_DIR)/%_externs.o: $(ROOT_DIR)/test/generator/%_externs.cpp
 
 $(FILTERS_DIR)/cxx_mangling.a: GENERATOR_EXTRA_FEATURES=c_plus_plus_name_mangling
 $(FILTERS_DIR)/cxx_mangling.a: GENERATOR_FUNCNAME=HalideTest::AnotherNamespace::cxx_mangling
-$(FILTERS_DIR)/cxx_mangling.a: GENERATOR_FILTER_DEPS=$(FILTERS_DIR)/cxx_mangling_externs.o
+# Any extra deps that we add to a Generator's .a output will be added to the final library.
+$(FILTERS_DIR)/cxx_mangling.a: $(FILTERS_DIR)/cxx_mangling_externs.o
 
 # Also build with a gpu target to ensure that the GPU-Host generation
 # code handles name mangling properly. (Note that we don't need to
@@ -993,7 +994,8 @@ $(FILTERS_DIR)/cxx_mangling_gpu.a: GENERATOR_EXTRA_FEATURES=c_plus_plus_name_man
 
 $(FILTERS_DIR)/cxx_mangling_define_extern.a: GENERATOR_EXTRA_FEATURES=c_plus_plus_name_mangling-user_context
 $(FILTERS_DIR)/cxx_mangling_define_extern.a: GENERATOR_FUNCNAME=HalideTest::cxx_mangling_define_extern
-$(FILTERS_DIR)/cxx_mangling_define_extern.a: GENERATOR_FILTER_DEPS=$(FILTERS_DIR)/cxx_mangling_define_extern_externs.o $(FILTERS_DIR)/cxx_mangling.a
+# Any extra deps that we add to a Generator's .a output will be added to the final library.
+$(FILTERS_DIR)/cxx_mangling_define_extern.a: $(FILTERS_DIR)/cxx_mangling_define_extern_externs.o $(FILTERS_DIR)/cxx_mangling.a
 
 $(FILTERS_DIR)/cxx_mangling_define_extern_externs.o: $(FILTERS_DIR)/cxx_mangling.h
 
@@ -1041,10 +1043,7 @@ $(BIN_DIR)/stubuser.generator: $(BUILD_DIR)/stubtest_generator.o
 
 $(FILTERS_DIR)/stubuser.a: GENERATOR_GENERATOR_NAME=stubuser
 
-$(FILTERS_DIR)/tiled_blur.a: GENERATOR_FILTER_DEPS=$(FILTERS_DIR)/blur2x2.a
-# When GENERATOR_FILTER_DEPS contains the output of another Generator,
-# we must add an explicit dependency here to ensure it is built in the 
-# correct order.
+# Any extra deps that we add to a Generator's .a output will be added to the final library.
 $(FILTERS_DIR)/tiled_blur.a: $(FILTERS_DIR)/blur2x2.a
 
 $(FILTERS_DIR)/user_context.a: GENERATOR_EXTRA_FEATURES=user_context

@@ -67,9 +67,6 @@ GENERATOR_GENERATOR_NAME ?=
 # Extra deps that are required when building the Generator itself (if any)
 GENERATOR_GENERATOR_DEPS ?=
 
-# Extra deps that are required when linking the filter (if any).
-GENERATOR_FILTER_DEPS ?=
-
 # The Generator to use to produce a target; usually %.generator,
 # but can vary when we produces multiple different filters
 # from the same Generator (by changing target, generator_args, etc)
@@ -102,10 +99,11 @@ $(GENERATOR_BIN_DIR)/%.generator: $(GENERATOR_BUILD_DIR)/GenGen.o $(GENERATOR_LI
 GENERATOR_TARGET_WITH_FEATURES ?= $(GENERATOR_TARGET)-no_runtime$(if $(GENERATOR_EXTRA_FEATURES),-,)$(GENERATOR_EXTRA_FEATURES)
 
 # By default, %.a/.h/.cpp are produced by executing %.generator. Runtimes are not included in these.
-$(GENERATOR_FILTERS_DIR)/%.a: $$(GENERATOR_GENERATOR_EXECUTABLE) $$(GENERATOR_FILTER_DEPS)
+$(GENERATOR_FILTERS_DIR)/%.a: $$(GENERATOR_GENERATOR_EXECUTABLE)
 	@mkdir -p $(@D)
 	$< -e static_library,h,cpp -g "$(GENERATOR_GENERATOR_NAME)" -f "$(GENERATOR_FUNCNAME)" -n $* -o $(GENERATOR_FILTERS_DIR) target=$(GENERATOR_TARGET_WITH_FEATURES) $(GENERATOR_ARGS)
-	if [ -n "$(GENERATOR_FILTER_DEPS)" ]; then $(GENERATOR_HALIDE_TOOLS_DIR)/makelib.sh $@ $@ $(GENERATOR_FILTER_DEPS); fi
+	@ # There might be additional deps specified elsewhere; if so, add them to the archive
+	$(GENERATOR_HALIDE_TOOLS_DIR)/makelib.sh $@ $@ $(filter %.o %a,$^)
 
 $(GENERATOR_FILTERS_DIR)/%.h: $(GENERATOR_FILTERS_DIR)/%.a
 	@ # @echo $@ produced implicitly by $^
