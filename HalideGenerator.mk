@@ -30,7 +30,7 @@
 #   $(GENERATOR_FILTERS_DIR)/foo.a: GENERATOR_EXTRA_FEATURES=user_context-cuda
 
 
-# Note that several of these need SECONDEXPANSION enabled to work.
+# Note that GENERATOR_GENERATOR_EXECUTABLE needs SECONDEXPANSION enabled to work.
 .SECONDEXPANSION:
 
 # These are the variables you *must* define
@@ -68,8 +68,6 @@ GENERATOR_GENERATOR_NAME ?=
 # but can vary when we produces multiple different filters
 # from the same Generator (by changing target, generator_args, etc)
 GENERATOR_GENERATOR_EXECUTABLE ?= $(GENERATOR_BIN_DIR)/$*.generator
-
-GENERATOR_RUNTIME_LIB ?= $(GENERATOR_FILTERS_DIR)/runtime.a
 
 # ------------------------------------------------------------------------------
 

@@ -1093,14 +1093,14 @@ $(FILTERS_DIR)/external_code.a: GENERATOR_ARGS="external_code_is_bitcode=true"
 # General rules for building Generator tests. These are targeted at the
 # Generators in test/generator, but could (and should) be generalized elsewhere.
 
-# Note that we need SECONDEXPANSION enabled several of these to work.
+# Note that GENERATOR_AOTTEST_RUNTIME_LIBS needs SECONDEXPANSION enabled.
 .SECONDEXPANSION:
 
 GENERATOR_AOTTEST_CXX_FLAGS=$(TEST_CXX_FLAGS) -Wno-unknown-pragmas
 GENERATOR_AOTTEST_INCLUDES=-I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I$(ROOT_DIR) -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools
 
 # Runtime libraries to link in (if any)
-GENERATOR_AOTTEST_RUNTIME_LIBS=$(GENERATOR_RUNTIME_LIB)
+GENERATOR_AOTTEST_RUNTIME_LIBS=$(FILTERS_DIR)/runtime.a
 
 GENERATOR_AOTTEST_LD_FLAGS=-lpthread $(LIBDL)
 ifneq ($(TEST_METAL), )

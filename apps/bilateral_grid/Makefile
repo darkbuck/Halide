@@ -18,11 +18,11 @@ $(GENERATOR_FILTERS_DIR)/bilateral_grid_viz.a: GENERATOR_GENERATOR_EXECUTABLE=$(
 $(GENERATOR_FILTERS_DIR)/bilateral_grid_viz.a: GENERATOR_FEATURES=trace_loads-trace_stores-trace_realizations
 $(GENERATOR_FILTERS_DIR)/bilateral_grid_viz.a: GENERATOR_FUNCNAME=bilateral_grid
 
-$(BIN)/filter: filter.cpp $(GENERATOR_FILTERS_DIR)/bilateral_grid.a $(GENERATOR_RUNTIME_LIB)
+$(BIN)/filter: filter.cpp $(GENERATOR_FILTERS_DIR)/bilateral_grid.a $(GENERATOR_FILTERS_DIR)/runtime.a
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -O3 -ffast-math -Wall -Werror -I$(GENERATOR_FILTERS_DIR) $^ -o $@ $(IMAGE_IO_FLAGS) $(LDFLAGS)
 
-$(BIN)/filter_viz: filter.cpp $(GENERATOR_FILTERS_DIR)/bilateral_grid_viz.a $(GENERATOR_RUNTIME_LIB)
+$(BIN)/filter_viz: filter.cpp $(GENERATOR_FILTERS_DIR)/bilateral_grid_viz.a $(GENERATOR_FILTERS_DIR)/runtime.a
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -O3 -ffast-math -Wall -Werror -I$(GENERATOR_FILTERS_DIR) $^ -o $@ $(IMAGE_IO_FLAGS) $(LDFLAGS)
 
