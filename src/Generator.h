@@ -1343,6 +1343,10 @@ public:
     operator Func() const {
         return this->funcs().at(0);
     }
+
+    operator ExternFuncArgument() const {
+        return ExternFuncArgument(this->parameters_.at(0));
+    }
 };
 
 
@@ -1408,6 +1412,10 @@ public:
 
     operator Func() const {
         return this->funcs().at(0);
+    }
+
+    operator ExternFuncArgument() const {
+        return ExternFuncArgument(this->parameters_.at(0));
     }
 };
 
@@ -1630,6 +1638,7 @@ public:
     HALIDE_OUTPUT_FORWARD(compute_at)
     HALIDE_OUTPUT_FORWARD(compute_inline)
     HALIDE_OUTPUT_FORWARD(compute_root)
+    HALIDE_OUTPUT_FORWARD(define_extern)
     HALIDE_OUTPUT_FORWARD_CONST(defined)
     HALIDE_OUTPUT_FORWARD(fold_storage)
     HALIDE_OUTPUT_FORWARD(fuse)
@@ -1648,6 +1657,7 @@ public:
     HALIDE_OUTPUT_FORWARD_CONST(outputs)
     HALIDE_OUTPUT_FORWARD(parallel)
     HALIDE_OUTPUT_FORWARD(prefetch)
+    HALIDE_OUTPUT_FORWARD(print_loop_nest)
     HALIDE_OUTPUT_FORWARD(rename)
     HALIDE_OUTPUT_FORWARD(reorder)
     HALIDE_OUTPUT_FORWARD(reorder_storage)

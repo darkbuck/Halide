@@ -1428,18 +1428,13 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    /*printf("Running nested compute with test\n");
+    printf("Running nested compute with test\n");
     if (nested_compute_with_test() != 0) {
         return -1;
     }
 
     printf("Running mixed tile factor test\n");
     if (mixed_tile_factor_test() != 0) {
-        return -1;
-    }
-
-    printf("Running multi tile mixed tile factor test\n");
-    if (multi_tile_mixed_tile_factor_test() != 0) {
         return -1;
     }
 
@@ -1450,6 +1445,11 @@ int main(int argc, char **argv) {
 
     printf("Running multiple outputs on gpu test\n");
     if (multiple_outputs_on_gpu_test() != 0) {
+        return -1;
+    }
+
+    /*printf("Running multi tile mixed tile factor test\n");
+    if (multi_tile_mixed_tile_factor_test() != 0) {
         return -1;
     }*/
 
