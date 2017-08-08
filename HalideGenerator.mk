@@ -64,9 +64,6 @@ GENERATOR_ARGS ?=
 # Generator name to use (empty = assume only one Generator present)
 GENERATOR_GENERATOR_NAME ?=
 
-# Extra deps that are required when building the Generator itself (if any)
-GENERATOR_GENERATOR_DEPS ?=
-
 # The Generator to use to produce a target; usually %.generator,
 # but can vary when we produces multiple different filters
 # from the same Generator (by changing target, generator_args, etc)
@@ -87,7 +84,7 @@ $(GENERATOR_BUILD_DIR)/%_generator.o: %_generator.cpp $(GENERATOR_HALIDE_INCLUDE
 	@mkdir -p $(@D)
 	$(CXX) $(GENERATOR_CXX_FLAGS) -I$(GENERATOR_HALIDE_INCLUDES_DIR) -I$(GENERATOR_FILTERS_DIR) -c $< -o $@
 
-$(GENERATOR_BIN_DIR)/%.generator: $(GENERATOR_BUILD_DIR)/GenGen.o $(GENERATOR_LIBHALIDE_PATH) $(GENERATOR_HALIDE_H_PATH) $(GENERATOR_BUILD_DIR)/%_generator.o $$(GENERATOR_GENERATOR_DEPS)
+$(GENERATOR_BIN_DIR)/%.generator: $(GENERATOR_BUILD_DIR)/GenGen.o $(GENERATOR_LIBHALIDE_PATH) $(GENERATOR_HALIDE_H_PATH) $(GENERATOR_BUILD_DIR)/%_generator.o
 	@mkdir -p $(@D)
 	$(CXX) $(filter %.cpp %.o %.a,$^) $(GENERATOR_GENERATOR_LD_FLAGS) -o $@
 

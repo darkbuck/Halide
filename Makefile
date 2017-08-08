@@ -875,7 +875,7 @@ test_generators_jit: $(GENERATOR_JIT_TESTS)
 test_generators_aotcpp: $(GENERATOR_AOTCPP_TESTS)
 test_rungen: $(GENERATOR_BUILD_RUNGEN_TESTS)
 
-test_generators: test_generators_aot test_generators_jit test_rungen
+test_generators: test_generators_aot test_generators_jit test_rungen 
 
 ALL_TESTS = test_internal test_correctness test_errors test_tutorials test_warnings test_generators
 
@@ -1077,18 +1077,16 @@ $(BUILD_DIR)/external_code_extern_bitcode_64.cpp : $(ROOT_DIR)/test/generator/ex
 $(BUILD_DIR)/external_code_extern_cpp_source.cpp : $(ROOT_DIR)/test/generator/external_code_extern.cpp $(BIN_DIR)/binary2cpp
 	./$(BIN_DIR)/binary2cpp external_code_extern_cpp_source < $(ROOT_DIR)/test/generator/external_code_extern.cpp > $@
 
-$(BIN_DIR)/external_code.generator: GENERATOR_GENERATOR_DEPS=\
-	$(BUILD_DIR)/external_code_extern_bitcode_32.cpp \
+$(BIN_DIR)/external_code.generator: $(BUILD_DIR)/external_code_extern_bitcode_32.cpp \
 	$(BUILD_DIR)/external_code_extern_bitcode_64.cpp \
 	$(BUILD_DIR)/external_code_extern_cpp_source.cpp
 
 $(FILTERS_DIR)/external_code.a: GENERATOR_ARGS="external_code_is_bitcode=true"
-#$(FILTERS_DIR)/external_code.a: GENERATOR_FUNCNAME=external_code
 
 # TODO -- doesn't really work
-$(FILTERS_DIR)/external_code.cpp: GENERATOR_GENERATOR_EXECUTABLE=$(BIN_DIR)/external_code.generator
-$(FILTERS_DIR)/external_code.cpp: GENERATOR_ARGS="external_code_is_bitcode=false"
-$(FILTERS_DIR)/external_code.cpp: GENERATOR_FUNCNAME=external_code
+# $(FILTERS_DIR)/external_code.cpp: GENERATOR_GENERATOR_EXECUTABLE=$(BIN_DIR)/external_code.generator
+# $(FILTERS_DIR)/external_code.cpp: GENERATOR_ARGS="external_code_is_bitcode=false"
+# $(FILTERS_DIR)/external_code.cpp: GENERATOR_FUNCNAME=external_code
 
 # ------------------------------------------------------------------------------
 
@@ -1104,10 +1102,6 @@ GENERATOR_AOTTEST_INCLUDES=-I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I$(ROOT_DIR) -I $(
 # Runtime libraries to link in (if any)
 GENERATOR_AOTTEST_RUNTIME_LIBS=$(GENERATOR_RUNTIME_LIB)
 
-GENERATOR_AOTTEST_DEPS=$(FILTERS_DIR)/$*.a $(FILTERS_DIR)/$*.h
-
-GENERATOR_JITTEST_DEPS=$(FILTERS_DIR)/$*.stub.h $(BUILD_DIR)/$*_generator.o
-
 GENERATOR_AOTTEST_LD_FLAGS=-lpthread $(LIBDL)
 ifneq ($(TEST_METAL), )
 # Unlike cuda and opencl, which dynamically go find the appropriate symbols, metal requires actual linking.
@@ -1115,7 +1109,7 @@ GENERATOR_AOTTEST_LD_FLAGS+=$(METAL_LD_FLAGS)
 endif
 
 # By default, %_aottest.cpp depends on $(FILTERS_DIR)/%.a/.h (but not libHalide).
-$(BIN_DIR)/$(TARGET)/generator_aot_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(RUNTIME_EXPORTED_INCLUDES) $$(GENERATOR_AOTTEST_DEPS) $$(GENERATOR_AOTTEST_RUNTIME_LIBS)
+$(BIN_DIR)/$(TARGET)/generator_aot_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(RUNTIME_EXPORTED_INCLUDES) $(FILTERS_DIR)/%.a $(FILTERS_DIR)/%.h $$(GENERATOR_AOTTEST_RUNTIME_LIBS)
 	@mkdir -p $(BIN_DIR)/$(TARGET)
 	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOTTEST_LD_FLAGS) -o $@
 
@@ -1125,26 +1119,23 @@ $(BIN_DIR)/$(TARGET)/generator_aotcpp_%: $(ROOT_DIR)/test/generator/%_aottest.cp
 	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOTTEST_LD_FLAGS) -o $@
 
 # By default, %_jittest.cpp depends on libHalide, plus the stubs for the Generator. These are external tests that use the JIT.
-$(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $$(GENERATOR_JITTEST_DEPS)
+$(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(FILTERS_DIR)/$*.stub.h $(BUILD_DIR)/$*_generator.o
 	$(CXX) -g $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support $(TEST_LD_FLAGS) -o $@
 
 # ------------------------------------------------------------------------------
 
 # also depends on cxx_mangling_gpu
-$(BIN_DIR)/$(TARGET)/generator_aot_cxx_mangling: GENERATOR_AOTTEST_DEPS += $(FILTERS_DIR)/cxx_mangling_gpu.a
+$(BIN_DIR)/$(TARGET)/generator_aot_cxx_mangling: $(FILTERS_DIR)/cxx_mangling_gpu.a
 
 # also depends on metadata_tester_ucon
-$(BIN_DIR)/$(TARGET)/generator_aot_metadata_tester: GENERATOR_AOTTEST_DEPS += $(FILTERS_DIR)/metadata_tester_ucon.a
+$(BIN_DIR)/$(TARGET)/generator_aot_metadata_tester: $(FILTERS_DIR)/metadata_tester_ucon.a
 
 # MSAN test doesn't use the standard runtime
 $(BIN_DIR)/$(TARGET)/generator_aot_msan: GENERATOR_AOTTEST_RUNTIME_LIBS=
 
 # depends on non-obvious set of deps
-$(BIN_DIR)/$(TARGET)/generator_aot_nested_externs: GENERATOR_AOTTEST_DEPS=\
-	$(FILTERS_DIR)/nested_externs_combine.a \
-	$(FILTERS_DIR)/nested_externs_inner.a \
-	$(FILTERS_DIR)/nested_externs_leaf.a \
-	$(FILTERS_DIR)/nested_externs_root.a
+$(FILTERS_DIR)/nested_externs.a: $(FILTERS_DIR)/nested_externs_combine.a $(FILTERS_DIR)/nested_externs_inner.a $(FILTERS_DIR)/nested_externs_leaf.a $(FILTERS_DIR)/nested_externs_root.a
+	$(GENERATOR_HALIDE_TOOLS_DIR)/makelib.sh $@ $^
 
 # The matlab tests needs "-matlab" in the runtime
 $(BIN_DIR)/$(TARGET)/generator_aot_matlab: GENERATOR_AOTTEST_RUNTIME_LIBS=$(BIN_DIR)/$(TARGET)-matlab/build/runtime.a
@@ -1153,8 +1144,7 @@ $(BIN_DIR)/$(TARGET)/generator_aot_acquire_release: GENERATOR_AOTTEST_LD_FLAGS +
 
 $(BIN_DIR)/$(TARGET)/generator_aot_define_extern_opencl: GENERATOR_AOTTEST_LD_FLAGS += $(OPENCL_LD_FLAGS)
 
-# TODO -- yuck
-$(BIN_DIR)/$(TARGET)/generator_aotcpp_external_code: GENERATOR_AOTTEST_DEPS=$(FILTERS_DIR)/external_code_cpp.a
+$(BIN_DIR)/$(TARGET)/generator_aotcpp_external_code: $(FILTERS_DIR)/external_code_cpp.a
 
 # generator_aot_multitarget is run multiple times, with different env vars.
 generator_aot_multitarget: $(BIN_DIR)/$(TARGET)/generator_aot_multitarget
