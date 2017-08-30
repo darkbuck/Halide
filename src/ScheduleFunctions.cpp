@@ -166,8 +166,9 @@ Stmt build_provide_loop_nest_helper(string func_name,
         Expr var = Variable::make(Int(32), dim_var);
         Expr max = Variable::make(Int(32), dim_var + ".loop_max");
         Expr min = Variable::make(Int(32), dim_var + ".loop_min");
-        // Use 'var' which bounds we're constraining as the container name, so
-        // that we can use it later to check if a LetStmt value depends on 'var'.
+        // Use 'var', the variable which bounds we're constraining as the
+        // container name, so that we can use it later to check if a LetStmt
+        // value depends on 'var'.
         Container c1 = {Container::IfInner, 0, dim_var, likely(var >= min)};
         Container c2 = {Container::IfInner, 0, dim_var, likely(var <= max)};
         nest.push_back(c1);
@@ -203,8 +204,8 @@ Stmt build_provide_loop_nest_helper(string func_name,
         }
     }
 
-    // Sort the predicate guards so they are as far outwards as possible.
-    // IfInnner should not be reordered to outside of a for loop.
+    // Sort the predicate guards for the fused loops so they are as far outwards
+    // as possible. IfInnner should not be reordered to outside of a for loop.
     for (int i = (int)nest.size() - n_predicates_inner - n_predicates; i < (int)nest.size() - n_predicates; i++) {
         // Only push up IfThenElse.
         internal_assert(nest[i].value.defined());
@@ -219,26 +220,9 @@ Stmt build_provide_loop_nest_helper(string func_name,
             // Try to push it up by one.
             internal_assert(nest[j+1].value.defined());
 
-            if (!expr_uses_var(nest[j+1].value, nest[j].name)) {
-                if (nest[j].type != Container::For) {
-                    std::swap(nest[j+1], nest[j]);
-                } else {
-                    // We need to duplicate all the LetStmts outside this for-loop that depend
-                    // on the variable constrained by this predicate; otherwise, it may mess up
-                    // with bounds_touched since some of the LetStmts depend on the fused vars.
-                    int count = 0;
-                    Scope<int> scope; // Use scope to track transitive dependencies.
-                    scope.push(nest[j+1].name, 0);
-                    for (int k = j-1; k >= 0; --k) {
-                        if ((nest[k].type == Container::Let) && (expr_uses_vars(nest[k].value, scope))) {
-                            scope.push(nest[k].name, 0);
-                            nest.insert(nest.begin() + j + 2, nest[k]);
-                            count += 1;
-                        }
-                    }
-                    i += count;
-                    break;
-                }
+            if (!expr_uses_var(nest[j+1].value, nest[j].name) &&
+                (nest[j].type != Container::For)) {
+                std::swap(nest[j+1], nest[j]);
             } else {
                 break;
             }
