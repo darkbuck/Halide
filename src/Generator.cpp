@@ -592,7 +592,7 @@ void StubEmitter::emit() {
         indent_level++;
         int commas = (int)out_info.size() - 1;
         for (const auto &out : out_info) {
-            stream << indent() << out.name << (commas-- ? "," : "") << "\n";
+            stream << indent() << "(Halide::Func) " << out.name << (commas-- ? "," : "") << "\n";
         }
         indent_level--;
         stream << indent() << "});\n";
