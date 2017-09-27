@@ -588,11 +588,11 @@ void StubEmitter::emit() {
     if (all_outputs_are_func) {
         stream << indent() << "Halide::Pipeline get_pipeline() const {\n";
         indent_level++;
-        stream << indent() << "return Halide::Pipeline({\n";
+        stream << indent() << "return Halide::Pipeline(std::vector<Halide::Func>{\n";
         indent_level++;
         int commas = (int)out_info.size() - 1;
         for (const auto &out : out_info) {
-            stream << indent() << "(Halide::Func) " << out.name << (commas-- ? "," : "") << "\n";
+            stream << indent() << out.name << (commas-- ? "," : "") << "\n";
         }
         indent_level--;
         stream << indent() << "});\n";
