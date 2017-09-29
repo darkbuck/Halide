@@ -174,7 +174,7 @@ float16_t::operator float() const {
     bool losesInfo = false;
     // Converting to a more precise type so the rounding mode does not matter, so
     // just pick any.
-#if LLVM_VERSION >= 40 
+#if LLVM_VERSION >= 40
     convertedValue.convert(llvm::APFloat::IEEEsingle(), llvm::APFloat::rmNearestTiesToEven, &losesInfo);
 #else
     convertedValue.convert(llvm::APFloat::IEEEsingle, llvm::APFloat::rmNearestTiesToEven, &losesInfo);
@@ -270,11 +270,7 @@ float16_t float16_t::mod(float16_t denominator, RoundingMode roundingMode) const
     // FIXME: Ignoring possible exceptions
     // LLVM removed the rounding mode as the operation is always exact.
     // TODO: change float16_t::mod to no take a rounding mode.
-    #if LLVM_VERSION < 38
-    result.mod(rhsAPF, getLLVMAPFRoundingMode(roundingMode));
-    #else
     result.mod(rhsAPF);
-    #endif
     return toFP16(result);
 }
 

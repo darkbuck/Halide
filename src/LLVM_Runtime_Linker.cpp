@@ -118,6 +118,8 @@ DECLARE_CPP_INITMOD(profiler)
 DECLARE_CPP_INITMOD(profiler_inlined)
 DECLARE_CPP_INITMOD(qurt_allocator)
 DECLARE_CPP_INITMOD(qurt_hvx)
+DECLARE_CPP_INITMOD(qurt_init_fini)
+DECLARE_CPP_INITMOD(qurt_thread_pool)
 DECLARE_CPP_INITMOD(runtime_api)
 DECLARE_CPP_INITMOD(ssp)
 DECLARE_CPP_INITMOD(thread_pool)
@@ -211,9 +213,11 @@ DECLARE_NO_INITMOD(powerpc_cpu_features)
 #ifdef WITH_HEXAGON
 DECLARE_LL_INITMOD(hvx_64)
 DECLARE_LL_INITMOD(hvx_128)
+DECLARE_CPP_INITMOD(hexagon_cpu_features)
 #else
 DECLARE_NO_INITMOD(hvx_64)
 DECLARE_NO_INITMOD(hvx_128)
+DECLARE_NO_INITMOD(hexagon_cpu_features)
 #endif  // WITH_HEXAGON
 
 namespace {
@@ -257,11 +261,7 @@ llvm::DataLayout get_data_layout_for_target(Target target) {
             if (target.os == Target::IOS) {
                 return llvm::DataLayout("e-m:o-i64:64-i128:128-n32:64-S128");
             } else {
-                #if LLVM_VERSION < 39
-                return llvm::DataLayout("e-m:e-i64:64-i128:128-n32:64-S128");
-                #else
                 return llvm::DataLayout("e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128");
-                #endif
             }
         }
     } else if (target.arch == Target::MIPS) {
@@ -419,14 +419,8 @@ void link_modules(std::vector<std::unique_ptr<llvm::Module>> &modules, Target t)
 
     // Link them all together
     for (size_t i = 1; i < modules.size(); i++) {
-        #if LLVM_VERSION >= 38
         bool failed = llvm::Linker::linkModules(*modules[0],
                                                 std::move(modules[i]));
-        #else
-        bool failed = llvm::Linker::LinkModules(modules[0].get(),
-                                                modules[i].release());
-        #endif
-
         if (failed) {
             internal_error << "Failure linking initial modules\n";
         }
@@ -474,12 +468,12 @@ void link_modules(std::vector<std::unique_ptr<llvm::Module>> &modules, Target t)
         }
 
         bool is_halide_extern_c_sym = Internal::starts_with(f.getName(), "halide_");
-        internal_assert(t.os == Target::NoOS || !is_halide_extern_c_sym || f.isWeakForLinker() || f.isDeclaration())
+        internal_assert(!is_halide_extern_c_sym || f.isWeakForLinker() || f.isDeclaration())
             << " for function " << (std::string)f.getName() << "\n";
         can_strip = can_strip && !is_halide_extern_c_sym;
 
         llvm::GlobalValue::LinkageTypes linkage = f.getLinkage();
-        if (can_strip || t.os == Target::NoOS) {
+        if (can_strip) {
             if (linkage == llvm::GlobalValue::WeakAnyLinkage) {
                 f.setLinkage(llvm::GlobalValue::LinkOnceAnyLinkage);
             } else if (linkage == llvm::GlobalValue::WeakODRLinkage) {
@@ -617,7 +611,8 @@ std::unique_ptr<llvm::Module> get_initial_module_for_target(Target t, llvm::LLVM
 
     //    Halide::Internal::debug(0) << "Getting initial module type " << (int)module_type << "\n";
 
-    internal_assert(t.bits == 32 || t.bits == 64);
+    internal_assert(t.bits == 32 || t.bits == 64)
+        << "Bad target: " << t.to_string();
     bool bits_64 = (t.bits == 64);
     bool debug = t.has_feature(Target::Debug);
 
@@ -688,18 +683,18 @@ std::unique_ptr<llvm::Module> get_initial_module_for_target(Target t, llvm::LLVM
                 modules.push_back(get_initmod_gcd_thread_pool(c, bits_64, debug));
             } else if (t.os == Target::QuRT) {
                 modules.push_back(get_initmod_qurt_allocator(c, bits_64, debug));
-                modules.push_back(get_initmod_posix_error_handler(c, bits_64, debug));
-                modules.push_back(get_initmod_posix_print(c, bits_64, debug));
-                modules.push_back(get_initmod_posix_get_symbol(c, bits_64, debug));
-                modules.push_back(get_initmod_posix_io(c, bits_64, debug));
-                // TODO: Replace fake thread pool with a real implementation.
-                modules.push_back(get_initmod_fake_thread_pool(c, bits_64, debug));
+                modules.push_back(get_initmod_qurt_thread_pool(c, bits_64, debug));
+                modules.push_back(get_initmod_qurt_init_fini(c, bits_64, debug));
             } else if (t.os == Target::NoOS) {
                 // The OS-specific symbols provided by the modules
                 // above are expected to be provided by the containing
                 // process instead at link time. Less aggressive than
                 // NoRuntime, as OS-agnostic modules like tracing are
                 // still included below.
+                if (t.arch == Target::Hexagon) {
+                    modules.push_back(get_initmod_qurt_allocator(c, bits_64, debug));
+                }
+                modules.push_back(get_initmod_fake_thread_pool(c, bits_64, debug));
             }
         }
 
@@ -724,9 +719,17 @@ std::unique_ptr<llvm::Module> get_initial_module_for_target(Target t, llvm::LLVM
         if (module_type != ModuleJITInlined && module_type != ModuleAOTNoRuntime) {
             // These modules are always used and shared
             modules.push_back(get_initmod_gpu_device_selection(c, bits_64, debug));
-            modules.push_back(get_initmod_tracing(c, bits_64, debug));
-            modules.push_back(get_initmod_write_debug_image(c, bits_64, debug));
-            modules.push_back(get_initmod_cache(c, bits_64, debug));
+            if (t.arch != Target::Hexagon) {
+                // These modules don't behave correctly on a real
+                // Hexagon device (they do work in the simulator
+                // though...).
+                modules.push_back(get_initmod_tracing(c, bits_64, debug));
+                modules.push_back(get_initmod_write_debug_image(c, bits_64, debug));
+
+                // TODO: Support this module in the Hexagon backend,
+                // currently generates assert at src/HexagonOffload.cpp:279
+                modules.push_back(get_initmod_cache(c, bits_64, debug));
+            }
             modules.push_back(get_initmod_to_string(c, bits_64, debug));
 
             modules.push_back(get_initmod_device_interface(c, bits_64, debug));
@@ -735,7 +738,8 @@ std::unique_ptr<llvm::Module> get_initial_module_for_target(Target t, llvm::LLVM
             modules.push_back(get_initmod_old_buffer_t(c, bits_64, debug));
             modules.push_back(get_initmod_errors(c, bits_64, debug));
 
-            if (t.arch != Target::MIPS && t.os != Target::NoOS) {
+            if (t.arch != Target::MIPS && t.os != Target::NoOS &&
+                t.os != Target::QuRT) {
                 // MIPS doesn't support the atomics the profiler requires.
                 modules.push_back(get_initmod_profiler(c, bits_64, debug));
             }
@@ -808,6 +812,9 @@ std::unique_ptr<llvm::Module> get_initial_module_for_target(Target t, llvm::LLVM
             }
             if (t.arch == Target::POWERPC) {
                 modules.push_back(get_initmod_powerpc_cpu_features(c, bits_64, debug));
+            }
+            if (t.arch == Target::Hexagon) {
+                modules.push_back(get_initmod_hexagon_cpu_features(c, bits_64, debug));
             }
         }
 
@@ -966,12 +973,7 @@ void add_bitcode_to_module(llvm::LLVMContext *context, llvm::Module &module,
     llvm::StringRef sb = llvm::StringRef((const char *)&bitcode[0], bitcode.size());
     std::unique_ptr<llvm::Module> add_in = parse_bitcode_file(sb, context, name.c_str());
 
-    #if LLVM_VERSION >= 38
     bool failed = llvm::Linker::linkModules(module, std::move(add_in));
-    #else
-    bool failed = llvm::Linker::LinkModules(&module, add_in.release());
-    #endif
-
     if (failed) {
         internal_error << "Failure linking in additional module: " << name << "\n";
     }
