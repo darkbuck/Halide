@@ -17,6 +17,8 @@ public:
     CodeGen_ARM(Target);
 
 protected:
+    void compile_func(const LoweredFunc &f,
+                      const std::string &simple_name, const std::string &extern_name);
 
     Expr sorted_avg(Expr a, Expr b);
 

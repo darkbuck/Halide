@@ -15,6 +15,7 @@
 #include "Simplify.h"
 #include "IRPrinter.h"
 #include "EliminateBoolVectors.h"
+#include "DynamicShuffle.h"
 #include "HexagonOptimize.h"
 #include "AlignLoads.h"
 #include "CSE.h"
@@ -197,7 +198,8 @@ void CodeGen_Hexagon::compile_func(const LoweredFunc &f,
     debug(1) << "Optimizing shuffles...\n";
     // vlut always indexes 64 bytes of the LUT at a time, even in 128 byte mode.
     const int lut_alignment = 64;
-    body = optimize_hexagon_shuffles(body, lut_alignment);
+    const int max_lut_size = 256;
+    body = find_dynamic_shuffles(body, UInt(8), max_lut_size, lut_alignment);
     debug(2) << "Lowering after optimizing shuffles:\n" << body << "\n\n";
 
     // Generating vtmpy before CSE and align_loads makes it easier to match
@@ -653,8 +655,9 @@ llvm::Function *CodeGen_Hexagon::define_hvx_intrinsic(llvm::Function *intrin, Ty
                         fn = module->getFunction("halide.hexagon.dup2.h");
                         break;
                     default:
-                        internal_error << "unhandled broadcast_scalar_word in define_hvx_intrinsic";
+                        internal_error << "unhandled broadcast_scalar_word in define_hvx_intrinsic for " << name;
                     }
+                    internal_assert(fn) << "unhandled broadcast_scalar_word in define_hvx_intrinsic for " << name;
                     args[i] = builder->CreateCall(fn, { args[i] });
                 } else if (args[i]->getType()->isIntegerTy()) {
                     args[i] = builder->CreateIntCast(args[i], arg_ty, arg_types[i].is_int());
@@ -1677,7 +1680,7 @@ void CodeGen_Hexagon::visit(const Call *op) {
                                 instr + type_suffix(op->args[0], b),
                                 {op->args[0], b});
             return;
-        } else if (op->is_intrinsic("dynamic_shuffle")) {
+        } else if (op->is_intrinsic(Call::dynamic_shuffle)) {
             internal_assert(op->args.size() == 4);
             const int64_t *min_index = as_const_int(op->args[2]);
             const int64_t *max_index = as_const_int(op->args[3]);

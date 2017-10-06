@@ -9,6 +9,7 @@
 #include "Debug.h"
 #include "Util.h"
 #include "Simplify.h"
+#include "DynamicShuffle.h"
 #include "IRPrinter.h"
 #include "LLVM_Headers.h"
 
@@ -226,6 +227,26 @@ CodeGen_ARM::CodeGen_ARM(Target target) : CodeGen_Posix(target) {
     negations.push_back(Pattern("vqneg.v16i8", "sqneg.v16i8", 16, -max(wild_i8x_, -127)));
     negations.push_back(Pattern("vqneg.v8i16", "sqneg.v8i16", 8,  -max(wild_i16x_, -32767)));
     negations.push_back(Pattern("vqneg.v4i32", "sqneg.v4i32", 4,  -max(wild_i32x_, -(0x7fffffff))));
+}
+
+void CodeGen_ARM::compile_func(const LoweredFunc &f,
+                               const string &simple_name, const string &extern_name) {
+    CodeGen_Posix::begin_func(f.linkage, simple_name, extern_name, f.args);
+
+    Stmt body = f.body;
+
+    debug(1) << "Optimizing shuffles...\n";
+    const int lut_alignment = 8;
+    const int max_lut_size = 64;
+    body = find_dynamic_shuffles(body, UInt(8), max_lut_size, lut_alignment);
+    debug(0) << "Lowering after optimizing shuffles:\n" << body << "\n\n";
+
+    debug(1) << "ARM function body:\n";
+    debug(1) << body << "\n";
+
+    body.accept(this);
+
+    CodeGen_Posix::end_func(f.args);
 }
 
 Value *CodeGen_ARM::call_pattern(const Pattern &p, Type t, const vector<Expr> &args) {
@@ -950,6 +971,29 @@ void CodeGen_ARM::visit(const Call *op) {
                 return;
             }
         }
+    } else if (op->is_intrinsic(Call::dynamic_shuffle)) {
+        internal_assert(op->args.size() == 4);
+        Value *lut = codegen(op->args[0]);
+        //int lut_size = lut->getType()->getVectorNumElements();
+        Value *index = codegen(op->args[1]);
+        const int64_t *min_index = as_const_int(op->args[2]);
+        const int64_t *max_index = as_const_int(op->args[3]);
+        internal_assert(min_index && max_index);
+
+        vector<Value*> args = {
+          slice_vector(lut, 0, 16),
+          slice_vector(lut, 16, 16),
+          slice_vector(lut, 32, 16),
+          slice_vector(lut, 48, 16),
+          index,
+        };
+
+        if (target.bits == 32) {
+          value = call_intrin(i8x16, 16, "llvm.arm.neon.vtbl4.v16i8", args);
+        } else {
+          value = call_intrin(i8x16, 16, "llvm.aarch64.neon.vtbl4.v16i8", args);
+        }
+        return;
     }
 
     CodeGen_Posix::visit(op);

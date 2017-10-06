@@ -278,6 +278,7 @@ set(HEADER_FILES
   Deinterleave.h
   DeviceArgument.h
   DeviceInterface.h
+  DynamicShuffle.h
   EarlyFree.h
   Elf.h
   EliminateBoolVectors.h
@@ -434,6 +435,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   Deinterleave.cpp
   DeviceArgument.cpp
   DeviceInterface.cpp
+  DynamicShuffle.cpp
   EarlyFree.cpp
   Elf.cpp
   EliminateBoolVectors.cpp
