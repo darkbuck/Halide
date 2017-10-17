@@ -989,9 +989,9 @@ void CodeGen_ARM::visit(const Call *op) {
         };
 
         if (target.bits == 32) {
-          value = call_intrin(i8x16, 16, "llvm.arm.neon.vtbl4.v16i8", args);
+          value = call_intrin(i8x16, 16, "llvm.arm.neon.tbl4.v16i8", args);
         } else {
-          value = call_intrin(i8x16, 16, "llvm.aarch64.neon.vtbl4.v16i8", args);
+          value = call_intrin(i8x16, 16, "llvm.aarch64.neon.tbl4.v16i8", args);
         }
         return;
     }
