@@ -83,7 +83,6 @@ class DynamicShuffle : public IRMutator {
         }
 
         Expr index = mutate(op->index);
-        debug(0) << index << "\n";
         Interval unaligned_index_bounds = bounds_of_expr_in_scope(index, bounds);
         if (unaligned_index_bounds.is_bounded()) {
             // We want to try both the unaligned and aligned
@@ -99,7 +98,6 @@ class DynamicShuffle : public IRMutator {
                 Expr index_span = span_of_bounds(index_bounds);
                 index_span = common_subexpression_elimination(index_span);
                 index_span = simplify(index_span);
-                debug(0) << "index_span: " << index_span << " " << max_size << "\n";
 
                 if (can_prove(index_span < max_size)) {
                     // This is a lookup within an up to max_size element array. We
