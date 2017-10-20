@@ -236,7 +236,7 @@ void CodeGen_ARM::compile_func(const LoweredFunc &f,
     Stmt body = f.body;
 
     debug(1) << "Optimizing shuffles...\n";
-    const int lut_alignment = 8;
+    const int lut_alignment = 4;
     const int max_lut_size = 64;
     body = find_dynamic_shuffles(body, UInt(8), max_lut_size, lut_alignment);
     debug(0) << "Lowering after optimizing shuffles:\n" << body << "\n\n";
@@ -944,6 +944,102 @@ void CodeGen_ARM::visit(const Load *op) {
     CodeGen_Posix::visit(op);
 }
 
+Value *CodeGen_ARM::tbl(Value *lut, Value *idx, int min_index, int max_index) {
+    llvm::Type *lut_ty = lut->getType();
+    llvm::Type *idx_ty = idx->getType();
+
+    internal_assert(isa<VectorType>(lut_ty));
+    internal_assert(isa<VectorType>(idx_ty));
+    internal_assert(idx_ty->getScalarSizeInBits() == 8);
+    internal_assert(min_index >= 0);
+    internal_assert(max_index <= 255);
+
+    if (lut_ty->getScalarSizeInBits() != 8) {
+        // Reinterpret this as a LUT operation with 8 bit indices.
+        int replicate_factor = lut_ty->getScalarSizeInBits() / 8;
+        llvm::Type *narrow_ty =
+            VectorType::get(i8_t, lut_ty->getVectorNumElements() * replicate_factor);
+        lut = builder->CreateBitOrPointerCast(lut, narrow_ty);
+
+        // Generate the new indices by splitting them in half until we
+        // have 8 bit indices.
+        Value *one = llvm::ConstantInt::get(idx_ty->getVectorElementType(), 1);
+        one = builder->CreateVectorSplat(idx_ty->getVectorNumElements(), one);
+        while (replicate_factor > 1) {
+            Value *idx_lo = builder->CreateShl(idx, 1);
+            Value *idx_hi = builder->CreateAdd(idx_lo, one);
+            idx = interleave_vectors({idx_hi, idx_lo});
+            min_index *= 2;
+            max_index *= 2;
+            replicate_factor /= 2;
+        }
+
+        Value *result = tbl(lut, idx, min_index, max_index);
+        llvm::Type *result_ty = VectorType::get(lut_ty->getVectorElementType(), idx_ty->getVectorNumElements());
+
+        return builder->CreateBitOrPointerCast(result, result_ty);
+    }
+
+    // There are two dimensions in which we need to slice up the
+    // inputs. First, if the index is larger than a native vector, we
+    // need to slice up the operation into native vectors of
+    // indices. Second, the LUT may need to be broken into several
+    // stages.
+
+    // Split up the LUT into native vectors, using the max_index to
+    // indicate how many we need.
+    max_index = std::min(max_index, static_cast<int>(lut_ty->getVectorNumElements()) - 1);
+
+    const int lut_slice_elements = 16;
+    vector<Value *> lut_slices;
+    for (int i = 0; i < max_index; i += lut_slice_elements) {
+        lut_slices.push_back(slice_vector(lut, i, lut_slice_elements));
+    }
+
+    // The result will have the same number of elements as idx.
+    const int idx_elements = idx_ty->getVectorNumElements();
+    const int native_idx_elements = 16;
+
+    vector<Value *> result;
+    for (int i = 0; i < idx_elements; i += native_idx_elements) {
+        Value *idx_i = slice_vector(idx, i, native_idx_elements);
+
+        Value *result_i = nullptr;
+        for (int j = 0; j < static_cast<int>(lut_slices.size()); j += 4) {
+            int slices = std::min(static_cast<int>(lut_slices.size()) - j, 4);
+
+            std::vector<Value*> args;
+            std::stringstream intrin;
+            if (target.bits == 32) {
+                intrin << "llvm.arm.neon.v";
+            } else {
+                intrin << "llvm.aarch64.neon.";
+            }
+            if (result_i == nullptr) {
+                // The first native LUT, use tbl.
+                intrin << "tbl";
+            } else {
+                // Extending a LUT, use tbx.
+                args.push_back(result_i);
+                intrin << "tbx";
+            }
+            intrin << slices;
+            intrin << ".v16i8";
+
+            for (int k = 0; k < slices; k++) {
+                args.push_back(lut_slices[j + k]);
+            }
+            args.push_back(idx_i);
+
+            result_i = call_intrin(i8x16, 16, intrin.str(), args);
+        }
+
+        result.push_back(result_i);
+    }
+
+    return slice_vector(concat_vectors(result), 0, idx_elements);
+}
+
 void CodeGen_ARM::visit(const Call *op) {
     if (op->is_intrinsic(Call::abs) && op->type.is_uint()) {
         internal_assert(op->args.size() == 1);
@@ -974,25 +1070,12 @@ void CodeGen_ARM::visit(const Call *op) {
     } else if (op->is_intrinsic(Call::dynamic_shuffle)) {
         internal_assert(op->args.size() == 4);
         Value *lut = codegen(op->args[0]);
-        //int lut_size = lut->getType()->getVectorNumElements();
         Value *index = codegen(op->args[1]);
         const int64_t *min_index = as_const_int(op->args[2]);
         const int64_t *max_index = as_const_int(op->args[3]);
         internal_assert(min_index && max_index);
 
-        vector<Value*> args = {
-          slice_vector(lut, 0, 16),
-          slice_vector(lut, 16, 16),
-          slice_vector(lut, 32, 16),
-          slice_vector(lut, 48, 16),
-          index,
-        };
-
-        if (target.bits == 32) {
-          value = call_intrin(i8x16, 16, "llvm.arm.neon.tbl4.v16i8", args);
-        } else {
-          value = call_intrin(i8x16, 16, "llvm.aarch64.neon.tbl4.v16i8", args);
-        }
+        value = tbl(lut, index, *min_index, *max_index);
         return;
     }
 
