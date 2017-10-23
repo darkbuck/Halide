@@ -947,6 +947,7 @@ void CodeGen_ARM::visit(const Load *op) {
 Value *CodeGen_ARM::tbl(Value *lut, Value *idx, int min_index, int max_index) {
     llvm::Type *lut_ty = lut->getType();
     llvm::Type *idx_ty = idx->getType();
+    llvm::Type *result_ty = VectorType::get(lut_ty->getVectorElementType(), idx_ty->getVectorNumElements());
 
     internal_assert(isa<VectorType>(lut_ty));
     internal_assert(isa<VectorType>(idx_ty));
@@ -963,9 +964,10 @@ Value *CodeGen_ARM::tbl(Value *lut, Value *idx, int min_index, int max_index) {
 
         // Generate the new indices by splitting them in half until we
         // have 8 bit indices.
-        Value *one = llvm::ConstantInt::get(idx_ty->getVectorElementType(), 1);
-        one = builder->CreateVectorSplat(idx_ty->getVectorNumElements(), one);
         while (replicate_factor > 1) {
+            idx_ty = idx->getType();
+            Value *one = llvm::ConstantInt::get(idx_ty->getVectorElementType(), 1);
+            one = builder->CreateVectorSplat(idx_ty->getVectorNumElements(), one);
             Value *idx_lo = builder->CreateShl(idx, 1);
             Value *idx_hi = builder->CreateAdd(idx_lo, one);
             idx = interleave_vectors({idx_hi, idx_lo});
@@ -975,8 +977,6 @@ Value *CodeGen_ARM::tbl(Value *lut, Value *idx, int min_index, int max_index) {
         }
 
         Value *result = tbl(lut, idx, min_index, max_index);
-        llvm::Type *result_ty = VectorType::get(lut_ty->getVectorElementType(), idx_ty->getVectorNumElements());
-
         return builder->CreateBitOrPointerCast(result, result_ty);
     }
 
