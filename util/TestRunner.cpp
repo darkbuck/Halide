@@ -186,7 +186,7 @@ int main(int argc, char * const *argv) {
     }
 
     std::string fname = test_executable;
-    std::replace_if(fname.begin(), fname.end(), [](int i) -> bool { return i == '\\'; }, '/');
+    std::transform(fname.begin(), fname.end(), fname.begin(), [](int i) -> int { return i == '\\' ? '/' : i; });
     size_t last_of = fname.find_last_of("/");
     if (last_of != std::string::npos) {
         fname = fname.substr(last_of + 1);
