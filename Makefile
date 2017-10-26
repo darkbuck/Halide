@@ -1362,15 +1362,20 @@ $(BIN_DIR)/tutorial_lesson_21_auto_scheduler_run: $(ROOT_DIR)/tutorial/lesson_21
         -lHalide $(TEST_LD_FLAGS) $(COMMON_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
 	@-echo
 
-test_internal: $(BIN_DIR)/test_internal
-	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$<
-	@-echo
+$(BIN_DIR)/TestRunner: $(ROOT_DIR)/util/TestRunner.cpp
+	$(CXX) $(OPTIMIZE) -std=c++11 $^ -L$(BIN_DIR) -o $@
 
-correctness_%: $(BIN_DIR)/correctness_%
+EXPECT_ERROR = $(BIN_DIR)/TestRunner --dir $(TMP_DIR) --error
+EXPECT_WARNING = $(BIN_DIR)/TestRunner --dir $(TMP_DIR) --warning
+EXPECT_SUCCESS = $(BIN_DIR)/TestRunner --dir $(TMP_DIR) --success --echo_output
+
+test_internal: $(BIN_DIR)/test_internal $(BIN_DIR)/TestRunner
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$<
-	@-echo
+	$(EXPECT_SUCCESS) $(CURDIR)/$<
+
+correctness_%: $(BIN_DIR)/correctness_% $(BIN_DIR)/TestRunner
+	@-mkdir -p $(TMP_DIR)
+	$(EXPECT_SUCCESS) $(CURDIR)/$<
 
 valgrind_%: $(BIN_DIR)/correctness_%
 	@-mkdir -p $(TMP_DIR)
@@ -1390,40 +1395,33 @@ valgrind_tracing_stack: $(BIN_DIR)/correctness_tracing_stack
 	cd $(TMP_DIR) ; $(CURDIR)/$(BIN_DIR)/correctness_tracing_stack
 	@-echo
 
-performance_%: $(BIN_DIR)/performance_%
+performance_%: $(BIN_DIR)/performance_% $(BIN_DIR)/TestRunner
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$<
-	@-echo
+	$(EXPECT_SUCCESS) $(CURDIR)/$<
 
-error_%: $(BIN_DIR)/error_%
+error_%: $(BIN_DIR)/error_% $(BIN_DIR)/TestRunner
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$< 2>&1 | egrep --q "terminating with uncaught exception|^terminate called|^Error|Assertion.*failed"
-	@-echo
+	$(EXPECT_ERROR) $(CURDIR)/$<
 
-warning_%: $(BIN_DIR)/warning_%
+warning_%: $(BIN_DIR)/warning_% $(BIN_DIR)/TestRunner
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$< 2>&1 | egrep --q "^Warning"
-	@-echo
+	$(EXPECT_WARNING) $(CURDIR)/$<
 
-opengl_%: $(BIN_DIR)/opengl_%
+opengl_%: $(BIN_DIR)/opengl_% $(BIN_DIR)/TestRunner
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$< 2>&1
-	@-echo
+	$(EXPECT_SUCCESS) $(CURDIR)/$<
 
-generator_jit_%: $(BIN_DIR)/generator_jit_%
+generator_jit_%: $(BIN_DIR)/generator_jit_% $(BIN_DIR)/TestRunner
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$<
-	@-echo
+	$(EXPECT_SUCCESS) $(CURDIR)/$<
 
-generator_aot_%: $(BIN_DIR)/$(TARGET)/generator_aot_%
+generator_aot_%: $(BIN_DIR)/$(TARGET)/generator_aot_% $(BIN_DIR)/TestRunner
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$<
-	@-echo
+	$(EXPECT_SUCCESS) $(CURDIR)/$<
 
-generator_aotcpp_%: $(BIN_DIR)/$(TARGET)/generator_aotcpp_%
+generator_aotcpp_%: $(BIN_DIR)/$(TARGET)/generator_aotcpp_% $(BIN_DIR)/TestRunner
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$<
-	@-echo
+	$(EXPECT_SUCCESS) $(CURDIR)/$<
 
 $(TMP_DIR)/images/%.png: $(ROOT_DIR)/tutorial/images/%.png
 	@-mkdir -p $(TMP_DIR)/images
@@ -1434,10 +1432,9 @@ tutorial_%: $(BIN_DIR)/tutorial_% $(TMP_DIR)/images/rgb.png $(TMP_DIR)/images/gr
 	cd $(TMP_DIR) ; $(CURDIR)/$<
 	@-echo
 
-auto_schedule_%: $(BIN_DIR)/auto_schedule_%
+auto_schedule_%: $(BIN_DIR)/auto_schedule_% $(BIN_DIR)/TestRunner
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$<
-	@-echo
+	$(EXPECT_SUCCESS) $(CURDIR)/$<
 
 time_compilation_test_%: $(BIN_DIR)/test_%
 	$(TIME_COMPILATION) compile_times_correctness.csv make -f $(THIS_MAKEFILE) $(@:time_compilation_test_%=test_%)
