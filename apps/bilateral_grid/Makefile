@@ -31,7 +31,7 @@ $(BIN)/bilateral_grid.mp4: $(BIN)/filter_viz viz.sh
 
 $(BIN)/out.png: $(BIN)/filter
 	@mkdir -p $(@D)
-	$(BIN)/filter $(IMAGES)/gray.png $(BIN)/out.png 0.1 10
+	$(BIN)/filter $(IMAGES)/gray.png $(BIN)/out.png 0.1
 
 clean:
 	rm -rf $(BIN)

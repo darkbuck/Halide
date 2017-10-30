@@ -133,11 +133,7 @@ int main(int argc, char **argv) {
     // For a description of the methodology used here, see
     // http://www.fftw.org/speed/method.html
 
-    // Take the minimum time over many of iterations to minimize
-    // noise.
-    const int samples = 100;
     const int reps = 1000;
-
     Var rep("rep");
 
     Buffer<float> re_in = lambda(x, y, 0.0f).realize(W, H);
@@ -163,12 +159,12 @@ int main(int argc, char **argv) {
     R_c2c[0].raw_buffer()->dim[2].stride = 0;
     R_c2c[1].raw_buffer()->dim[2].stride = 0;
 
-    double halide_t = benchmark(samples, 1, [&]() { bench_c2c.realize(R_c2c); })*1e6/reps;
+    double halide_t = benchmark([&]() { bench_c2c.realize(R_c2c); })*1e6/reps;
 #ifdef WITH_FFTW
     std::vector<std::pair<float, float>> fftw_c1(W * H);
     std::vector<std::pair<float, float>> fftw_c2(W * H);
     fftwf_plan c2c_plan = fftwf_plan_dft_2d(W, H, (fftwf_complex*)&fftw_c1[0], (fftwf_complex*)&fftw_c2[0], FFTW_FORWARD, FFTW_EXHAUSTIVE);
-    double fftw_t = benchmark(samples, reps, [&]() { fftwf_execute(c2c_plan); })*1e6;
+    double fftw_t = benchmark([&]() { fftwf_execute(c2c_plan); })*1e6;
 #else
     double fftw_t = 0;
 #endif
@@ -190,11 +186,11 @@ int main(int argc, char **argv) {
     R_r2c[0].raw_buffer()->dim[2].stride = 0;
     R_r2c[1].raw_buffer()->dim[2].stride = 0;
 
-    halide_t = benchmark(samples, 1, [&]() { bench_r2c.realize(R_r2c); })*1e6/reps;
+    halide_t = benchmark([&]() { bench_r2c.realize(R_r2c); })*1e6/reps;
 #ifdef WITH_FFTW
     std::vector<float> fftw_r(W * H);
     fftwf_plan r2c_plan = fftwf_plan_dft_r2c_2d(W, H, &fftw_r[0], (fftwf_complex*)&fftw_c1[0], FFTW_EXHAUSTIVE);
-    fftw_t = benchmark(samples, reps, [&]() { fftwf_execute(r2c_plan); })*1e6;
+    fftw_t = benchmark([&]() { fftwf_execute(r2c_plan); })*1e6;
 #else
     fftw_t = 0;
 #endif
@@ -215,10 +211,10 @@ int main(int argc, char **argv) {
     // Write all reps to the same place in memory. See notes on R_c2c.
     R_c2r[0].raw_buffer()->dim[2].stride = 0;
 
-    halide_t = benchmark(samples, 1, [&]() { bench_c2r.realize(R_c2r); })*1e6/reps;
+    halide_t = benchmark([&]() { bench_c2r.realize(R_c2r); })*1e6/reps;
 #ifdef WITH_FFTW
     fftwf_plan c2r_plan = fftwf_plan_dft_c2r_2d(W, H, (fftwf_complex*)&fftw_c1[0], &fftw_r[0], FFTW_EXHAUSTIVE);
-    fftw_t = benchmark(samples, reps, [&]() { fftwf_execute(c2r_plan); })*1e6;
+    fftw_t = benchmark([&]() { fftwf_execute(c2r_plan); })*1e6;
 #else
     fftw_t = 0;
 #endif

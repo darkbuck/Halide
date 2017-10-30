@@ -22,7 +22,7 @@ $(BIN)/process: process.cpp $(BIN)/nl_means.a $(BIN)/nl_means_auto_schedule.a
 
 $(BIN)/out.png: $(BIN)/process
 	@-mkdir -p $(BIN)
-	$(BIN)/process $(IMAGES)/rgb.png 7 7 0.12 10 $(BIN)/out.png
+	$(BIN)/process $(IMAGES)/rgb.png 7 7 0.12 $(BIN)/out.png
 
 clean:
 	rm -rf $(BIN)
