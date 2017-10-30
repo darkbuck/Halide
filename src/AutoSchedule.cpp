@@ -1082,19 +1082,23 @@ struct Partitioner {
 
     // Partition the pipeline by iteratively merging groups until a fixpoint is
     // reached.
-    void group(Partitioner::Level level, bool recurse);
+    void group(Partitioner::Level level);
+    void group_recurse();
 
     // Given a grouping choice, return a configuration for the group that gives
     // the highest estimated benefits.
-    GroupConfig evaluate_choice(const GroupingChoice &group, Partitioner::Level level, bool recurse);
+    GroupConfig evaluate_choice(const GroupingChoice &group, Partitioner::Level level);
+    GroupConfig evaluate_choice_recurse(const GroupingChoice &group);
 
     // Pick the best choice among all the grouping options currently available. Uses
     // the cost model to estimate the benefit of each choice. This returns a vector of
     // choice and configuration pairs which describe the best grouping choice.
     vector<pair<GroupingChoice, GroupConfig>>
     choose_candidate_grouping(const vector<pair<string, string>> &cands,
-                              Partitioner::Level level,
-                              bool recurse);
+                              Partitioner::Level level);
+
+    vector<pair<GroupingChoice, GroupConfig>>
+    choose_candidate_grouping_recurse(const vector<pair<string, string>> &cands);
 
     // Return the bounds required to produce a function stage.
     DimBounds get_bounds(const FStage &stg);
@@ -1440,8 +1444,64 @@ map<string, Expr> Partitioner::evaluate_reuse(const FStage &stg,
 
 vector<pair<Partitioner::GroupingChoice, Partitioner::GroupConfig>>
 Partitioner::choose_candidate_grouping(const vector<pair<string, string>> &cands,
-                                       Partitioner::Level level,
-                                       bool recurse) {
+                                       Partitioner::Level level) {
+    vector<pair<GroupingChoice, GroupConfig>> best_grouping;
+    Expr best_benefit = make_zero(Int(64));
+    for (const auto &p : cands) {
+        // Compute the aggregate benefit of inlining into all the children.
+        vector<pair<GroupingChoice, GroupConfig>> grouping;
+
+        const Function &prod_f = get_element(dep_analysis.env, p.first);
+        int final_stage = prod_f.updates().size();
+
+        FStage prod(prod_f, final_stage);
+
+        for (const FStage &c : get_element(children, prod)) {
+            GroupConfig best_config;
+            GroupingChoice cand_choice(prod_f.name(), c);
+
+            // Check if the candidate has been evaluated for grouping before
+            const auto &iter = grouping_cache.find(cand_choice);
+            if (iter != grouping_cache.end()) {
+                best_config = iter->second;
+            } else {
+                best_config = evaluate_choice(cand_choice, level);
+                // Cache the result of the evaluation for the pair
+                grouping_cache.emplace(cand_choice, best_config);
+            }
+
+            grouping.push_back(make_pair(cand_choice, best_config));
+        }
+
+        bool no_redundant_work = false;
+        Expr overall_benefit = estimate_benefit(grouping, no_redundant_work, true);
+
+        debug(3) << "\nCandidate grouping:\n";
+        for (const auto &g : grouping) {
+            debug(3) << "  " << g.first;
+        }
+        debug(3) << "Candidate benefit: " << overall_benefit << '\n';
+        // TODO: The grouping process can be non-deterministic when the costs
+        // of two choices are equal
+        if (overall_benefit.defined() && can_prove(best_benefit < overall_benefit)) {
+            best_grouping = grouping;
+            best_benefit = overall_benefit;
+        }
+    }
+
+    debug(3) << "\nBest grouping:\n";
+    for (const auto &g : best_grouping) {
+        debug(3) << "  " << g.first;
+    }
+    if (best_grouping.size() > 0) {
+        debug(3) << "Best benefit: " << best_benefit << '\n';
+    }
+
+    return best_grouping;
+}
+
+vector<pair<Partitioner::GroupingChoice, Partitioner::GroupConfig>>
+Partitioner::choose_candidate_grouping_recurse(const vector<pair<string, string>> &cands) {
     vector<pair<GroupingChoice, GroupConfig>> best_grouping;
     Expr best_benefit = make_zero(Int(64));
     debug(0) << "\n\n*****************\n";
@@ -1463,7 +1523,7 @@ Partitioner::choose_candidate_grouping(const vector<pair<string, string>> &cands
             if (iter != grouping_cache.end()) {
                 best_config = iter->second;
             } else {
-                best_config = evaluate_choice(cand_choice, level, recurse);
+                best_config = evaluate_choice_recurse(cand_choice);
                 // Cache the result of the evaluation for the pair
                 grouping_cache.emplace(cand_choice, best_config);
             }
@@ -1709,7 +1769,7 @@ vector<pair<string, string>> Partitioner::get_grouping_candidate(
     return cand;
 }
 
-void Partitioner::group(Partitioner::Level level, bool recurse) {
+void Partitioner::group(Partitioner::Level level) {
     bool fixpoint = false;
     while (!fixpoint) {
         fixpoint = true;
@@ -1722,7 +1782,7 @@ void Partitioner::group(Partitioner::Level level, bool recurse) {
             debug(3) << "{" << cand[i].first << ", " << cand[i].second << "}" << '\n';
         }
 
-        vector<pair<GroupingChoice, GroupConfig>> best = choose_candidate_grouping(cand, level, recurse);
+        vector<pair<GroupingChoice, GroupConfig>> best = choose_candidate_grouping(cand, level);
         if (best.empty()) {
             continue;
         } else {
@@ -1756,6 +1816,84 @@ void Partitioner::group(Partitioner::Level level, bool recurse) {
         for (const auto &group : best) {
             internal_assert(group.first.prod == prod);
             merge_groups(group.first, group.second, level);
+        }
+
+        for (size_t s = 0; s < num_stages; s++) {
+            FStage prod_group(prod_f, s);
+            groups.erase(prod_group);
+            group_costs.erase(prod_group);
+
+            // Update the children mapping
+            children.erase(prod_group);
+            for (auto &f : children) {
+                set<FStage> &cons = f.second;
+                auto iter = cons.find(prod_group);
+                if (iter != cons.end()) {
+                    cons.erase(iter);
+                    // For a function with multiple stages, all the stages will
+                    // be in the same group and the consumers of the function
+                    // only depend on the last stage. Therefore, when the
+                    // producer group has multiple stages, parents of the
+                    // producers should point to the consumers of the last
+                    // stage of the producer.
+                    cons.insert(prod_group_children.begin(), prod_group_children.end());
+                }
+            }
+        }
+
+        if (debug::debug_level() >= 3) {
+            disp_pipeline_costs();
+        }
+    }
+}
+
+void Partitioner::group_recurse() {
+    bool fixpoint = false;
+    while (!fixpoint) {
+        fixpoint = true;
+        vector<pair<string, string>> cand = get_grouping_candidate(groups, outputs, Partitioner::Level::FastMem);
+
+        debug(3) << "\n============================" << '\n';
+        debug(3) << "Current grouping candidates:" << '\n';
+        debug(3) << "============================" << '\n';
+        for (size_t i = 0; i < cand.size(); ++i) {
+            debug(3) << "{" << cand[i].first << ", " << cand[i].second << "}" << '\n';
+        }
+
+        vector<pair<GroupingChoice, GroupConfig>> best = choose_candidate_grouping_recurse(cand);
+        if (best.empty()) {
+            continue;
+        } else {
+            fixpoint = false;
+        }
+
+        // The following code makes the assumption that all the stages of a function
+        // will be in the same group. 'choose_candidate_grouping' ensures that the
+        // grouping choice being returned adheres to this constraint.
+        const string &prod = best[0].first.prod;
+
+        const Function &prod_f = get_element(dep_analysis.env, prod);
+        size_t num_stages = prod_f.updates().size() + 1;
+
+        FStage final_stage(prod_f, num_stages - 1);
+        set<FStage> prod_group_children = get_element(children, final_stage);
+
+        // Invalidate entries of the grouping cache
+        set<GroupingChoice> invalid_keys;
+        for (const auto &c : prod_group_children) {
+            for (const auto &entry : grouping_cache) {
+                if ((entry.first.prod == c.func.name()) || (entry.first.cons == c)) {
+                    invalid_keys.insert(entry.first);
+                }
+            }
+        }
+        for (const auto &key : invalid_keys) {
+            grouping_cache.erase(key);
+        }
+
+        for (const auto &group : best) {
+            internal_assert(group.first.prod == prod);
+            merge_groups(group.first, group.second, Partitioner::Level::FastMem);
         }
 
         for (size_t s = 0; s < num_stages; s++) {
@@ -2125,8 +2263,7 @@ void Partitioner::merge_groups(const GroupingChoice &choice, const GroupConfig &
 }
 
 Partitioner::GroupConfig Partitioner::evaluate_choice(const GroupingChoice &choice,
-                                                      Partitioner::Level level,
-                                                      bool recurse) {
+                                                      Partitioner::Level level) {
     // Create a group that reflects the grouping choice and evaluate the cost
     // of the group.
     const Function &prod_f = get_element(dep_analysis.env, choice.prod);
@@ -2178,56 +2315,85 @@ Partitioner::GroupConfig Partitioner::evaluate_choice(const GroupingChoice &choi
         pair<map<string, Expr>, GroupAnalysis> config = find_best_tile_config(group);
         best_tile_config = config.first;
         group_analysis = config.second;
-
-        // TODO(psuriana): The subgrouping probably should use the tile size
-        // to compute the region cost
-        // TODO(psuriana): Should we recurse if the cost is undefined?
-        if (group_analysis.cost.defined() && recurse) {
-            Partitioner part = *this;
-            // Add the group output to the 'outputs' list.
-            part.outputs.push_back(group.output.func);
-
-            debug(0) << "Recurse partitioning into subgroup...\n";
-            part.grouping_cache.clear();
-            part.group(Partitioner::Level::FastMem, false);
-
-            debug(0) << "\n\n*******\nRECURSE:\n";
-            part.disp_grouping();
-            part.disp_pipeline_costs();
-
-            GroupAnalysis total(Cost(0, 0), make_zero(Int(64)));
-            for (const pair<FStage, Group> &g : part.groups) {
-                const GroupAnalysis &analysis = get_element(part.group_costs, g.first);
-                if (!total.cost.arith.defined()) {
-                    continue;
-                } else if (!total.cost.arith.defined()) {
-                    total.cost.arith = Expr();
-                } else {
-                    total.cost.arith += analysis.cost.arith;
-                }
-
-                if (!total.cost.memory.defined()) {
-                    continue;
-                } else if (!total.cost.memory.defined()) {
-                    total.cost.memory = Expr();
-                } else {
-                    total.cost.memory += analysis.cost.memory;
-                }
-                // TODO(psuriana): what is the parallelism?
-                if (analysis.parallelism.defined()) {
-                    total.parallelism = max(total.parallelism, analysis.parallelism);
-                }
-            }
-            total.simplify();
-            debug(0) << "TOTAL: " << total << "\n";
-            debug(0) << "**********************\n\n";
-            internal_assert(total.cost.defined());
-            group_analysis = total;
-        }
     }
 
     return GroupConfig(best_tile_config, group_analysis);
 }
+
+Partitioner::GroupConfig Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
+    // Create a group that reflects the grouping choice and evaluate the cost
+    // of the group.
+    const Function &prod_f = get_element(dep_analysis.env, choice.prod);
+    int num_prod_stages = prod_f.updates().size() + 1;
+    vector<Group> prod_groups;
+
+    for (int s = 0; s < num_prod_stages; s++) {
+        FStage prod_s(prod_f, s);
+        prod_groups.push_back(get_element(groups, prod_s));
+    }
+
+    Group cons = get_element(groups, choice.cons);
+    Group group = cons;
+    for (const auto &prod_g : prod_groups) {
+        group = merge_groups(prod_g, group);
+    }
+
+    GroupAnalysis group_analysis;
+    map<string, Expr> best_tile_config;
+
+    pair<map<string, Expr>, GroupAnalysis> config = find_best_tile_config(group);
+    best_tile_config = config.first;
+    group_analysis = config.second;
+
+    // TODO(psuriana): The subgrouping probably should use the tile size
+    // to compute the region cost
+    // TODO(psuriana): Should we recurse if the cost is undefined?
+    if (group_analysis.cost.defined()) {
+        Partitioner part = *this;
+        // Add the group output to the 'outputs' list.
+        //part.outputs.push_back(group.output.func);
+
+        debug(0) << "Recurse partitioning into subgroup...\n";
+        part.grouping_cache.clear();
+        part.group(Partitioner::Level::FastMem);
+
+        debug(0) << "\n\n*******\nRECURSE:\n";
+        part.disp_grouping();
+        part.disp_pipeline_costs();
+
+        GroupAnalysis total(Cost(0, 0), make_zero(Int(64)));
+        for (const pair<FStage, Group> &g : part.groups) {
+            const GroupAnalysis &analysis = get_element(part.group_costs, g.first);
+            if (!total.cost.arith.defined()) {
+                continue;
+            } else if (!total.cost.arith.defined()) {
+                total.cost.arith = Expr();
+            } else {
+                total.cost.arith += analysis.cost.arith;
+            }
+
+            if (!total.cost.memory.defined()) {
+                continue;
+            } else if (!total.cost.memory.defined()) {
+                total.cost.memory = Expr();
+            } else {
+                total.cost.memory += analysis.cost.memory;
+            }
+            // TODO(psuriana): what is the parallelism?
+            if (analysis.parallelism.defined()) {
+                total.parallelism = max(total.parallelism, analysis.parallelism);
+            }
+        }
+        total.simplify();
+        debug(0) << "TOTAL: " << total << "\n";
+        debug(0) << "**********************\n\n";
+        internal_assert(total.cost.defined());
+        group_analysis = total;
+    }
+
+    return GroupConfig(best_tile_config, group_analysis);
+}
+
 
 Expr Partitioner::estimate_benefit(const GroupAnalysis &old_grouping,
                                    const GroupAnalysis &new_grouping,
@@ -3525,14 +3691,14 @@ string generate_schedules(const vector<Function> &outputs, const Target &target,
     }
 
     debug(0) << "Partitioner computing inline group...\n";
-    part.group(Partitioner::Level::Inline, true);
+    part.group(Partitioner::Level::Inline);
     if (debug::debug_level() >= 3) {
         part.disp_grouping();
     }
 
     debug(0) << "Partitioner computing fast-mem group...\n";
     part.grouping_cache.clear();
-    part.group(Partitioner::Level::FastMem, true);
+    part.group_recurse();
     if (debug::debug_level() >= 3) {
         part.disp_pipeline_costs();
         part.disp_grouping();
