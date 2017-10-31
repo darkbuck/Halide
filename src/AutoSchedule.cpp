@@ -1039,7 +1039,7 @@ struct Partitioner {
 
     // Bounds of each function stage in the pipeline. These bounds are inferred from the
     // estimates of the outputs and other functions in the pipeline.
-    const map<string, Box> &pipeline_bounds;
+    map<string, Box> pipeline_bounds;
     // Parameters of the machine model that is used for estimating the cost of each
     // group in the pipeline.
     const MachineParams &arch_params;
@@ -1518,15 +1518,8 @@ Partitioner::choose_candidate_grouping_recurse(const vector<pair<string, string>
             GroupConfig best_config;
             GroupingChoice cand_choice(prod_f.name(), c);
 
-            // Check if the candidate has been evaluated for grouping before
-            const auto &iter = grouping_cache.find(cand_choice);
-            if (iter != grouping_cache.end()) {
-                best_config = iter->second;
-            } else {
-                best_config = evaluate_choice_recurse(cand_choice);
-                // Cache the result of the evaluation for the pair
-                grouping_cache.emplace(cand_choice, best_config);
-            }
+            // TODO(psuriana): use cache here?
+            best_config = evaluate_choice_recurse(cand_choice);
 
             grouping.push_back(make_pair(cand_choice, best_config));
         }
@@ -1956,6 +1949,7 @@ DimBounds Partitioner::get_bounds_from_tile_sizes(const FStage &s,
             Expr extent = get_extent(bound);
             internal_assert(extent.defined());
             if (can_prove(extent >= 2 * size)) {
+                // TODO(psuriana): Check for shift invariant
                 // TODO: Maybe shift this to the center of the pipeline bound
                 bounds[var] = Interval(0, simplify(size - 1));
             } else {
@@ -2349,46 +2343,128 @@ Partitioner::GroupConfig Partitioner::evaluate_choice_recurse(const GroupingChoi
     // to compute the region cost
     // TODO(psuriana): Should we recurse if the cost is undefined?
     if (group_analysis.cost.defined()) {
+        //Partitioner part(pipeline_bounds, arch_params, dep_analysis, costs, outputs, unbounded);
+
         Partitioner part = *this;
         // Add the group output to the 'outputs' list.
-        //part.outputs.push_back(group.output.func);
+        part.outputs = {group.output.func};
 
-        debug(0) << "Recurse partitioning into subgroup...\n";
-        part.grouping_cache.clear();
+        part.groups.clear();
+        for (const FStage &stg : group.members) {
+            if (group.inlined.count(stg.func.name())) {
+                // Skip inlined function
+                debug(0) << "......SKIP INLINED FUNCTION: " << stg.func.name() << "\n";
+                continue;
+            }
+            Group g(stg, {stg});
+            part.groups.insert(make_pair(stg, g));
+        }
+
+        // TODO(psuriana): need to use the tile size to recompute the bounds.
+        // This is not really efficient.
+
+        debug(0) << "\n***BEFORE CLEAR BOUNDS:\n";
+        for (const auto &iter : part.pipeline_bounds) {
+            debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
+        }
+        debug(0) << "\n";
+
+        part.pipeline_bounds.clear();
+
+        // Find the regions required for each of the outputs and merge them
+        // to compute the full pipeline_bounds.
+        {
+            Function out = group.output.func;
+            DimBounds pure_bounds;
+            Box out_box;
+
+            if (out.name() == group.output.func.name()) {
+                Definition def = get_stage_definition(group.output.func, group.output.stage_num);
+                const vector<Dim> &dims = def.schedule().dims();
+                for (int d = 0; d < (int)dims.size() - 1; d++) {
+                    if (!dims[d].is_rvar()) {
+                        const auto &iter = best_tile_config.find(dims[d].var);
+                        Expr tile_size = 1;
+                        if (iter != best_tile_config.end()) {
+                            tile_size = iter->second;
+                        }
+                        Interval I = Interval(make_zero(tile_size.type()), tile_size);
+                        pure_bounds.emplace(dims[d].var, I);
+                        out_box.push_back(I);
+                    }
+                }
+            }
+
+            set<string> prods;
+            for (const FStage &stg : group.members) {
+                prods.insert(stg.func.name());
+            }
+
+            /*debug(0) << "Prod: ";
+            for (const auto &s : prods) {
+                debug(0) << s << "\n";
+            }
+            debug(0) << "\n";*/
+            map<string, Box> regions = dep_analysis.regions_required(out, pure_bounds, prods,
+                                                                     false, &costs.input_estimates);
+
+            // Add the output region to the pipeline bounds as well.
+            regions.emplace(out.name(), out_box);
+
+            merge_regions(part.pipeline_bounds, regions);
+        }
+
+        debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
+        for (const auto &iter : part.pipeline_bounds) {
+            debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
+        }
+        debug(0) << "\n";
+
+        part.initialize_groups();
+
+
+        /*debug(0) << "Recurse partitioning into subgroup...\n";
+        debug(0) << "\n\n***CURRENT GROUP:\n";
+        debug(0) << group;*/
+
         part.group(Partitioner::Level::FastMem);
 
-        debug(0) << "\n\n*******\nRECURSE:\n";
+        debug(0) << "\n\n*******\nRECURSE OUTPUT: " << group.output << "\n";
         part.disp_grouping();
         part.disp_pipeline_costs();
 
-        GroupAnalysis total(Cost(0, 0), make_zero(Int(64)));
+
+        debug(0) << "OUTER Tile sizes: " << "{";
+        for (auto iter = best_tile_config.begin(); iter != best_tile_config.end(); ++iter) {
+            if (std::distance(best_tile_config.begin(), iter) > 0) {
+                debug(0) << ", ";
+            }
+            debug(0) << "(" << iter->first << ", " <<  iter->second << ")";
+        }
+        debug(0) << "}" << '\n';
+
+
+        // The computation size depends on the tile, however, the memory cost
+        // depends on the subtile size.
+
+        Expr memory_cost = make_zero(Int(64));
         for (const pair<FStage, Group> &g : part.groups) {
             const GroupAnalysis &analysis = get_element(part.group_costs, g.first);
-            if (!total.cost.arith.defined()) {
+            if (!memory_cost.defined()) {
                 continue;
-            } else if (!total.cost.arith.defined()) {
-                total.cost.arith = Expr();
+            } else if (!analysis.cost.memory.defined()) {
+                memory_cost = Expr();
             } else {
-                total.cost.arith += analysis.cost.arith;
-            }
-
-            if (!total.cost.memory.defined()) {
-                continue;
-            } else if (!total.cost.memory.defined()) {
-                total.cost.memory = Expr();
-            } else {
-                total.cost.memory += analysis.cost.memory;
-            }
-            // TODO(psuriana): what is the parallelism?
-            if (analysis.parallelism.defined()) {
-                total.parallelism = max(total.parallelism, analysis.parallelism);
+                memory_cost += analysis.cost.memory;
             }
         }
-        total.simplify();
-        debug(0) << "TOTAL: " << total << "\n";
+        internal_assert(memory_cost.defined());
+        memory_cost = simplify(memory_cost);
+
+        debug(0) << "TOTAL memory cost: " << memory_cost << "\n";
+        debug(0) << "NO SUBGROUP COST: " << group_analysis << "\n";
         debug(0) << "**********************\n\n";
-        internal_assert(total.cost.defined());
-        group_analysis = total;
+        group_analysis.cost.memory = memory_cost;
     }
 
     return GroupConfig(best_tile_config, group_analysis);

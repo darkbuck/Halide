@@ -195,7 +195,7 @@ double run_test(bool auto_schedule) {
 
     p.compile_to_lowered_stmt("laplacian.html", {input}, HTML, target);
     // Inspect the schedule
-    output.print_loop_nest();
+    //output.print_loop_nest();
 
     // Benchmark the schedule
     Buffer<uint16_t> out(input.width(), input.height(), input.channels());
