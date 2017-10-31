@@ -202,7 +202,7 @@ struct FuseLoopLevel {
 
 namespace Internal {
 
-class IRMutator;
+class IRMutator2;
 struct ReductionVariable;
 
 struct Split {
@@ -397,9 +397,9 @@ public:
      * Schedule. */
     void accept(IRVisitor *) const;
 
-    /** Pass an IRMutator through to all Exprs referenced in the
+    /** Pass an IRMutator2 through to all Exprs referenced in the
      * Schedule. */
-    void mutate(IRMutator *);
+    void mutate(IRMutator2 *);
 };
 
 
@@ -490,9 +490,9 @@ public:
      * Schedule. */
     void accept(IRVisitor *) const;
 
-    /** Pass an IRMutator through to all Exprs referenced in the
+    /** Pass an IRMutator2 through to all Exprs referenced in the
      * Schedule. */
-    void mutate(IRMutator *);
+    void mutate(IRMutator2 *);
 };
 
 }

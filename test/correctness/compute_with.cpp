@@ -1448,10 +1448,10 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    /*printf("Running multi tile mixed tile factor test\n");
+    printf("Running multi tile mixed tile factor test\n");
     if (multi_tile_mixed_tile_factor_test() != 0) {
         return -1;
-    }*/
+    }
 
     printf("Success!\n");
     return 0;

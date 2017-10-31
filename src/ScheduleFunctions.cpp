@@ -778,9 +778,9 @@ bool function_is_already_realized_in_stmt(Function f, Stmt s) {
     return is_realized.result;
 }
 
-// Inject the allocation and realization of a function (which are not part of any
-// fused group) into an existing loop nest using its schedule
-class InjectRealization : public IRMutator {
+// Inject the allocation and realization of a function into an
+// existing loop nest using its schedule
+class InjectRealization : public IRMutator2 {
 public:
     const Function &func;
     bool is_output, found_store_level, found_compute_level;
@@ -896,9 +896,9 @@ private:
         }
     }
 
-    using IRMutator::visit;
+    using IRMutator2::visit;
 
-    void visit(const For *for_loop) {
+    Stmt visit(const For *for_loop) override {
         debug(3) << "InjectRealization of " << func.name() << " entering for loop over " << for_loop->name << "\n";
         const LoopLevel &compute_level = func.schedule().compute_level();
         const LoopLevel &store_level = func.schedule().store_level();
@@ -931,9 +931,9 @@ private:
 
             // If we're trying to inline an extern function, schedule it here and bail out
             debug(2) << "Injecting realization of " << func.name() << " around node " << Stmt(for_loop) << "\n";
-            stmt = build_realize(build_pipeline(for_loop));
+            Stmt stmt = build_realize(build_pipeline(for_loop));
             found_store_level = found_compute_level = true;
-            return;
+            return stmt;
         }
 
         body = mutate(body);
@@ -966,9 +966,9 @@ private:
         }
 
         if (body.same_as(for_loop->body)) {
-            stmt = for_loop;
+            return for_loop;
         } else {
-            stmt = For::make(for_loop->name,
+            return For::make(for_loop->name,
                              for_loop->min,
                              for_loop->extent,
                              for_loop->for_type,
@@ -978,17 +978,18 @@ private:
     }
 
     // If we're an inline update or extern, we may need to inject a realization here
-    virtual void visit(const Provide *op) {
+    Stmt visit(const Provide *op) override {
         if (op->name != func.name() &&
             !func.is_pure() &&
             func.schedule().compute_level().is_inline() &&
             function_is_used_in_stmt(func, op)) {
 
             // Prefix all calls to func in op
-            stmt = build_realize(build_pipeline(op));
+            Stmt stmt = build_realize(build_pipeline(op));
             found_store_level = found_compute_level = true;
+            return stmt;
         } else {
-            stmt = op;
+            return op;
         }
     }
 };
@@ -2183,26 +2184,26 @@ void validate_fused_groups_schedule(const vector<vector<string>> &fused_groups,
     }
 }
 
-class RemoveLoopsOverOutermost : public IRMutator {
-    using IRMutator::visit;
+class RemoveLoopsOverOutermost : public IRMutator2 {
+    using IRMutator2::visit;
 
-    void visit(const For *op) {
+    Stmt visit(const For *op) override {
         if (ends_with(op->name, ".__outermost") &&
             is_one(simplify(op->extent)) &&
             op->device_api == DeviceAPI::None) {
-            stmt = mutate(substitute(op->name, op->min, op->body));
+            return mutate(substitute(op->name, op->min, op->body));
         } else {
-            IRMutator::visit(op);
+            return IRMutator2::visit(op);
         }
     }
 
-    void visit(const LetStmt *op) {
+    Stmt visit(const LetStmt *op) override {
         if (ends_with(op->name, ".__outermost.loop_extent") ||
             ends_with(op->name, ".__outermost.loop_min") ||
             ends_with(op->name, ".__outermost.loop_max")) {
-            stmt = mutate(substitute(op->name, simplify(op->value), op->body));
+            return mutate(substitute(op->name, simplify(op->value), op->body));
         } else {
-            IRMutator::visit(op);
+            return IRMutator2::visit(op);
         }
     }
 };

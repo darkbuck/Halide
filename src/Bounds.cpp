@@ -206,14 +206,14 @@ private:
 
             if (op->param.defined() &&
                 !op->param.is_buffer() &&
-                (op->param.get_min_value().defined() ||
-                 op->param.get_max_value().defined())) {
+                (op->param.min_value().defined() ||
+                 op->param.max_value().defined())) {
 
-                if (op->param.get_max_value().defined() && is_const(op->param.get_max_value())) {
-                    interval.max = Interval::make_min(interval.max, op->param.get_max_value());
+                if (op->param.max_value().defined() && is_const(op->param.max_value())) {
+                    interval.max = Interval::make_min(interval.max, op->param.max_value());
                 }
-                if (op->param.get_min_value().defined() && is_const(op->param.get_min_value())) {
-                    interval.min = Interval::make_max(interval.min, op->param.get_min_value());
+                if (op->param.min_value().defined() && is_const(op->param.min_value())) {
+                    interval.min = Interval::make_max(interval.min, op->param.min_value());
                 }
             }
         } else {
@@ -634,10 +634,9 @@ private:
         string var_name = unique_name('t');
         Expr var = Variable::make(op->base.type(), var_name);
         Expr lane = op->base + var * op->stride;
-        scope.push(var_name, Interval(make_const(var.type(), 0),
-                                      make_const(var.type(), op->lanes-1)));
+        ScopedBinding<Interval> p(scope, var_name, Interval(make_const(var.type(), 0),
+                                                        make_const(var.type(), op->lanes-1)));
         lane.accept(this);
-        scope.pop(var_name);
     }
 
     void visit(const Broadcast *op) {
@@ -784,9 +783,10 @@ private:
             }
         }
 
-        scope.push(op->name, var);
-        op->body.accept(this);
-        scope.pop(op->name);
+        {
+            ScopedBinding<Interval> p(scope, op->name, var);
+            op->body.accept(this);
+        }
 
         if (interval.has_lower_bound()) {
             if (val.min.defined() && expr_uses_var(interval.min, min_name)) {
@@ -1072,13 +1072,13 @@ private:
 };
 
 // Place innermost vars in an IfThenElse's condition as far to the left as possible.
-class SolveIfThenElse : public IRMutator {
+class SolveIfThenElse : public IRMutator2 {
     // Scope of variable names and their depths. Higher depth indicates
     // variable defined more innermost.
     Scope<int> vars_depth;
     int depth = -1;
 
-    using IRMutator::visit;
+    using IRMutator2::visit;
 
     void push_var(const string &var) {
         depth += 1;
@@ -1090,20 +1090,22 @@ class SolveIfThenElse : public IRMutator {
         vars_depth.pop(var);
     }
 
-    void visit(const LetStmt *op) {
+    Stmt visit(const LetStmt *op) override {
         push_var(op->name);
-        IRMutator::visit(op);
+        Stmt stmt = IRMutator2::visit(op);
         pop_var(op->name);
+        return stmt;
     }
 
-    void visit(const For *op) {
+    Stmt visit(const For *op) override {
         push_var(op->name);
-        IRMutator::visit(op);
+        Stmt stmt = IRMutator2::visit(op);
         pop_var(op->name);
+        return stmt;
     }
 
-    void visit(const IfThenElse *op) {
-        IRMutator::visit(op);
+    Stmt visit(const IfThenElse *op) override {
+        Stmt stmt = IRMutator2::visit(op);
         op = stmt.as<IfThenElse>();
         internal_assert(op);
 
@@ -1115,6 +1117,7 @@ class SolveIfThenElse : public IRMutator {
                 stmt = IfThenElse::make(condition, op->then_case, op->else_case);
             }
         }
+        return stmt;
     }
 };
 
@@ -1272,17 +1275,16 @@ private:
 
         if (is_small_enough_to_substitute(value_bounds.min) &&
             (fixed || is_small_enough_to_substitute(value_bounds.max))) {
-            scope.push(op->name, value_bounds);
+            ScopedBinding<Interval> p(scope, op->name, value_bounds);
             op->body.accept(this);
-            scope.pop(op->name);
         } else {
             string max_name = unique_name('t');
             string min_name = unique_name('t');
-
-            scope.push(op->name, Interval(Variable::make(op->value.type(), min_name),
-                                          Variable::make(op->value.type(), max_name)));
-            op->body.accept(this);
-            scope.pop(op->name);
+            {
+                ScopedBinding<Interval> p(scope, op->name, Interval(Variable::make(op->value.type(), min_name),
+                                                                Variable::make(op->value.type(), max_name)));
+                op->body.accept(this);
+            }
 
             for (pair<const string, Box> &i : boxes) {
                 Box &box = i.second;
@@ -1342,9 +1344,10 @@ private:
             }
         }
 
-        let_stmts.push(op->name, op->value);
-        visit_let(op);
-        let_stmts.pop(op->name);
+        {
+            ScopedBinding<Expr> p(let_stmts, op->name, op->value);
+            visit_let(op);
+        }
 
         // Re-insert the children from the previous let stmt into the map.
         if (!old_let_vars.empty()) {
@@ -1615,9 +1618,10 @@ private:
         }
 
         push_var(op->name);
-        scope.push(op->name, Interval(min_val, max_val));
-        op->body.accept(this);
-        scope.pop(op->name);
+        {
+            ScopedBinding<Interval> p(scope, op->name, Interval(min_val, max_val));
+            op->body.accept(this);
+        }
         pop_var(op->name);
     }
 

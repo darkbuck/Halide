@@ -43,8 +43,8 @@ public:
 
 // Lift pure loop invariants to the top level. Applied independently
 // to each loop.
-class LiftLoopInvariants : public IRMutator {
-    using IRMutator::visit;
+class LiftLoopInvariants : public IRMutator2 {
+    using IRMutator2::visit;
 
     Scope<int> varying;
 
@@ -66,29 +66,26 @@ class LiftLoopInvariants : public IRMutator {
         return true;
     }
 
-    void visit(const Let *op) {
-        varying.push(op->name, 0);
-        IRMutator::visit(op);
-        varying.pop(op->name);
+    Expr visit(const Let *op) override {
+        ScopedBinding<int> p(varying, op->name, 0);
+        return IRMutator2::visit(op);
     }
 
-    void visit(const LetStmt *op) {
-        varying.push(op->name, 0);
-        IRMutator::visit(op);
-        varying.pop(op->name);
+    Stmt visit(const LetStmt *op) override {
+        ScopedBinding<int> p(varying, op->name, 0);
+        return IRMutator2::visit(op);
     }
 
-    void visit(const For *op) {
-        varying.push(op->name, 0);
-        IRMutator::visit(op);
-        varying.pop(op->name);
+    Stmt visit(const For *op) override {
+        ScopedBinding<int> p(varying, op->name, 0);
+        return IRMutator2::visit(op);
     }
 
 public:
 
-    using IRMutator::mutate;
+    using IRMutator2::mutate;
 
-    Expr mutate(const Expr &e) {
+    Expr mutate(const Expr &e) override {
         if (should_lift(e)) {
             auto it = lifted.find(e);
             if (it == lifted.end()) {
@@ -99,31 +96,31 @@ public:
                 return Variable::make(e.type(), it->second);
             }
         } else {
-            return IRMutator::mutate(e);
+            return IRMutator2::mutate(e);
         }
     }
 
     map<Expr, string, IRDeepCompare> lifted;
 };
 
-class LICM : public IRMutator {
-    using IRVisitor::visit;
+class LICM : public IRMutator2 {
+    using IRMutator2::visit;
 
-    bool in_gpu_loop {false};
+    bool in_gpu_loop{false};
 
-    void visit(const For *op) {
-        bool old_in_gpu_loop = in_gpu_loop;
+    Stmt visit(const For *op) override {
+        ScopedValue<bool> old_in_gpu_loop(in_gpu_loop);
         in_gpu_loop =
             (op->for_type == ForType::GPUBlock ||
              op->for_type == ForType::GPUThread);
 
         if (old_in_gpu_loop && in_gpu_loop) {
             // Don't lift lets to in-between gpu blocks/threads
-            IRMutator::visit(op);
+            return IRMutator2::visit(op);
         } else if (op->device_api == DeviceAPI::GLSL ||
                    op->device_api == DeviceAPI::OpenGLCompute) {
             // Don't lift anything out of OpenGL loops
-            IRMutator::visit(op);
+            return IRMutator2::visit(op);
         } else {
 
             // Lift invariants
@@ -142,10 +139,8 @@ class LICM : public IRMutator {
                 new_stmt = LetStmt::make(p.second, p.first, new_stmt);
             }
 
-            stmt = new_stmt;
+            return new_stmt;
         }
-
-        in_gpu_loop = old_in_gpu_loop;
     }
 };
 
