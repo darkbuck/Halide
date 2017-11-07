@@ -1630,6 +1630,125 @@ vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
     return tile_configs;
 }
 
+/*vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
+        const FStage &stg, const map<string, Expr> &tile_bounds) {
+    // TODO: This is a wart due to the cost model not taking vectorization
+    // and pre-fetching into account. Ensuring the innermost dimension has
+    // at least size of 64 gives enough values for vectorization and can help
+    // with prefetching. This also interacts with the number of parallel tasks
+    // that are generated.
+    int min_inner_dim_size = 64;
+
+    Definition def = get_stage_definition(stg.func, stg.stage_num);
+    const vector<Dim> &dims = def.schedule().dims();
+
+    // Get the dimensions that are going to be tiled in this stage.
+    // Skipping rvars for now.
+    vector<string> tile_vars;
+    for (int d = 0; d < (int)dims.size() - 1; d++) {
+        if (!dims[d].is_rvar()) {
+            tile_vars.push_back(dims[d].var);
+        }
+    }
+
+    vector<int> size_variants = {1, 4, 8, 16, 32, 64, 128, 256};
+    vector<map<string, Expr>> tile_configs;
+
+    // For all the tile configurations generated, we force the innermost dimension
+    // to be at least of size 64 to ensure enough values for vectorization.
+
+    // Skewed tile configurations
+    for (size_t i = 0; i < tile_vars.size(); i++) {
+        for (const auto &dim_size : size_variants) {
+            map<string, Expr> tiling;
+            {
+                Expr size = (i == 0) ? std::max(dim_size, min_inner_dim_size): dim_size;
+                if (tile_bounds.count(tile_vars[i])) {
+                    size = simplify(min(size, tile_bounds.at(tile_vars[i])));
+                }
+                tiling.emplace(tile_vars[i], size);
+            }
+            for (size_t j = 0; j < tile_vars.size(); j++) {
+                if (j < i) {
+                    Expr size = size_variants[size_variants.size() - 1];
+                    if (tile_bounds.count(tile_vars[j])) {
+                        size = simplify(min(size, tile_bounds.at(tile_vars[j])));
+                    }
+                    tiling.emplace(tile_vars[j], size);
+                } else if (j > i) {
+                    Expr size = size_variants[0];
+                    if (tile_bounds.count(tile_vars[j])) {
+                        size = simplify(min(size, tile_bounds.at(tile_vars[j])));
+                    }
+                    tiling.emplace(tile_vars[j], size);
+                }
+            }
+            if (!tiling.empty()) {
+                bool is_duplicate =
+                    std::find_if(tile_configs.begin(), tile_configs.end(),
+                                [&tiling](const map<string, Expr> &m) { return (tiling == m);})
+                    != tile_configs.end();
+                if (!is_duplicate) {
+                    tile_configs.push_back(tiling);
+                }
+            }
+        }
+    }
+
+    // Almost square tile configurations
+    for (const auto &dim_size : size_variants) {
+        map<string, Expr> tiling;
+        for (size_t j = 0; j < tile_vars.size(); j++) {
+            {
+                Expr size = (j == 0) ? std::max(dim_size, min_inner_dim_size): dim_size;
+                if (tile_bounds.count(tile_vars[j])) {
+                    size = simplify(min(size, tile_bounds.at(tile_vars[j])));
+                }
+                tiling.emplace(tile_vars[j], size);
+            }
+        }
+        if (!tiling.empty()) {
+            bool is_duplicate =
+                std::find_if(tile_configs.begin(), tile_configs.end(),
+                            [&tiling](const map<string, Expr> &m) { return (tiling == m);})
+                != tile_configs.end();
+            if (!is_duplicate) {
+                tile_configs.push_back(tiling);
+            }
+        }
+    }
+
+    // Reorder tile configurations
+    for (int i = 0; i < (1 << (tile_vars.size())); i++) {
+        map<string, Expr> tiling;
+        for (size_t j = 0; j < tile_vars.size(); j++) {
+            if (((i >> (j)) & 1) == 1) {
+                if (j == 0) {
+                    Expr size = min_inner_dim_size;
+                    if (tile_bounds.count(tile_vars[j])) {
+                        size = simplify(min(size, tile_bounds.at(tile_vars[j])));
+                    }
+                    tiling.emplace(tile_vars[j], size);
+                } else {
+                    tiling.emplace(tile_vars[j], 1);
+                }
+            }
+        }
+        if (!tiling.empty()) {
+            bool is_duplicate =
+                std::find_if(tile_configs.begin(), tile_configs.end(),
+                            [&tiling](const map<string, Expr> &m) { return (tiling == m);})
+                != tile_configs.end();
+            if (!is_duplicate) {
+                tile_configs.push_back(tiling);
+            }
+        }
+    }
+
+    return tile_configs;
+}*/
+
+
 vector<map<string, Expr>> Partitioner::generate_tile_configs(const FStage &stg) {
     // TODO: This is a wart due to the cost model not taking vectorization
     // and pre-fetching into account. Ensuring the innermost dimension has
@@ -1793,7 +1912,7 @@ Partitioner::find_best_tile_config_sliding_window(const Group &g, const map<stri
     // Generate tiling configurations
     vector<map<string, Expr>> configs = generate_tile_configs_sliding_window(g.output, tile_bounds);
 
-    debug(0) << "\n\n\n*******TILE CONFIGS SLIDING WINDOW:\n";
+    /*debug(0) << "\n\n\n*******TILE CONFIGS SLIDING WINDOW:\n";
     for (size_t i = 0; i < configs.size(); ++i) {
         debug(0) << "TILE " << i << "\n";
         for (const auto &iter : configs[i]) {
@@ -1801,7 +1920,7 @@ Partitioner::find_best_tile_config_sliding_window(const Group &g, const map<stri
         }
         debug(0) << "\n";
     }
-    debug(0) << "\n\n";
+    debug(0) << "\n\n";*/
 
     Group best_group = g;
     for (const auto &config : configs) {
@@ -2473,6 +2592,12 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
 
     vector<Group> subgroups;
 
+    /*debug(0) << "\n***BEFORE CLEAR BOUNDS:\n";
+    for (const auto &iter : pipeline_bounds) {
+        debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
+    }
+    debug(0) << "\n";*/
+
     // TODO(psuriana): The subgrouping probably should use the tile size
     // to compute the region cost
     // TODO(psuriana): Should we recurse if the cost is undefined?
@@ -2497,12 +2622,6 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         // TODO(psuriana): need to use the tile size to recompute the bounds.
         // This is not really efficient.
 
-        /*debug(0) << "\n***BEFORE CLEAR BOUNDS:\n";
-        for (const auto &iter : part.pipeline_bounds) {
-            debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
-        }
-        debug(0) << "\n";*/
-
         part.pipeline_bounds.clear();
 
         // Find the regions required for each of the outputs and merge them
@@ -2515,6 +2634,9 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             if (out.name() == group.output.func.name()) {
                 Definition def = get_stage_definition(group.output.func, group.output.stage_num);
                 const vector<Dim> &dims = def.schedule().dims();
+
+                const Box &old_bound = pipeline_bounds.at(out.name());
+
                 for (int d = 0; d < (int)dims.size() - 1; d++) {
                     if (!dims[d].is_rvar()) {
                         const auto &iter = best_tile_config.find(dims[d].var);
@@ -2523,6 +2645,11 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
                             tile_size = iter->second;
                         }
                         Interval I = Interval(make_zero(tile_size.type()), tile_size);
+
+                        const Interval &old_interval = old_bound[d];
+                        I.min = simplify(max(I.min, old_interval.min));
+                        I.max = simplify(min(I.max, old_interval.max));
+
                         pure_bounds.emplace(dims[d].var, I);
                         out_box.push_back(I);
                     }
@@ -2534,11 +2661,6 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
                 prods.insert(stg.func.name());
             }
 
-            /*debug(0) << "Prod: ";
-            for (const auto &s : prods) {
-                debug(0) << s << "\n";
-            }
-            debug(0) << "\n";*/
             map<string, Box> regions = dep_analysis.regions_required(out, pure_bounds, prods,
                                                                      false, &costs.input_estimates);
 
@@ -2548,11 +2670,11 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             merge_regions(part.pipeline_bounds, regions);
         }
 
-        debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
+        /*debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
         for (const auto &iter : part.pipeline_bounds) {
             debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
         }
-        debug(0) << "\n";
+        debug(0) << "\n";*/
 
         part.initialize_groups();
 
@@ -2581,9 +2703,18 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         // The computation size depends on the tile, however, the memory cost
         // depends on the subtile size.
 
+        Expr arith_cost = make_zero(Int(64));
         Expr memory_cost = make_zero(Int(64));
         for (const pair<FStage, Group> &g : part.groups) {
             const GroupAnalysis &analysis = get_element(part.group_costs, g.first);
+            if (!arith_cost.defined()) {
+                continue;
+            } else if (!analysis.cost.arith.defined()) {
+                arith_cost = Expr();
+            } else {
+                arith_cost += analysis.cost.arith;
+            }
+
             if (!memory_cost.defined()) {
                 continue;
             } else if (!analysis.cost.memory.defined()) {
@@ -2591,10 +2722,13 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             } else {
                 memory_cost += analysis.cost.memory;
             }
-        }
-        internal_assert(memory_cost.defined());
-        memory_cost = simplify(memory_cost);
 
+        }
+        internal_assert(memory_cost.defined() && arith_cost.defined());
+        memory_cost = simplify(memory_cost);
+        arith_cost = simplify(arith_cost);
+
+        debug(0) << "TOTAL arithmetic cost: " << arith_cost << "\n";
         debug(0) << "TOTAL memory cost: " << memory_cost << "\n";
         debug(0) << "NO SUBGROUP COST: " << group_analysis << "\n";
         debug(0) << "**********************\n\n";
