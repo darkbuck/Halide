@@ -1,4 +1,4 @@
- #include "Halide.h"
+#include "Halide.h"
 #include "test/common/check_call_graphs.h"
 
 #include <stdio.h>
