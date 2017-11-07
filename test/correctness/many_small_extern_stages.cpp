@@ -4,7 +4,7 @@
 #ifdef _WIN32
 #define DLLEXPORT __declspec(dllexport)
 #else
-#define DLLEXPORT __attribute__((visibility("default")))
+#define DLLEXPORT
 #endif
 
 void dump_buffer_shape(halide_buffer_t *b) {

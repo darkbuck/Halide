@@ -20,7 +20,7 @@ using namespace Halide::Internal;
 #ifdef _MSC_VER
 #define DLLEXPORT __declspec(dllexport)
 #else
-#define DLLEXPORT __attribute__((visibility("default")))
+#define DLLEXPORT
 #endif
 
 // This global variable is used to count the number of unique varying attribute

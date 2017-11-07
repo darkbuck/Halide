@@ -143,7 +143,6 @@ function(halide_project name folder)
   if (MSVC)
     target_link_libraries("${name}" PRIVATE Kernel32)
   endif()
-  set_target_properties("${name}" PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN 1)
 endfunction(halide_project)
 
 # Set warnings globally
