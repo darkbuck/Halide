@@ -85,6 +85,7 @@ struct Target {
         TraceLoads = halide_target_feature_trace_loads,
         TraceStores = halide_target_feature_trace_stores,
         TraceRealizations = halide_target_feature_trace_realizations,
+        StrictFP = halide_target_feature_strict_fp,
         FeatureEnd = halide_target_feature_end
     };
     Target() : os(OSUnknown), arch(ArchUnknown), bits(0) {}

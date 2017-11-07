@@ -35,8 +35,10 @@ std::unique_ptr<llvm::raw_fd_ostream> make_raw_fd_ostream(const std::string &fil
 
 /** Compile an LLVM module to native targets (objects, native assembly). */
 // @{
-EXPORT void compile_llvm_module_to_object(llvm::Module &module, Internal::LLVMOStream& out);
-EXPORT void compile_llvm_module_to_assembly(llvm::Module &module, Internal::LLVMOStream& out);
+EXPORT void compile_llvm_module_to_object(llvm::Module &module, Internal::LLVMOStream& out,
+                                          const Halide::Target &target);
+EXPORT void compile_llvm_module_to_assembly(llvm::Module &module, Internal::LLVMOStream& out,
+                                            const Halide::Target &target);
 // @}
 
 /** Compile an LLVM module to LLVM targets (bitcode, LLVM assembly). */

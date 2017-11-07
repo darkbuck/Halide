@@ -951,14 +951,14 @@ Buffer<uint8_t> compile_module_to_hexagon_shared_object(const Module &device_cod
 
     llvm::SmallVector<char, 4096> object;
     llvm::raw_svector_ostream object_stream(object);
-    compile_llvm_module_to_object(*llvm_module, object_stream);
+    compile_llvm_module_to_object(*llvm_module, object_stream, device_code.target());
 
     int min_debug_level = device_code.name() == runtime_module_name ? 3 : 2;
     if (debug::debug_level() >= min_debug_level) {
         debug(0) << "Hexagon device code assembly: " << "\n";
         llvm::SmallString<4096> assembly;
         llvm::raw_svector_ostream assembly_stream(assembly);
-        compile_llvm_module_to_assembly(*llvm_module, assembly_stream);
+        compile_llvm_module_to_assembly(*llvm_module, assembly_stream, device_code.target());
         debug(0) << assembly.c_str() << "\n";
     }
 

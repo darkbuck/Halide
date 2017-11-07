@@ -1031,7 +1031,7 @@ void CodeGen_LLVM::optimize_module() {
     MyFunctionPassManager function_pass_manager(module.get());
     MyModulePassManager module_pass_manager;
 
-    std::unique_ptr<TargetMachine> TM = make_target_machine(*module);
+    std::unique_ptr<TargetMachine> TM = make_target_machine(*module, get_target());
     module_pass_manager.add(createTargetTransformInfoWrapperPass(TM ? TM->getTargetIRAnalysis() : TargetIRAnalysis()));
     function_pass_manager.add(createTargetTransformInfoWrapperPass(TM ? TM->getTargetIRAnalysis() : TargetIRAnalysis()));
 
