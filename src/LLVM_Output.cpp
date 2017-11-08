@@ -314,12 +314,12 @@ std::unique_ptr<llvm::raw_fd_ostream> make_raw_fd_ostream(const std::string &fil
 }
 
 void emit_file(llvm::Module &module, Internal::LLVMOStream& out,
-               llvm::TargetMachine::CodeGenFileType file_type, const Halide::Target &target) {
+               llvm::TargetMachine::CodeGenFileType file_type) {
     Internal::debug(1) << "emit_file.Compiling to native code...\n";
     Internal::debug(2) << "Target triple: " << module.getTargetTriple() << "\n";
 
     // Get the target specific parser.
-    auto target_machine = Internal::make_target_machine(module, target);
+    auto target_machine = Internal::make_target_machine(module);
     internal_assert(target_machine.get()) << "Could not allocate target machine!\n";
 
     llvm::DataLayout target_data_layout(target_machine->createDataLayout());
@@ -360,14 +360,12 @@ std::unique_ptr<llvm::Module> compile_module_to_llvm_module(const Module &module
     return codegen_llvm(module, context);
 }
 
-void compile_llvm_module_to_object(llvm::Module &module, Internal::LLVMOStream& out,
-                                   const Halide::Target &target) {
-    emit_file(module, out, llvm::TargetMachine::CGFT_ObjectFile, target);
+void compile_llvm_module_to_object(llvm::Module &module, Internal::LLVMOStream& out) {
+    emit_file(module, out, llvm::TargetMachine::CGFT_ObjectFile);
 }
 
-void compile_llvm_module_to_assembly(llvm::Module &module, Internal::LLVMOStream& out,
-                                     const Halide::Target &target) {
-    emit_file(module, out, llvm::TargetMachine::CGFT_AssemblyFile, target);
+void compile_llvm_module_to_assembly(llvm::Module &module, Internal::LLVMOStream& out) {
+    emit_file(module, out, llvm::TargetMachine::CGFT_AssemblyFile);
 }
 
 void compile_llvm_module_to_llvm_bitcode(llvm::Module &module, Internal::LLVMOStream& out) {

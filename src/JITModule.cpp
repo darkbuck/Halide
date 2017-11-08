@@ -264,7 +264,7 @@ void JITModule::compile_module(std::unique_ptr<llvm::Module> m, const string &fu
     string mcpu;
     string mattrs;
     llvm::TargetOptions options;
-    get_target_options(*m, options, mcpu, mattrs, target);
+    get_target_options(*m, options, mcpu, mattrs);
 
     DataLayout initial_module_data_layout = m->getDataLayout();
     string module_name = m->getModuleIdentifier();

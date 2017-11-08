@@ -385,14 +385,15 @@ bool get_md_string(llvm::Metadata *value, std::string &result) {
     return false;
 }
 
-void get_target_options(const llvm::Module &module, llvm::TargetOptions &options,
-                        std::string &mcpu, std::string &mattrs, const Halide::Target &target) {
+void get_target_options(const llvm::Module &module, llvm::TargetOptions &options, std::string &mcpu, std::string &mattrs) {
     bool use_soft_float_abi = false;
     get_md_bool(module.getModuleFlag("halide_use_soft_float_abi"), use_soft_float_abi);
     get_md_string(module.getModuleFlag("halide_mcpu"), mcpu);
     get_md_string(module.getModuleFlag("halide_mattrs"), mattrs);
 
-    bool strict_fp = target.has_feature(Target::StrictFP);
+    bool strict_fp;
+    get_md_bool(module.getModuleFlag("halide_strict_fp"), strict_fp);
+
     options = llvm::TargetOptions();
     #if LLVM_VERSION < 50
     options.LessPreciseFPMADOption = !strict_fp;
@@ -442,7 +443,7 @@ void clone_target_options(const llvm::Module &from, llvm::Module &to) {
     }
 }
 
-std::unique_ptr<llvm::TargetMachine> make_target_machine(const llvm::Module &module, const Halide::Target &target) {
+std::unique_ptr<llvm::TargetMachine> make_target_machine(const llvm::Module &module) {
     std::string error_string;
 
     const llvm::Target *llvm_target = llvm::TargetRegistry::lookupTarget(module.getTargetTriple(), error_string);
@@ -459,7 +460,7 @@ std::unique_ptr<llvm::TargetMachine> make_target_machine(const llvm::Module &mod
     llvm::TargetOptions options;
     std::string mcpu = "";
     std::string mattrs = "";
-    get_target_options(module, options, mcpu, mattrs, target);
+    get_target_options(module, options, mcpu, mattrs);
 
     return std::unique_ptr<llvm::TargetMachine>(llvm_target->createTargetMachine(module.getTargetTriple(),
                                                 mcpu, mattrs,
