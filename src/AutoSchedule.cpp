@@ -938,6 +938,9 @@ struct Partitioner {
         Group(const FStage &output, const vector<FStage> &members)
             : output(output), members(members) {}
 
+        Group(const FStage &output, const vector<FStage> &members, const set<string> &inlined)
+            : output(output), members(members), inlined(inlined) {}
+
         friend std::ostream& operator<<(std::ostream &stream, const Group &g) {
             stream << "Output FStage: " << g.output << '\n';
             stream << "Members: " << '{';
@@ -1595,7 +1598,9 @@ vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
     Definition def = get_stage_definition(stg.func, stg.stage_num);
     const vector<Dim> &dims = def.schedule().dims();
 
-    vector<int> size_variants = {1, 4, 8, 16, 32, 64, 128, 256};
+    // TODO(psuriana): for now always slide 1
+    //vector<int> size_variants = {1, 4, 8, 16, 32, 64, 128, 256};
+    vector<int> size_variants = {1};
     vector<map<string, Expr>> tile_configs;
 
     // Get the variable name of the second innermost dimension. Skip rvar.
@@ -1617,7 +1622,7 @@ vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
     internal_assert(bound_size);
 
     for (const auto &dim_size : size_variants) {
-        if (dim_size > *bound_size) {
+        if (dim_size >= *bound_size) {
             break;
         }
         map<string, Expr> tiling = tile_bounds;
@@ -2302,6 +2307,34 @@ Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_
     Cost out_cost = costs.stage_region_cost(g.output.func.name(),
                                             g.output.stage_num,
                                             tile_bounds, g.inlined);
+
+    debug(0) << "\n\nANALYZE GROUP:\n" << g << "\n";
+
+    debug(0) << "tile size:\n";
+    for (const auto &iter : g.tile_sizes) {
+        debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
+    }
+    debug(0) << "\n";
+
+    debug(0) << "alloc reg:\n";
+    for (const auto &iter : alloc_regions) {
+        debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
+    }
+    debug(0) << "\n";
+
+    debug(0) << "compute reg:\n";
+    for (const auto &iter : compute_regions) {
+        debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
+    }
+    debug(0) << "\n";
+
+    debug(0) << "Out cost tile bound:\n";
+    for (const auto &iter : tile_bounds) {
+        debug(0) << "\t" << iter.first << " -> min: " << iter.second.min << ", max: " << iter.second.max << "\n";
+    }
+    debug(0) << "\n";
+    debug(0) << "Out cost: " << out_cost << "\n";
+
     if (!out_cost.defined()) {
         return GroupAnalysis();
     }
@@ -2609,13 +2642,25 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         part.outputs = {group.output.func};
 
         part.groups.clear();
+        vector<FStage> inlined_stages;
+
         for (const FStage &stg : group.members) {
             if (group.inlined.count(stg.func.name())) {
-                // Skip inlined function
+                inlined_stages.push_back(stg);
+            }
+        }
+
+        // TODO(psuriana): THE INLINED DOESN'T SEEM TO MAKE ANY DIFFERENCE TO THE COST
+        for (const FStage &stg : group.members) {
+            if (group.inlined.count(stg.func.name())) {
+                // TODO(psuriana): add the inlined function to the consumer group
                 debug(0) << "......SKIP INLINED FUNCTION: " << stg.func.name() << "\n";
                 continue;
             }
-            Group g(stg, {stg});
+            vector<FStage> group_members = inlined_stages;
+            group_members.push_back(stg);
+            Group g(stg, group_members, group.inlined);
+
             part.groups.insert(make_pair(stg, g));
         }
 
@@ -2644,7 +2689,7 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
                         if (iter != best_tile_config.end()) {
                             tile_size = iter->second;
                         }
-                        Interval I = Interval(make_zero(tile_size.type()), tile_size);
+                        Interval I = Interval(make_zero(tile_size.type()), simplify(tile_size - 1));
 
                         const Interval &old_interval = old_bound[d];
                         I.min = simplify(max(I.min, old_interval.min));
@@ -2670,11 +2715,11 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             merge_regions(part.pipeline_bounds, regions);
         }
 
-        /*debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
+        debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
         for (const auto &iter : part.pipeline_bounds) {
             debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
         }
-        debug(0) << "\n";*/
+        debug(0) << "\n";
 
         part.initialize_groups();
 
@@ -2682,6 +2727,11 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         debug(0) << "Recurse partitioning into subgroup...\n";
         debug(0) << "\n\n***CURRENT GROUP:\n";
         debug(0) << group;
+
+        disp_pipeline_graph();
+
+        debug(0) << "\n\n***INITIAL SUBGROUP:\n";
+        part.disp_grouping();
 
         part.group(Partitioner::Level::FastMem, best_tile_config);
 
@@ -4052,7 +4102,8 @@ string generate_schedules(const vector<Function> &outputs, const Target &target,
 
     debug(0) << "Partitioner computing fast-mem group...\n";
     part.grouping_cache.clear();
-    part.group_recurse();
+    part.group(Partitioner::Level::FastMem, {});
+    //part.group_recurse();
     if (debug::debug_level() >= 3) {
         part.disp_pipeline_costs();
         part.disp_grouping();
