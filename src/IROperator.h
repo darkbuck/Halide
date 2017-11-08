@@ -1896,7 +1896,6 @@ inline Expr likely_if_innermost(Expr e) {
                                 {std::move(e)}, Internal::Call::PureIntrinsic);
 }
 
-
 /** Cast an expression to the halide type corresponding to the C++
  * type T clamping to the minimum and maximum values of the result
  * type. */
@@ -1908,6 +1907,28 @@ Expr saturating_cast(Expr e) {
 /** Cast an expression to a new type, clamping to the minimum and
  * maximum values of the result type. */
 EXPORT Expr saturating_cast(Type t, Expr e);
+
+/** Prevents the simplifier from changing floating-point operations
+ * within the argument expression while returning the argument as its result.
+ * Can be used to ensure stricter floating-point semantics but does not by itself
+ * affect lower-level code generation. Mostly provided for debugging. */
+inline Expr no_fp_simplify(Expr e) {
+    Type t = e.type();
+    return Internal::Call::make(t, Internal::Call::no_fp_simplify,
+                                {std::move(e)}, Internal::Call::Intrinsic);
+}
+
+/** Make best effort attempt to preserve IEEE floating-point semantics
+ * in evaluating an expression. Equivalent to no_fp_simplify plus
+ * turning on StrictFP within a certain scope. May not be implemented
+ * for all backends. (E.g. it is difficult to do this for C++ code
+ * generation as it depends on the compielr flags used to compilethe
+ * generated code. */
+inline Expr strict_fp(Expr e) {
+    Type t = e.type();
+    return Internal::Call::make(t, Internal::Call::strict_fp,
+                                {std::move(e)}, Internal::Call::Intrinsic);
+}
 
 }
 

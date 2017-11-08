@@ -250,7 +250,8 @@ CodeGen_LLVM::CodeGen_LLVM(Target t) :
 
     min_f64(Float(64).min()),
     max_f64(Float(64).max()),
-    destructor_block(nullptr) {
+    destructor_block(nullptr),
+    strict_fp(t.has_feature(Target::StrictFP)) {
     initialize_llvm();
 }
 
@@ -1337,6 +1338,7 @@ void CodeGen_LLVM::visit(const Mod *op) {
 
     int bits;
     if (op->type.is_float()) {
+        // TODO: figure out what to do in strict_fp, perhaps use the constrained frem intrinsic.
         value = codegen(simplify(op->a - op->b * floor(op->a/op->b)));
     } else if (is_const_power_of_two_integer(op->b, &bits)) {
         value = codegen(op->a & (op->b - 1));
@@ -2658,6 +2660,16 @@ void CodeGen_LLVM::visit(const Call *op) {
     } else if (op->is_intrinsic(Call::size_of_halide_buffer_t)) {
         llvm::DataLayout d(module.get());
         value = ConstantInt::get(i32_t, (int)d.getTypeAllocSize(buffer_t_type));
+    } else if (op->is_intrinsic(Call::no_fp_simplify)) {
+        internal_assert(op->args.size() == 1);
+        value = codegen(op->args[0]);
+    } else if (op->is_intrinsic(Call::strict_fp)) {
+        llvm::FastMathFlags current_flags = builder->getFastMathFlags();
+        llvm::FastMathFlags safe_flags;
+        safe_flags.clear();
+        builder->setFastMathFlags(safe_flags);
+        value = codegen(op->args[0]);
+        builder->setFastMathFlags(current_flags);
     } else if (op->is_intrinsic()) {
         internal_error << "Unknown intrinsic: " << op->name << "\n";
     } else if (op->call_type == Call::PureExtern && op->name == "pow_f32") {
