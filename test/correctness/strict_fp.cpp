@@ -21,25 +21,21 @@ enum FPStrictness {
 } global_strictness = FPDefault;
 
 std::string strictness_to_string(FPStrictness strictness) {
-    switch (strictness) {
-    case FPDefault:
-        return "default";
-    case FPNoSimplify:
+    if (strictness == FPNoSimplify) {
         return "no_fp_simplify";
-    case FPStrict:
+    } else if (strictness == FPStrict) {
         return "strict_fp";
     }
+    return "default";
 }
 
 Expr apply_strictness(Expr x) {
-    switch (global_strictness) {
-    case FPDefault:
-        return x;
-    case FPNoSimplify:
+    if (global_strictness == FPNoSimplify) {
         return no_fp_simplify(x);
-    case FPStrict:
+    } else if (global_strictness == FPStrict) {
         return strict_fp(x);
     }
+    return x;
 }
 
 template <typename Accum>
