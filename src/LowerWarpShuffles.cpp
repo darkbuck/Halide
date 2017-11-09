@@ -665,11 +665,28 @@ class HoistWarpShuffles : public IRMutator2 {
     }
 };
 
+class HasLaneLoop : public IRVisitor {
+    using IRVisitor::visit;
+
+    void visit(const For *op) {
+        result = result || op->for_type == ForType::GPULane;
+        IRVisitor::visit(op);
+    }
+public:
+    bool result = false;
+};
+
+bool has_lane_loop(Stmt s) {
+    HasLaneLoop l;
+    s.accept(&l);
+    return l.result;
+}
+
 class LowerWarpShufflesInEachKernel : public IRMutator2 {
     using IRMutator2::visit;
 
     Stmt visit(const For *op) override {
-        if (op->device_api == DeviceAPI::CUDA) {
+        if (op->device_api == DeviceAPI::CUDA && has_lane_loop(op)) {
             Stmt s = op;
             s = LowerWarpShuffles().mutate(s);
             s = HoistWarpShuffles().mutate(s);
