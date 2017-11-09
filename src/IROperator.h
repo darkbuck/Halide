@@ -1915,19 +1915,19 @@ EXPORT Expr saturating_cast(Type t, Expr e);
 inline Expr no_fp_simplify(Expr e) {
     Type t = e.type();
     return Internal::Call::make(t, Internal::Call::no_fp_simplify,
-                                {std::move(e)}, Internal::Call::Intrinsic);
+                                {std::move(e)}, Internal::Call::PureIntrinsic);
 }
 
-/** Make best effort attempt to preserve IEEE floating-point semantics
+/** Makes a best effort attempt to preserve IEEE floating-point semantics
  * in evaluating an expression. Equivalent to no_fp_simplify plus
- * turning on StrictFP within a certain scope. May not be implemented
- * for all backends. (E.g. it is difficult to do this for C++ code
- * generation as it depends on the compielr flags used to compilethe
- * generated code. */
+ * turning on the StrictFP target flag within a certain scope.
+ * May not be implemented for all backends. (E.g. it is difficult to do
+ * this for C++ code generation as it depends on the compielr flags used to
+ * compile the generated code. */
 inline Expr strict_fp(Expr e) {
     Type t = e.type();
     return Internal::Call::make(t, Internal::Call::strict_fp,
-                                {std::move(e)}, Internal::Call::Intrinsic);
+                                {std::move(e)}, Internal::Call::PureIntrinsic);
 }
 
 }

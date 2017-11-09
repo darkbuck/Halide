@@ -389,6 +389,7 @@ SOURCE_FILES = \
   StmtToHtml.cpp \
   StorageFlattening.cpp \
   StorageFolding.cpp \
+  StrictifyFP.cpp \
   Substitute.cpp \
   Target.cpp \
   Tracing.cpp \
@@ -534,6 +535,7 @@ HEADER_FILES = \
   StmtToHtml.h \
   StorageFlattening.h \
   StorageFolding.h \
+  StrictifyFP.h \
   Substitute.h \
   Target.h \
   ThreadPool.h \

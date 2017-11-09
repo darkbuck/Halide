@@ -59,8 +59,8 @@ Func kahan_sum() {
     // Item 0 of the tuple is the sum and item 1 is an error compensation
     // See: https://en.wikipedia.org/wiki/Kahan_summation_algorithm
     k_sum() = Tuple(0.0f, 0.0f);
-    k_sum() = Tuple(apply_strictness(k_sum()[0] + apply_strictness(v - k_sum()[1])),
-                    apply_strictness(apply_strictness(k_sum()[0] + apply_strictness(v - k_sum()[1])) - k_sum()[0]) - apply_strictness(v - k_sum()[1]));
+    k_sum() = Tuple(apply_strictness(k_sum()[0] + (v - k_sum()[1])),
+                    apply_strictness((k_sum()[0] + (v - k_sum()[1])) - k_sum()[0]) - (v - k_sum()[1]));
 
     return lambda(k_sum()[0]);
 }
@@ -99,5 +99,6 @@ int main(int argc, char **argv) {
     run_one_condition(strict, FPNoSimplify);
     run_one_condition(loose, FPStrict);
     run_one_condition(strict, FPStrict);
+
     return 0;
 }
