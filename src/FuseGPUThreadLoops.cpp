@@ -629,6 +629,7 @@ class ExtractRegisterAllocations : public IRMutator {
             in_lane_loop = true;
             IRMutator::visit(op);
             in_lane_loop = false;
+            has_lane_loop = true;
         } else {
             if (op->for_type == ForType::GPUThread) {
                 loop_var = op->name;
@@ -738,6 +739,8 @@ public:
         }
         return body;
     }
+
+    bool has_lane_loop = false;
 };
 
 class FuseGPUThreadLoopsSingleKernel : public IRMutator2 {
@@ -762,7 +765,7 @@ class FuseGPUThreadLoopsSingleKernel : public IRMutator2 {
             ForType innermost_loop_type = ForType::GPUThread;
             if (block_size.dimensions()) {
                 body = register_allocs.mutate(body);
-                if (!register_allocs.allocations.empty()) {
+                if (register_allocs.has_lane_loop) {
                     innermost_loop_type = ForType::GPULane;
                 }
             }
