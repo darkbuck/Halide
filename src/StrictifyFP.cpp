@@ -29,6 +29,8 @@ class StrictifyFP : public IRMutator2 {
         return IRMutator2::visit(call);
     }
 
+    using IRMutator2::mutate;
+
     Expr mutate(const Expr &expr) override {
         Expr e = IRMutator2::mutate(expr);
         if (e.type().is_float()) {
