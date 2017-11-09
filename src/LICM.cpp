@@ -113,7 +113,7 @@ public:
 
 // The pass above can lift out the value of lets entirely, leaving
 // them as just renamings of other variables. Easier to substitute
-// them in as a post-pass that make the pass above more clever.
+// them in as a post-pass rather than make the pass above more clever.
 class SubstituteTrivialLets : public IRMutator2 {
     using IRMutator2::visit;
 
