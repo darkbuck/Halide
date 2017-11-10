@@ -74,7 +74,7 @@ void get_target_options(const llvm::Module &module, llvm::TargetOptions &options
 void clone_target_options(const llvm::Module &from, llvm::Module &to);
 
 /** Given an llvm::Module, get or create an llvm:TargetMachine */
- std::unique_ptr<llvm::TargetMachine> make_target_machine(const llvm::Module &module);
+std::unique_ptr<llvm::TargetMachine> make_target_machine(const llvm::Module &module);
 
 /** Set the appropriate llvm Function attributes given a Target. */
 void set_function_attributes_for_target(llvm::Function *, Target);
