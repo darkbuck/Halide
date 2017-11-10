@@ -62,8 +62,6 @@ Func kahan_sum() {
 }
 
 float eval(Func f, const Target &t, const std::string &name, const std::string &suffix) {
-      f.compile_to_llvm_assembly("/tmp/" + name + suffix + ".ll", {in}, name, t);
-      f.compile_to_assembly("/tmp/" + name + suffix + ".s", {in}, name, t);
       float val = ((Buffer<float>)f.realize(t))();
       std::cout << "    " << name << ": " << val << "\n";
       return val;
