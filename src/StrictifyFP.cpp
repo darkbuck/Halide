@@ -32,6 +32,9 @@ class StrictifyFP : public IRMutator2 {
     using IRMutator2::mutate;
 
     Expr mutate(const Expr &expr) override {
+        if (!expr.defined()) {
+            return expr;
+        }
         Expr e = IRMutator2::mutate(expr);
         if (e.type().is_float()) {
             switch (strictness) {
