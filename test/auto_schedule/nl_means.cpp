@@ -110,7 +110,6 @@ double run_test(bool auto_schedule) {
         Pipeline p(non_local_means);
         p.auto_schedule(target);
     } else if (target.has_gpu_feature()) {
-        std::cout << "*******TARGET GPU********\n";
         non_local_means.compute_root()
             .reorder(c, x, y).unroll(c)
             .gpu_tile(x, y, xi, yi, 16, 8);

@@ -1,6 +1,6 @@
 include ../support/Makefile.inc
 
-all: $(BIN)/test
+all: $(BIN)/test $(BIN)/test_auto_schedule
 
 $(BIN)/halide_blur_exec: halide_blur_generator.cpp $(GENERATOR_DEPS)
 	@mkdir -p $(@D)
@@ -21,7 +21,11 @@ endif
 # -O2 is faster than -O3 for this app (O3 unrolls too much)
 $(BIN)/test: $(BIN)/halide_blur.a test.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(OPENMP_FLAGS) -msse2 -Wall -O2 -I$(BIN) test.cpp $(BIN)/halide_blur.a -o $@ $(LDFLAGS) $(IMAGE_IO_FLAGS)
+	$(CXX) $(CXXFLAGS) $(OPENMP_FLAGS) -msse2 -Wall -O2 -I$(BIN) test.cpp $(BIN)/halide_blur.a -o $@ $(LDFLAGS) $(IMAGE_IO_FLAGS) auto_schedule=false
+
+$(BIN)/test_auto_schedule.a: $(BIN)/local_laplacian_exec
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(OPENMP_FLAGS) -msse2 -Wall -O2 -I$(BIN) test.cpp $(BIN)/halide_blur.a -o $@ $(LDFLAGS) $(IMAGE_IO_FLAGS) auto_schedule=true
 
 clean:
 	rm -rf $(BIN)
