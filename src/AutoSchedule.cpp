@@ -420,6 +420,12 @@ DependenceAnalysis::regions_required(Function f, int stage_num,
                 DimBounds curr_bounds = iter->second;
                 visited.insert(StageBounds(s, curr_bounds));
 
+                /*debug(0) << "\n\nCurrent bound of " << s << "\n";
+                for (const auto &iter : curr_bounds) {
+                    debug(0) << "\t" << iter.first << " -> min: " << iter.second.min << ", max: " << iter.second.max << "\n";
+                }
+                debug(0) << "\n";*/
+
                 Definition def = get_stage_definition(s.func, s.stage_num);
                 // Scope for containing all the estimates on parameters and intervals.
                 Scope<Interval> curr_scope;
@@ -431,7 +437,7 @@ DependenceAnalysis::regions_required(Function f, int stage_num,
                 // current scope.
                 for (int d = 0; d < (int)dims.size() - 1; d++) {
                     string var_name = dims[d].var;
-                    internal_assert(curr_bounds.find(var_name) != curr_bounds.end());
+                    internal_assert(curr_bounds.find(var_name) != curr_bounds.end()) << "Cannot find bound of " << s << ", at dim: " << var_name << "\n";
 
                     Expr lower = SubstituteVarEstimates().mutate(get_element(curr_bounds, dims[d].var).min);
                     Expr upper = SubstituteVarEstimates().mutate(get_element(curr_bounds, dims[d].var).max);
@@ -1472,7 +1478,6 @@ Partitioner::choose_candidate_grouping(const vector<pair<string, string>> &cands
 
         const Function &prod_f = get_element(dep_analysis.env, p.first);
         int final_stage = prod_f.updates().size();
-
         FStage prod(prod_f, final_stage);
 
         for (const FStage &c : get_element(children, prod)) {
@@ -2637,16 +2642,24 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
 
     vector<Group> subgroups;
 
-    /*debug(0) << "\n***BEFORE CLEAR BOUNDS:\n";
-    for (const auto &iter : pipeline_bounds) {
-        debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
-    }
-    debug(0) << "\n";*/
-
     // TODO(psuriana): The subgrouping probably should use the tile size
     // to compute the region cost
     // TODO(psuriana): Should we recurse if the cost is undefined?
     if (group_analysis.cost.defined()) {
+        debug(0) << "\n\n*******\nRECURSE OUTPUT: " << group.output << "\n";
+
+        debug(0) << "Recurse partitioning into subgroup...\n";
+        debug(0) << "\n\n***CURRENT GROUP:\n";
+        debug(0) << group;
+
+        /*disp_pipeline_graph();
+
+        debug(0) << "\n***BEFORE CLEAR BOUNDS:\n";
+        for (const auto &iter : pipeline_bounds) {
+            debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
+        }
+        debug(0) << "\n";*/
+
         //Partitioner part(pipeline_bounds, arch_params, dep_analysis, costs, outputs, unbounded);
 
         Partitioner part = *this;
@@ -2663,6 +2676,8 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         }
 
         // TODO(psuriana): THE INLINED DOESN'T SEEM TO MAKE ANY DIFFERENCE TO THE COST
+        // TODO(psuriana): should probably put updates of a func within the same
+        // group right away  (currently this will trigger error with evaluate_choice)
         for (const FStage &stg : group.members) {
             if (group.inlined.count(stg.func.name())) {
                 // TODO(psuriana): add the inlined function to the consumer group
@@ -2684,40 +2699,77 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             part.groups.insert(make_pair(stg, g));
         }
 
+        {
+
+            // Update the children map
+            part.children.clear();
+            for (const auto &iter : part.groups) {
+                Function f = iter.first.func;
+                size_t s = iter.first.stage_num;
+                set<string> parents = get_parents(f, s);
+
+                for (const string &c : parents) {
+                    // Filter out the calls to pipeline inputs. 'env' only contains
+                    // the functions computed and not the inputs.
+                    auto iter = dep_analysis.env.find(c);
+                    if ((c != f.name()) && (iter != dep_analysis.env.end())) {
+                        // Consumer depends only on the last stage of a producer
+                        // with multiple stages.
+                        const Function &prod_func = iter->second;
+                        int final_stage = prod_func.updates().size();
+
+                        FStage prod_stage(prod_func, final_stage);
+                        FStage cons_stage(f, s);
+
+                        part.children[prod_stage].insert(cons_stage);
+                    }
+                }
+
+                if (s > 0) {
+                    // Update the children map to reflect the dependencies between
+                    // different stages of the same function.
+                    FStage prod_stage(f, s - 1);
+                    FStage cons_stage(f, s);
+
+                    part.children[prod_stage].insert(cons_stage);
+                }
+            }
+        }
+
         // TODO(psuriana): need to use the tile size to recompute the bounds.
         // This is not really efficient.
-
-        part.pipeline_bounds.clear();
 
         // Find the regions required for each of the outputs and merge them
         // to compute the full pipeline_bounds.
         {
+            part.pipeline_bounds.clear();
+
             Function out = group.output.func;
-            DimBounds pure_bounds;
+            Definition def = get_stage_definition(out, 0);
+            const vector<Dim> &dims = def.schedule().dims();
+            const Box &old_bound = pipeline_bounds.at(out.name());
+
             Box out_box;
+            DimBounds pure_bounds;
 
-            if (out.name() == group.output.func.name()) {
-                Definition def = get_stage_definition(group.output.func, group.output.stage_num);
-                const vector<Dim> &dims = def.schedule().dims();
-                const Box &old_bound = pipeline_bounds.at(out.name());
+            for (int d = 0; d < (int)dims.size() - 1; d++) {
+                internal_assert(!dims[d].is_rvar());
+                const Interval &old_interval = old_bound[d];
 
-                int idx = 0;
-                for (int d = 0; d < (int)dims.size() - 1; d++) {
-                    if (!dims[d].is_rvar()) {
-                        const auto &iter = best_tile_config.find(dims[d].var);
-                        Expr tile_size = 1;
-                        if (iter != best_tile_config.end()) {
-                            tile_size = iter->second;
-                        }
-                        Interval I = Interval(make_zero(tile_size.type()), simplify(tile_size - 1));
-                        const Interval &old_interval = old_bound[idx];
-                        idx += 1;
-                        I.min = simplify(max(I.min, old_interval.min));
-                        I.max = simplify(min(I.max, old_interval.max));
-                        pure_bounds.emplace(dims[d].var, I);
-                        out_box.push_back(I);
-                    }
+                const auto &iter = best_tile_config.find(dims[d].var);
+                // TODO(psuriana): if tile size is not specified, what should be the value?
+                Expr tile_min = old_interval.min;
+                Expr tile_max = old_interval.max;
+                if (iter != best_tile_config.end()) {
+                    tile_min = make_zero(iter->second.type());
+                    tile_max = simplify(iter->second - 1);
                 }
+
+                Interval I = Interval(tile_min, tile_max);
+                I.min = simplify(max(I.min, old_interval.min));
+                I.max = simplify(min(I.max, old_interval.max));
+                pure_bounds.emplace(dims[d].var, I);
+                out_box.push_back(I);
             }
 
             set<string> prods;
@@ -2727,40 +2779,17 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
 
             map<string, Box> regions = dep_analysis.regions_required(out, pure_bounds, prods,
                                                                      false, &costs.input_estimates);
-
             // Add the output region to the pipeline bounds as well.
             regions.emplace(out.name(), out_box);
 
             merge_regions(part.pipeline_bounds, regions);
         }
 
-        debug(0) << "\n\n*******\nRECURSE OUTPUT: " << group.output << "\n";
-
         /*debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
         for (const auto &iter : part.pipeline_bounds) {
             debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
         }
-        debug(0) << "\n";*/
-
-        part.initialize_groups();
-
-
-        debug(0) << "Recurse partitioning into subgroup...\n";
-        debug(0) << "\n\n***CURRENT GROUP:\n";
-        debug(0) << group;
-
-        disp_pipeline_graph();
-
-        debug(0) << "\n\n***INITIAL SUBGROUP:\n";
-        part.disp_grouping();
-
-        part.group(Partitioner::Level::FastMem, best_tile_config);
-
-        debug(0) << "GET HERE\n";
-
-        /*part.disp_grouping();
-        part.disp_pipeline_costs();
-
+        debug(0) << "\n";
 
         debug(0) << "OUTER Tile sizes: " << "{";
         for (auto iter = best_tile_config.begin(); iter != best_tile_config.end(); ++iter) {
@@ -2770,6 +2799,16 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             debug(0) << "(" << iter->first << ", " <<  iter->second << ")";
         }
         debug(0) << "}" << '\n';*/
+
+        part.initialize_groups();
+
+        debug(0) << "\n\n***INITIAL SUBGROUP:\n";
+        part.disp_grouping();
+
+        part.group(Partitioner::Level::FastMem, best_tile_config);
+
+        /*part.disp_grouping();
+        part.disp_pipeline_costs();*/
 
 
         // The computation size depends on the tile, however, the memory cost
