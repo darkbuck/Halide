@@ -26,11 +26,11 @@ double run_test(bool auto_schedule) {
     /* THE ALGORITHM */
 
     // Number of pyramid levels
-    int J = 3;
-    const int maxJ = 3;
+    int J = 8;
+    const int maxJ = 20;
 
     // number of intensity levels
-    int levels = 3;
+    int levels = 8;
     // Parameters controlling the filter
     float alpha = 1;
     float beta = 1;
