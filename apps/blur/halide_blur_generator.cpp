@@ -44,11 +44,11 @@ public:
         // How to schedule it
         if (auto_schedule) {
             // Provide estimates on the input image
-            input.dim(0).set_bounds_estimate(0, 1536);
-            input.dim(1).set_bounds_estimate(0, 2560);
+            input.dim(0).set_bounds_estimate(0, 6408);
+            input.dim(1).set_bounds_estimate(0, 4802);
             // Provide estimates on the pipeline output
-            output.estimate(x, 0, 1536)
-                .estimate(y, 0, 2560);
+            blur_y.estimate(x, 0, 6408)
+                  .estimate(y, 0, 4802);
             // Auto schedule the pipeline: this calls auto_schedule() for
             // all of the Outputs in this Generator
             auto_schedule_outputs();

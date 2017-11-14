@@ -28,5 +28,9 @@ $(BIN)/test: test.cpp $(BIN)/halide_blur.a $(BIN)/halide_blur_auto_schedule.a
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(OPENMP_FLAGS) -msse2 -Wall -O2 -I$(BIN) test.cpp $(BIN)/halide_blur.a $(BIN)/halide_blur_auto_schedule.a -o $@ $(LDFLAGS) $(IMAGE_IO_FLAGS)
 
+run: $(BIN)/test
+	@-mkdir -p $(BIN)
+	$(BIN)/test
+
 clean:
 	rm -rf $(BIN)

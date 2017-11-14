@@ -2098,17 +2098,40 @@ void Partitioner::group_recurse() {
         fixpoint = true;
         vector<pair<string, string>> cand = get_grouping_candidate(groups, outputs, Partitioner::Level::FastMem);
 
-        debug(3) << "\n============================" << '\n';
-        debug(3) << "Current grouping candidates:" << '\n';
-        debug(3) << "============================" << '\n';
+        debug(0) << "\n============================" << '\n';
+        debug(0) << "Current grouping candidates:" << '\n';
+        debug(0) << "============================" << '\n';
         for (size_t i = 0; i < cand.size(); ++i) {
-            debug(3) << "{" << cand[i].first << ", " << cand[i].second << "}" << '\n';
+            debug(0) << "{" << cand[i].first << ", " << cand[i].second << "}" << '\n';
         }
 
         vector<pair<GroupingChoice, GroupConfig>> best;
         vector<vector<Group>> best_subgroups;
 
         std::tie(best, best_subgroups) = choose_candidate_grouping_recurse(cand);
+
+        debug(0) << "\n*********************\nBEST:\n";
+        for (const auto &iter : best) {
+            debug(0) << "\t" << iter.first << "\n";
+            debug(0) << "\t\ttile size: ";
+            for (const auto &it : iter.second.tile_sizes) {
+                debug(0) << "[" << it.first << ": " << it.second << "], ";
+            }
+            debug(0) << "\n";
+            debug(0) << "\t\tanalysis: " << iter.second.analysis << "\n";
+        }
+        debug(0) << "\n\n";
+
+        debug(0) << "\n*********************\nSUBGROUPS\n";
+        for (size_t i = 0; i < best_subgroups.size(); ++i) {
+            debug(0) << "Subgroup " << i << ":\n";
+            for (const auto &g : best_subgroups[i]) {
+                debug(0) << g << "\n";
+            }
+            debug(0) << "\n";
+        }
+        debug(0) << "\n";
+
         internal_assert(best.size() == best_subgroups.size());
         if (best.empty()) {
             continue;
@@ -2646,8 +2669,8 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
     // to compute the region cost
     // TODO(psuriana): Should we recurse if the cost is undefined?
     if (group_analysis.cost.defined()) {
-        debug(0) << "Recurse partitioning into subgroup, output: " << group.output << "\n";
-        debug(0) << group;
+        /*debug(0) << "\n\n*********************\nRecurse partitioning into subgroup, output: " << group.output << "\n";
+        debug(0) << group;*/
 
         /*disp_pipeline_graph();
 
@@ -2799,14 +2822,14 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
 
         part.initialize_groups();
 
-        debug(0) << "\n\n***INITIAL SUBGROUP:\n";
+        /*debug(0) << "\n\n***INITIAL SUBGROUP:\n";
         part.disp_grouping();
+        debug(0) << "\n\n***RECURSE SUBGROUP:\n";*/
 
-        debug(0) << "\n\n***RECURSE SUBGROUP:\n";
         part.group(Partitioner::Level::FastMem, best_tile_config);
 
-        part.disp_grouping();
-        part.disp_pipeline_costs();
+        /*part.disp_grouping();
+        part.disp_pipeline_costs();*/
 
 
         // The computation size depends on the tile, however, the memory cost
@@ -2827,11 +2850,18 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         internal_assert(memory_cost.defined());
         memory_cost = simplify(memory_cost);
 
-        debug(0) << "TOTAL memory cost: " << memory_cost << "\n";
+        /*debug(0) << "TOTAL memory cost: " << memory_cost << "\n";
         debug(0) << "NO SUBGROUP COST: " << group_analysis << "\n";
-        debug(0) << "**********************\n\n";
+        debug(0) << "**********************\n\n";*/
         group_analysis.cost.memory = memory_cost;
     }
+
+    debug(0) << "\nRECURSE SUBGROUPS:\n";
+    for (size_t i = 0; i < subgroups.size(); ++i) {
+        debug(0) << "Subgroup " << i << "\n";
+        debug(0) << subgroups[i] << "\n";
+    }
+    debug(0) << "\n";
 
     return {GroupConfig(best_tile_config, group_analysis), subgroups};
 }
