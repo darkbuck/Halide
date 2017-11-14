@@ -1080,7 +1080,8 @@ struct Partitioner {
     // Given a grouping 'g', compute the estimated cost (arithmetic + memory) and
     // parallelism that can be potentially exploited when computing that group.
     GroupAnalysis analyze_group(const Group &g, bool show_analysis,
-                                const map<string, Expr> &group_tile_bounds = {});
+                                const map<string, Expr> &group_tile_bounds = {},
+                                bool is_subgroup = false);
 
     // For each group in the partition, return the regions of the producers
     // need to be allocated to compute a tile of the group's output.
@@ -1505,11 +1506,11 @@ Partitioner::choose_candidate_grouping(const vector<pair<string, string>> &cands
         bool no_redundant_work = false;
         Expr overall_benefit = estimate_benefit(grouping, no_redundant_work, true);
 
-        debug(0) << "\nCandidate grouping:\n";
+        debug(3) << "\nCandidate grouping:\n";
         for (const auto &g : grouping) {
-            debug(0) << "  " << g.first;
+            debug(3) << "  " << g.first;
         }
-        debug(0) << "Candidate benefit: " << overall_benefit << '\n';
+        debug(3) << "Candidate benefit: " << overall_benefit << '\n';
         // TODO: The grouping process can be non-deterministic when the costs
         // of two choices are equal
         if (overall_benefit.defined() && can_prove(best_benefit < overall_benefit)) {
@@ -1518,12 +1519,12 @@ Partitioner::choose_candidate_grouping(const vector<pair<string, string>> &cands
         }
     }
 
-    debug(0) << "\nBest grouping:\n";
+    debug(3) << "\nBest grouping:\n";
     for (const auto &g : best_grouping) {
-        debug(0) << "  " << g.first;
+        debug(3) << "  " << g.first;
     }
     if (best_grouping.size() > 0) {
-        debug(0) << "Best benefit: " << best_benefit << '\n';
+        debug(3) << "Best benefit: " << best_benefit << '\n';
     }
 
     return best_grouping;
@@ -1599,7 +1600,7 @@ inline bool operator==(const map<string, Expr> &m1, const map<string, Expr> &m2)
     return true;
 }
 
-/*vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
+vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
         const FStage &stg, const map<string, Expr> &tile_bounds) {
     // TODO(psuriana): For now, always slide on the second innermost
     // pure var dimension.
@@ -1609,8 +1610,8 @@ inline bool operator==(const map<string, Expr> &m1, const map<string, Expr> &m2)
     const vector<Dim> &dims = def.schedule().dims();
 
     // TODO(psuriana): for now always slide 1
-    //vector<int> size_variants = {1, 4, 8, 16, 32, 64, 128, 256};
-    vector<int> size_variants = {1};
+    vector<int> size_variants = {1, 4, 8, 16, 32, 64, 128, 256};
+    //vector<int> size_variants = {1};
     vector<map<string, Expr>> tile_configs;
 
     // Get the variable name of the second innermost dimension. Skip rvar.
@@ -1643,9 +1644,9 @@ inline bool operator==(const map<string, Expr> &m1, const map<string, Expr> &m2)
     }
 
     return tile_configs;
-}*/
+}
 
-vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
+/*vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
         const FStage &stg, const map<string, Expr> &tile_bounds) {
     // TODO: This is a wart due to the cost model not taking vectorization
     // and pre-fetching into account. Ensuring the innermost dimension has
@@ -1761,7 +1762,7 @@ vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
     }
 
     return tile_configs;
-}
+}*/
 
 
 vector<map<string, Expr>> Partitioner::generate_tile_configs(const FStage &stg) {
@@ -1916,7 +1917,7 @@ Partitioner::find_best_tile_config_sliding_window(const Group &g, const map<stri
     no_tile.tile_sizes = no_tile_config;
 
     bool show_analysis = false;
-    GroupAnalysis no_tile_analysis = analyze_group(no_tile, show_analysis);
+    GroupAnalysis no_tile_analysis = analyze_group(no_tile, show_analysis, tile_bounds, true);
 
     GroupAnalysis best_analysis = no_tile_analysis;
     map<string, Expr> best_config = no_tile_config;
@@ -1942,13 +1943,13 @@ Partitioner::find_best_tile_config_sliding_window(const Group &g, const map<stri
         Group new_group = g;
         new_group.tile_sizes = config;
 
-        GroupAnalysis new_analysis = analyze_group(new_group, show_analysis);
+        GroupAnalysis new_analysis = analyze_group(new_group, show_analysis, tile_bounds, true);
 
         bool no_redundant_work = false;
         Expr benefit = estimate_benefit(best_analysis, new_analysis,
                                         no_redundant_work, true);
 
-        //if (show_analysis) {
+        if (show_analysis) {
             debug(0) << "\nTile config: ";
             for (const auto &iter : config) {
                 debug(0) << "[" << iter.first << ": " << iter.second << "], ";
@@ -1960,7 +1961,7 @@ Partitioner::find_best_tile_config_sliding_window(const Group &g, const map<stri
             debug(0)
                 << "arith cost:" << cast<float>(new_analysis.cost.arith / no_tile_analysis.cost.arith)
                 << ", mem cost:" << cast<float>(new_analysis.cost.memory / no_tile_analysis.cost.memory) << '\n';
-        //}
+        }
 
         if (benefit.defined() && can_prove(benefit > 0)) {
             best_config = config;
@@ -2269,7 +2270,8 @@ DimBounds Partitioner::get_bounds_from_tile_sizes(const FStage &s,
 }
 
 Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_analysis,
-                                                      const map<string, Expr> &group_tile_bounds) {
+                                                      const map<string, Expr> &group_tile_bounds,
+                                                      bool is_subgroup) {
     // Get the definition corresponding to the group output
     Definition def = get_stage_definition(g.output.func, g.output.stage_num);
 
@@ -2310,7 +2312,6 @@ Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_
             if (!extent.defined()) {
                 return GroupAnalysis();
             }
-
             Expr dim_tiles = simplify((extent + size - 1) / size);
             estimate_tiles *= dim_tiles;
             // Since all Vars are inherently parallelizable by construct, we
@@ -2358,7 +2359,7 @@ Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_
                                             g.output.stage_num,
                                             tile_bounds, g.inlined);
 
-    debug(0) << "\n\nANALYZE GROUP:\n" << g << "\n";
+    /*debug(0) << "\n\nANALYZE GROUP:\n" << g << "\n";
 
     debug(0) << "tile size:\n";
     for (const auto &iter : g.tile_sizes) {
@@ -2383,7 +2384,7 @@ Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_
         debug(0) << "\t" << iter.first << " -> min: " << iter.second.min << ", max: " << iter.second.max << "\n";
     }
     debug(0) << "\n";
-    debug(0) << "Out cost: " << out_cost << "\n";
+    debug(0) << "Out cost: " << out_cost << "\n";*/
 
     if (!out_cost.defined()) {
         return GroupAnalysis();
@@ -2525,22 +2526,31 @@ Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_
         per_tile_cost.memory += cost_factor * f_load.second;
     }
 
-    //if (show_analysis) {
+    if (show_analysis) {
+        per_tile_cost.simplify();
         debug(0) << "\nDetailed loads:\n";
         for (const auto &f_load : group_load_costs) {
             debug(0) << "(" << f_load.first << "," << f_load.second << ")";
         }
         debug(0) << '\n';
-
-        debug(0) << "\nPer tile memory cost:" << per_tile_cost.memory << '\n';
         debug(0) << "Per tile arith cost:" << per_tile_cost.arith << '\n';
-    //}
+        debug(0) << "Per tile memory cost:" << per_tile_cost.memory << '\n';
+    }
 
-    GroupAnalysis g_analysis(
-        Cost(per_tile_cost.arith * estimate_tiles, per_tile_cost.memory * estimate_tiles),
-        parallelism);
+    // TODO(psuriana): this is probably not really right for the subgroup
+    // cost model. We'll probably need to add overhead cost of
+    // sliding window
+    GroupAnalysis g_analysis;
+    if (is_subgroup) {
+        g_analysis = GroupAnalysis(Cost(per_tile_cost.arith, per_tile_cost.memory),
+                                   parallelism);
+    } else {
+        g_analysis = GroupAnalysis(Cost(per_tile_cost.arith * estimate_tiles, per_tile_cost.memory * estimate_tiles),
+                                   parallelism);
+    }
     g_analysis.simplify();
-    debug(0) << "Total cost: " << g_analysis << "\n";
+    //debug(0) << "# Estimate tiles: " << simplify(estimate_tiles) << "\n";
+    //debug(0) << "Total cost: " << g_analysis << "\n";
 
     return g_analysis;
 }
@@ -4233,11 +4243,15 @@ string generate_schedules(const vector<Function> &outputs, const Target &target,
     part.grouping_cache.clear();
     //part.group(Partitioner::Level::FastMem, {});
     part.group_recurse();
-    if (debug::debug_level() >= 3) {
+
+    debug(0) << "\n\n*************************************************\n";
+    debug(0) << "FINAL RESULT:\n";
+    debug(0) << "*************************************************\n";
+    //if (debug::debug_level() >= 3) {
         part.disp_pipeline_costs();
         part.disp_grouping();
         part.disp_pipeline_graph();
-    }
+    //}
 
     debug(0) << "Initializing AutoSchedule...\n";
     AutoSchedule sched(env, full_order);
