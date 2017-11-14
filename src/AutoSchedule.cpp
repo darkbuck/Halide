@@ -1241,6 +1241,11 @@ void Partitioner::disp_grouping() {
     debug(0) << "=========" << '\n';
     for (const auto &g : groups) {
         debug(0) << g.second << '\n';
+        for (size_t i = 0; i < g.second.subgroups.size(); ++i) {
+            debug(0) << "Subgroup " << i << ":\n";
+            debug(0) << g.second.subgroups[i] << "\n";
+        }
+        debug(0) << "\n";
     }
     debug(0) << "=========" << '\n';
 }
@@ -1500,11 +1505,11 @@ Partitioner::choose_candidate_grouping(const vector<pair<string, string>> &cands
         bool no_redundant_work = false;
         Expr overall_benefit = estimate_benefit(grouping, no_redundant_work, true);
 
-        debug(3) << "\nCandidate grouping:\n";
+        debug(0) << "\nCandidate grouping:\n";
         for (const auto &g : grouping) {
-            debug(3) << "  " << g.first;
+            debug(0) << "  " << g.first;
         }
-        debug(3) << "Candidate benefit: " << overall_benefit << '\n';
+        debug(0) << "Candidate benefit: " << overall_benefit << '\n';
         // TODO: The grouping process can be non-deterministic when the costs
         // of two choices are equal
         if (overall_benefit.defined() && can_prove(best_benefit < overall_benefit)) {
@@ -1513,12 +1518,12 @@ Partitioner::choose_candidate_grouping(const vector<pair<string, string>> &cands
         }
     }
 
-    debug(3) << "\nBest grouping:\n";
+    debug(0) << "\nBest grouping:\n";
     for (const auto &g : best_grouping) {
-        debug(3) << "  " << g.first;
+        debug(0) << "  " << g.first;
     }
     if (best_grouping.size() > 0) {
-        debug(3) << "Best benefit: " << best_benefit << '\n';
+        debug(0) << "Best benefit: " << best_benefit << '\n';
     }
 
     return best_grouping;
@@ -1594,7 +1599,7 @@ inline bool operator==(const map<string, Expr> &m1, const map<string, Expr> &m2)
     return true;
 }
 
-vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
+/*vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
         const FStage &stg, const map<string, Expr> &tile_bounds) {
     // TODO(psuriana): For now, always slide on the second innermost
     // pure var dimension.
@@ -1638,9 +1643,9 @@ vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
     }
 
     return tile_configs;
-}
+}*/
 
-/*vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
+vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
         const FStage &stg, const map<string, Expr> &tile_bounds) {
     // TODO: This is a wart due to the cost model not taking vectorization
     // and pre-fetching into account. Ensuring the innermost dimension has
@@ -1756,7 +1761,7 @@ vector<map<string, Expr>> Partitioner::generate_tile_configs_sliding_window(
     }
 
     return tile_configs;
-}*/
+}
 
 
 vector<map<string, Expr>> Partitioner::generate_tile_configs(const FStage &stg) {
@@ -1886,11 +1891,11 @@ Partitioner::find_best_tile_config(const Group &g) {
 
         if (show_analysis) {
             debug(0) << "Benefit relative to not tiling:" << benefit << '\n';
-            debug(0) << "Best analysis:" << new_analysis;
+            debug(0) << "Current analysis:" << new_analysis;
             debug(0) << "No tile analysis:" << no_tile_analysis;
             debug(0)
-                << "arith cost:" << cast<float>(new_analysis.cost.arith / no_tile_analysis.cost.arith)
-                << ", mem cost:" << cast<float>(new_analysis.cost.memory / no_tile_analysis.cost.memory) << '\n';
+                << "arith cost:" << simplify(cast<float>(new_analysis.cost.arith / no_tile_analysis.cost.arith))
+                << ", mem cost:" << simplify(cast<float>(new_analysis.cost.memory / no_tile_analysis.cost.memory)) << '\n';
         }
 
         if (benefit.defined() && can_prove(benefit > 0)) {
@@ -1943,14 +1948,19 @@ Partitioner::find_best_tile_config_sliding_window(const Group &g, const map<stri
         Expr benefit = estimate_benefit(best_analysis, new_analysis,
                                         no_redundant_work, true);
 
-        if (show_analysis) {
+        //if (show_analysis) {
+            debug(0) << "\nTile config: ";
+            for (const auto &iter : config) {
+                debug(0) << "[" << iter.first << ": " << iter.second << "], ";
+            }
+            debug(0) << "\n";
             debug(0) << "Benefit relative to not tiling:" << benefit << '\n';
             debug(0) << "Best analysis:" << new_analysis;
             debug(0) << "No tile analysis:" << no_tile_analysis;
             debug(0)
                 << "arith cost:" << cast<float>(new_analysis.cost.arith / no_tile_analysis.cost.arith)
                 << ", mem cost:" << cast<float>(new_analysis.cost.memory / no_tile_analysis.cost.memory) << '\n';
-        }
+        //}
 
         if (benefit.defined() && can_prove(benefit > 0)) {
             best_config = config;
@@ -2112,17 +2122,17 @@ void Partitioner::group_recurse() {
 
         debug(0) << "\n*********************\nBEST:\n";
         for (const auto &iter : best) {
-            debug(0) << "\t" << iter.first << "\n";
-            debug(0) << "\t\ttile size: ";
+            debug(0) << iter.first;
+            debug(0) << "tile size: ";
             for (const auto &it : iter.second.tile_sizes) {
                 debug(0) << "[" << it.first << ": " << it.second << "], ";
             }
             debug(0) << "\n";
-            debug(0) << "\t\tanalysis: " << iter.second.analysis << "\n";
+            debug(0) << "analysis: " << iter.second.analysis << "\n\n";
         }
         debug(0) << "\n\n";
 
-        debug(0) << "\n*********************\nSUBGROUPS\n";
+        debug(0) << "*********************\nSUBGROUPS\n";
         for (size_t i = 0; i < best_subgroups.size(); ++i) {
             debug(0) << "Subgroup " << i << ":\n";
             for (const auto &g : best_subgroups[i]) {
@@ -2138,6 +2148,9 @@ void Partitioner::group_recurse() {
         } else {
             fixpoint = false;
         }
+
+        debug(0) << "\nBEFORE:";
+        disp_grouping();
 
         // The following code makes the assumption that all the stages of a function
         // will be in the same group. 'choose_candidate_grouping' ensures that the
@@ -2165,9 +2178,15 @@ void Partitioner::group_recurse() {
 
         // TODO(psuriana): need to also update the subgroup and not only the
         // group
-        for (const auto &group : best) {
+        for (size_t i = 0; i < best.size(); ++i) {
+            const auto &group = best[i];
             internal_assert(group.first.prod == prod);
             merge_groups(group.first, group.second, Partitioner::Level::FastMem);
+
+            // TODO(psuriana): add subgroups to the consumer group (the producer
+            // group is going to be erased later)
+            Group &child_group = get_element(groups, group.first.cons);
+            child_group.subgroups = best_subgroups[i];
         }
 
         for (size_t s = 0; s < num_stages; s++) {
@@ -2192,6 +2211,9 @@ void Partitioner::group_recurse() {
                 }
             }
         }
+
+        debug(0) << "\n\nAFTER";
+        disp_grouping();
 
         if (debug::debug_level() >= 3) {
             disp_pipeline_costs();
@@ -2336,7 +2358,7 @@ Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_
                                             g.output.stage_num,
                                             tile_bounds, g.inlined);
 
-    /*debug(0) << "\n\nANALYZE GROUP:\n" << g << "\n";
+    debug(0) << "\n\nANALYZE GROUP:\n" << g << "\n";
 
     debug(0) << "tile size:\n";
     for (const auto &iter : g.tile_sizes) {
@@ -2361,7 +2383,7 @@ Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_
         debug(0) << "\t" << iter.first << " -> min: " << iter.second.min << ", max: " << iter.second.max << "\n";
     }
     debug(0) << "\n";
-    debug(0) << "Out cost: " << out_cost << "\n";*/
+    debug(0) << "Out cost: " << out_cost << "\n";
 
     if (!out_cost.defined()) {
         return GroupAnalysis();
@@ -2503,7 +2525,7 @@ Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_
         per_tile_cost.memory += cost_factor * f_load.second;
     }
 
-    if (show_analysis) {
+    //if (show_analysis) {
         debug(0) << "\nDetailed loads:\n";
         for (const auto &f_load : group_load_costs) {
             debug(0) << "(" << f_load.first << "," << f_load.second << ")";
@@ -2512,12 +2534,13 @@ Partitioner::GroupAnalysis Partitioner::analyze_group(const Group &g, bool show_
 
         debug(0) << "\nPer tile memory cost:" << per_tile_cost.memory << '\n';
         debug(0) << "Per tile arith cost:" << per_tile_cost.arith << '\n';
-    }
+    //}
 
     GroupAnalysis g_analysis(
         Cost(per_tile_cost.arith * estimate_tiles, per_tile_cost.memory * estimate_tiles),
         parallelism);
     g_analysis.simplify();
+    debug(0) << "Total cost: " << g_analysis << "\n";
 
     return g_analysis;
 }
@@ -2581,6 +2604,13 @@ void Partitioner::merge_groups(const GroupingChoice &choice, const GroupConfig &
 Partitioner::GroupConfig Partitioner::evaluate_choice(const GroupingChoice &choice,
                                                       Partitioner::Level level,
                                                       const map<string, Expr> &tile_bounds) {
+    debug(0) << "\nEVALUATE CHOICE FOR " << choice;
+    debug(0) << "Tile bounds: ";
+    for (const auto &iter : tile_bounds) {
+        debug(0) << "[" << iter.first << ": " << iter.second << "], ";
+    }
+    debug(0) << "\n";
+
     // Create a group that reflects the grouping choice and evaluate the cost
     // of the group.
     const Function &prod_f = get_element(dep_analysis.env, choice.prod);
@@ -2669,12 +2699,12 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
     // to compute the region cost
     // TODO(psuriana): Should we recurse if the cost is undefined?
     if (group_analysis.cost.defined()) {
-        /*debug(0) << "\n\n*********************\nRecurse partitioning into subgroup, output: " << group.output << "\n";
-        debug(0) << group;*/
+        debug(0) << "\n\n*********************\nRecurse partitioning into subgroup, output: " << group.output << "\n";
+        debug(0) << group;
 
-        /*disp_pipeline_graph();
+        disp_pipeline_graph();
 
-        debug(0) << "\n***BEFORE CLEAR BOUNDS:\n";
+        /*debug(0) << "\n***BEFORE CLEAR BOUNDS:\n";
         for (const auto &iter : pipeline_bounds) {
             debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
         }
@@ -2805,7 +2835,7 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             merge_regions(part.pipeline_bounds, regions);
         }
 
-        /*debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
+        debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
         for (const auto &iter : part.pipeline_bounds) {
             debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
         }
@@ -2818,18 +2848,18 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             }
             debug(0) << "(" << iter->first << ", " <<  iter->second << ")";
         }
-        debug(0) << "}" << '\n';*/
+        debug(0) << "}" << '\n';
 
         part.initialize_groups();
 
-        /*debug(0) << "\n\n***INITIAL SUBGROUP:\n";
+        debug(0) << "\n\n***INITIAL SUBGROUP:\n";
         part.disp_grouping();
-        debug(0) << "\n\n***RECURSE SUBGROUP:\n";*/
+        debug(0) << "\n\n***RECURSE SUBGROUP:\n";
 
         part.group(Partitioner::Level::FastMem, best_tile_config);
 
-        /*part.disp_grouping();
-        part.disp_pipeline_costs();*/
+        part.disp_grouping();
+        part.disp_pipeline_costs();
 
 
         // The computation size depends on the tile, however, the memory cost
@@ -2850,10 +2880,14 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         internal_assert(memory_cost.defined());
         memory_cost = simplify(memory_cost);
 
-        /*debug(0) << "TOTAL memory cost: " << memory_cost << "\n";
+        debug(0) << "TOTAL memory cost: " << memory_cost << "\n";
         debug(0) << "NO SUBGROUP COST: " << group_analysis << "\n";
-        debug(0) << "**********************\n\n";*/
+        debug(0) << "**********************\n\n";
         group_analysis.cost.memory = memory_cost;
+
+        for (const auto &iter : part.groups) {
+            subgroups.push_back(iter.second);
+        }
     }
 
     debug(0) << "\nRECURSE SUBGROUPS:\n";
@@ -2922,6 +2956,8 @@ Expr Partitioner::estimate_benefit(
     }
     new_group_analysis.simplify();
 
+    debug(0) << "\tnew group analysis: " << new_group_analysis << "\n";
+
     GroupAnalysis old_group_analysis(Cost(0, 0), Int(64).max());
     for (const auto &g : old_groups) {
         const auto &iter = group_costs.find(g);
@@ -2939,6 +2975,8 @@ Expr Partitioner::estimate_benefit(
         }
     }
     old_group_analysis.simplify();
+
+    debug(0) << "\told group analysis: " << old_group_analysis << "\n";
 
     return estimate_benefit(old_group_analysis, new_group_analysis,
                             no_redundant_work, ensure_parallelism);
@@ -3393,7 +3431,7 @@ void Partitioner::generate_group_cpu_schedule(
     if (g.output.stage_num > 0) {
         int stage_num = g.output.stage_num;
         f_handle = Func(g_out).update(stage_num - 1);
-    } else {
+    } else if (!is_subgroup) {
         Func(g_out).compute_root();
         sched.push_schedule(f_handle.name(), g.output.stage_num, "compute_root()", {});
     }
@@ -3419,14 +3457,16 @@ void Partitioner::generate_group_cpu_schedule(
         }
     }
 
-    // Reorder the dimensions for better spatial locality (i.e. smallest stride
-    // is innermost). If we only have one dimension (excluding __outermost),
-    // there is nothing to reorder.
-    if (dims.size() > 2) {
-        map<string, Expr> strides =
-            analyze_spatial_locality(g.output, group_storage_bounds, inlines);
-        if (!strides.empty()) {
-            reorder_dims(f_handle, g.output.stage_num, def, strides, sched);
+    if (!is_subgroup) {
+        // Reorder the dimensions for better spatial locality (i.e. smallest stride
+        // is innermost). If we only have one dimension (excluding __outermost),
+        // there is nothing to reorder.
+        if (dims.size() > 2) {
+            map<string, Expr> strides =
+                analyze_spatial_locality(g.output, group_storage_bounds, inlines);
+            if (!strides.empty()) {
+                reorder_dims(f_handle, g.output.stage_num, def, strides, sched);
+            }
         }
     }
 
@@ -3466,90 +3506,92 @@ void Partitioner::generate_group_cpu_schedule(
         }
     }
 
-    // Reorder the tile dimensions
-    if (!outer_dims.empty()) {
+    if (!is_subgroup) {
+        // Reorder the tile dimensions
+        if (!outer_dims.empty()) {
 
-        vector<VarOrRVar> ordering;
-        for (const auto &v : inner_dims) {
-            ordering.push_back(v);
-        }
-        for (const auto &v : outer_dims) {
-            ordering.push_back(v);
-        }
-
-        set<string> var_list;
-        string var_order = ordering[0].name();
-        for (size_t o = 1; o < ordering.size(); o++) {
-            var_order += ", " + ordering[o].name();
-            var_list.insert(ordering[o].name());
-        }
-
-        if (dims != ordering) {
-            f_handle.reorder(ordering);
-            sched.push_schedule(f_handle.name(), g.output.stage_num,
-                                "reorder(" + var_order + ")", var_list);
-        }
-    }
-
-    vectorize_stage(g, f_handle, g.output.stage_num, def, g_out, true, t,
-                    rvars, stg_estimates, sched);
-
-    // Parallelize definition
-    Expr def_par = 1;
-    // TODO: Investigate if it is better to pull one large dimension and
-    // parallelize over it or to generate nested parallelism.
-    //
-    // Go from the outer to the innermost loop until sufficient parallelism
-    // is achieved. Stop the search once we find a vectorized dimension since
-    // it doesn't make any sense to have a parallelized inner loop within a
-    // vectorized outer loop.
-    bool nested_parallelism = true;
-    if (nested_parallelism) {
-        int dim_start = dims.size() - 2;
-        string seq_var = "";
-        for (int d = dim_start; d >= 0; d--) {
-            if (dims[d].for_type == ForType::Vectorized) {
-                break;
+            vector<VarOrRVar> ordering;
+            for (const auto &v : inner_dims) {
+                ordering.push_back(v);
+            }
+            for (const auto &v : outer_dims) {
+                ordering.push_back(v);
             }
 
-            string var = get_base_name(dims[d].var);
-            bool is_rvar = (rvars.find(var) != rvars.end());
-            internal_assert(is_rvar == dims[d].is_rvar());
-            VarOrRVar v(var, is_rvar);
-
-            if (is_rvar && !can_parallelize_rvar(var, g_out.name(), def)) {
-                if (seq_var == "") {
-                    seq_var = var;
-                }
-                continue;
+            set<string> var_list;
+            string var_order = ordering[0].name();
+            for (size_t o = 1; o < ordering.size(); o++) {
+                var_order += ", " + ordering[o].name();
+                var_list.insert(ordering[o].name());
             }
 
-            if (can_prove(def_par >= arch_params.parallelism)) {
-                // Enough parallelism to saturate target machine
-                break;
-            }
-
-            const auto &iter = stg_estimates.find(var);
-            if ((iter != stg_estimates.end()) && iter->second.defined()) {
-                if (seq_var != "") {
-                    VarOrRVar seq(seq_var, (rvars.find(seq_var) != rvars.end()));
-                    f_handle.reorder(seq, v);
-                    sched.push_schedule(f_handle.name(), g.output.stage_num,
-                                        "reorder(" + seq_var + ", " + var + ")",
-                                        {seq_var, var});
-                }
-                f_handle.parallel(v);
+            if (dims != ordering) {
+                f_handle.reorder(ordering);
                 sched.push_schedule(f_handle.name(), g.output.stage_num,
-                                    "parallel(" + var + ")", {var});
-                def_par = simplify(def_par * iter->second);
-            } else {
-                break;
+                                    "reorder(" + var_order + ")", var_list);
             }
         }
-    }
 
-    if (can_prove(def_par < arch_params.parallelism)) {
-        user_warning << "Insufficient parallelism for " << f_handle.name() << '\n';
+        vectorize_stage(g, f_handle, g.output.stage_num, def, g_out, true, t,
+                        rvars, stg_estimates, sched);
+
+        // Parallelize definition
+        Expr def_par = 1;
+        // TODO: Investigate if it is better to pull one large dimension and
+        // parallelize over it or to generate nested parallelism.
+        //
+        // Go from the outer to the innermost loop until sufficient parallelism
+        // is achieved. Stop the search once we find a vectorized dimension since
+        // it doesn't make any sense to have a parallelized inner loop within a
+        // vectorized outer loop.
+        bool nested_parallelism = true;
+        if (nested_parallelism) {
+            int dim_start = dims.size() - 2;
+            string seq_var = "";
+            for (int d = dim_start; d >= 0; d--) {
+                if (dims[d].for_type == ForType::Vectorized) {
+                    break;
+                }
+
+                string var = get_base_name(dims[d].var);
+                bool is_rvar = (rvars.find(var) != rvars.end());
+                internal_assert(is_rvar == dims[d].is_rvar());
+                VarOrRVar v(var, is_rvar);
+
+                if (is_rvar && !can_parallelize_rvar(var, g_out.name(), def)) {
+                    if (seq_var == "") {
+                        seq_var = var;
+                    }
+                    continue;
+                }
+
+                if (can_prove(def_par >= arch_params.parallelism)) {
+                    // Enough parallelism to saturate target machine
+                    break;
+                }
+
+                const auto &iter = stg_estimates.find(var);
+                if ((iter != stg_estimates.end()) && iter->second.defined()) {
+                    if (seq_var != "") {
+                        VarOrRVar seq(seq_var, (rvars.find(seq_var) != rvars.end()));
+                        f_handle.reorder(seq, v);
+                        sched.push_schedule(f_handle.name(), g.output.stage_num,
+                                            "reorder(" + seq_var + ", " + var + ")",
+                                            {seq_var, var});
+                    }
+                    f_handle.parallel(v);
+                    sched.push_schedule(f_handle.name(), g.output.stage_num,
+                                        "parallel(" + var + ")", {var});
+                    def_par = simplify(def_par * iter->second);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if (can_prove(def_par < arch_params.parallelism)) {
+            user_warning << "Insufficient parallelism for " << f_handle.name() << '\n';
+        }
     }
 
     // Find the level at which group members will be computed.
@@ -3593,14 +3635,19 @@ void Partitioner::generate_group_cpu_schedule(
             if (!outer_dims.empty()) {
                 if (tile_inner_var.is_rvar) {
                     Func(mem.func).compute_at(Func(g_out), tile_inner_var.rvar);
+                    Func(mem.func).store_at(Func(g_out), tile_inner_var.rvar);
                 } else {
                     Func(mem.func).compute_at(Func(g_out), tile_inner_var.var);
+                    Func(mem.func).store_at(Func(g_out), tile_inner_var.var);
                 }
                 string sanitized_g_out = get_sanitized_name(g_out.name());
                 sched.push_schedule(mem_handle.name(), mem.stage_num,
                                     "compute_at(" + sanitized_g_out + ", " + tile_inner_var.name() + ")",
                                     {sanitized_g_out, tile_inner_var.name()});
-            } else {
+                sched.push_schedule(mem_handle.name(), mem.stage_num,
+                                    "store_at(" + sanitized_g_out + ", " + tile_inner_var.name() + ")",
+                                    {sanitized_g_out, tile_inner_var.name()});
+            } else if (!is_subgroup) {
                 user_warning << "Degenerate tiling. No dimensions are tiled" << '\n';
                 user_warning << "Computing \"" <<  mem.func.name() << "\" at root" << '\n';
                 Func(mem.func).compute_root();
@@ -3608,18 +3655,20 @@ void Partitioner::generate_group_cpu_schedule(
             }
         }
 
-        // Reorder the dimensions for better spatial locality. If we only have
-        // one dimension (excluding __outermost), there is nothing to reorder.
-        if (dims.size() > 2) {
-            map<string, Expr> mem_strides =
-                analyze_spatial_locality(mem, group_storage_bounds, inlines);
-            if (!mem_strides.empty()) {
-                reorder_dims(mem_handle, mem.stage_num, mem_def, mem_strides, sched);
+        //if (is_subgroup) {
+            // Reorder the dimensions for better spatial locality. If we only have
+            // one dimension (excluding __outermost), there is nothing to reorder.
+            if (dims.size() > 2) {
+                map<string, Expr> mem_strides =
+                    analyze_spatial_locality(mem, group_storage_bounds, inlines);
+                if (!mem_strides.empty()) {
+                    reorder_dims(mem_handle, mem.stage_num, mem_def, mem_strides, sched);
+                }
             }
-        }
 
-        vectorize_stage(g, mem_handle, mem.stage_num, mem_def, mem.func, false,
-                        t, mem_rvars, mem_estimates, sched);
+            vectorize_stage(g, mem_handle, mem.stage_num, mem_def, mem.func, false,
+                            t, mem_rvars, mem_estimates, sched);
+        //}
     }
 }
 
@@ -3652,11 +3701,13 @@ void Partitioner::generate_cpu_schedule(const Target &t, AutoSchedule &sched) {
                                     g.first, false, sched);
         // TODO(psuriana): How do you generate schedule for the subgroups
         // Generate schedule for the subgroups.
-        /*for (const auto &subgroup : g.subgroups) {
-            generate_group_cpu_schedule(g.second, t, get_element(loop_bounds, g.first),
+        for (const auto &sg : g.second.subgroups) {
+            // TODO(psuriana): which loop or storage bounds should we use? based
+            // on the group output or the subgroup?
+            generate_group_cpu_schedule(sg, t, get_element(loop_bounds, g.first),
                                         get_element(storage_bounds, g.first), inlines,
                                         g.first, true, sched);
-        }*/
+        }
     }
 }
 
