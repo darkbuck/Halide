@@ -1,14 +1,19 @@
 include ../support/Makefile.inc
 
-all: $(BIN)/test $(BIN)/test_auto_schedule
+all: $(BIN)/test
 
 $(BIN)/halide_blur_exec: halide_blur_generator.cpp $(GENERATOR_DEPS)
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) -fno-rtti $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HALIDE_SYSTEM_LDFLAGS)
+	$(CXX) $(CXXFLAGS) -g -fno-rtti $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HALIDE_SYSTEM_LDFLAGS)
 
 $(BIN)/halide_blur.a: $(BIN)/halide_blur_exec
 	@mkdir -p $(@D)
-	$^ -g halide_blur -o $(BIN) target=$(HL_TARGET)
+	$^ -g halide_blur -o $(BIN) -f halide_blur target=$(HL_TARGET) auto_schedule=false
+
+$(BIN)/halide_blur_auto_schedule.a: $(BIN)/halide_blur_exec
+	@mkdir -p $(@D)
+	$^ -g halide_blur -o $(BIN) -f halide_blur_auto_schedule target=$(HL_TARGET) auto_schedule=true
+
 
 # g++ on OS X might actually be system clang without openmp
 CXX_VERSION=$(shell $(CXX) --version)
@@ -19,13 +24,9 @@ OPENMP_FLAGS=
 endif
 
 # -O2 is faster than -O3 for this app (O3 unrolls too much)
-$(BIN)/test: $(BIN)/halide_blur.a test.cpp
+$(BIN)/test: test.cpp $(BIN)/halide_blur.a $(BIN)/halide_blur_auto_schedule.a
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(OPENMP_FLAGS) -msse2 -Wall -O2 -I$(BIN) test.cpp $(BIN)/halide_blur.a -o $@ $(LDFLAGS) $(IMAGE_IO_FLAGS) auto_schedule=false
-
-$(BIN)/test_auto_schedule.a: $(BIN)/local_laplacian_exec
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(OPENMP_FLAGS) -msse2 -Wall -O2 -I$(BIN) test.cpp $(BIN)/halide_blur.a -o $@ $(LDFLAGS) $(IMAGE_IO_FLAGS) auto_schedule=true
+	$(CXX) $(CXXFLAGS) $(OPENMP_FLAGS) -msse2 -Wall -O2 -I$(BIN) test.cpp $(BIN)/halide_blur.a $(BIN)/halide_blur_auto_schedule.a -o $@ $(LDFLAGS) $(IMAGE_IO_FLAGS)
 
 clean:
 	rm -rf $(BIN)

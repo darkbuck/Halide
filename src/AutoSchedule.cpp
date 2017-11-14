@@ -2646,10 +2646,7 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
     // to compute the region cost
     // TODO(psuriana): Should we recurse if the cost is undefined?
     if (group_analysis.cost.defined()) {
-        debug(0) << "\n\n*******\nRECURSE OUTPUT: " << group.output << "\n";
-
-        debug(0) << "Recurse partitioning into subgroup...\n";
-        debug(0) << "\n\n***CURRENT GROUP:\n";
+        debug(0) << "Recurse partitioning into subgroup, output: " << group.output << "\n";
         debug(0) << group;
 
         /*disp_pipeline_graph();
@@ -2805,10 +2802,11 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         debug(0) << "\n\n***INITIAL SUBGROUP:\n";
         part.disp_grouping();
 
+        debug(0) << "\n\n***RECURSE SUBGROUP:\n";
         part.group(Partitioner::Level::FastMem, best_tile_config);
 
-        /*part.disp_grouping();
-        part.disp_pipeline_costs();*/
+        part.disp_grouping();
+        part.disp_pipeline_costs();
 
 
         // The computation size depends on the tile, however, the memory cost
