@@ -599,8 +599,8 @@ WEAK int halide_opencl_initialize_kernels(void *user_context, void **state_ptr, 
                                       NULL) == CL_SUCCESS) {
                 error(user_context) << "CL: clBuildProgram failed: "
                                     << get_opencl_error_name(err)
-                                    << "\nBuild Log:\n "
-                                    << buffer;
+                                    << "\nBuild Log:\n"
+                                    << buffer << "\n";
             } else {
                 error(user_context) << "clGetProgramBuildInfo failed";
             }
@@ -1063,7 +1063,9 @@ WEAK int halide_opencl_device_crop(void *user_context,
         offset += (dst->dim[i].min - src->dim[i].min) * src->dim[i].stride;
     }
     offset *= src->type.bytes();
-    cl_buffer_region region = {offset, dst->size_in_bytes() + 4096};
+    cl_buffer_region region = {offset, dst->size_in_bytes()};
+    // The sub-buffer encompasses the linear range of addresses that
+    // span the crop.
     dst->device = (uint64_t)clCreateSubBuffer((cl_mem)(src->device),
                                               CL_MEM_READ_WRITE,
                                               CL_BUFFER_CREATE_TYPE_REGION,

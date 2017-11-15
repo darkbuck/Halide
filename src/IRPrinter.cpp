@@ -103,6 +103,9 @@ ostream &operator<<(ostream &stream, const LoopLevel &loop_level) {
 
 namespace Internal {
 
+IRPrinter::~IRPrinter() {
+}
+
 void IRPrinter::test() {
     Type i32 = Int(32);
     Type f32 = Float(32);
@@ -157,7 +160,7 @@ void IRPrinter::test() {
 ostream& operator<<(ostream &stream, const AssociativePattern &p) {
     stream << "{\n";
     for (size_t i = 0; i < p.ops.size(); ++i) {
-        stream << "  op_" << i << " ->" << p.ops[i] << ", id_" << i << " -> " << p.identities[i] << "\n";
+        stream << "  op_" << i << " -> " << p.ops[i] << ", id_" << i << " -> " << p.identities[i] << "\n";
     }
     stream << "  is commutative? " << p.is_commutative << "\n";
     stream << "}\n";

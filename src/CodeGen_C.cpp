@@ -847,7 +847,8 @@ public:
     }
 
     static Vec broadcast(const ElementType &v) {
-        return Vec(from_native_vector, splat(v));
+        Vec zero; // Zero-initialized native vector.
+        return zero + v;
     }
 
     // TODO: this should be improved by taking advantage of native operator support.
@@ -1124,13 +1125,6 @@ private:
     enum FromNativeVector { from_native_vector };
     inline NativeVector(FromNativeVector, const NativeVectorType &src) {
         native_vector = src;
-    }
-
-    inline static NativeVectorType splat(const ElementType &v) {
-        // This is a trick: there's no "splat" operation,
-        // so we do a scalar-minus-vector-of-zero operation,
-        // and hope the compiler will optimize appropriately.
-        return v - (NativeVectorType){};
     }
 };
 #endif  // __has_attribute(ext_vector_type) || __has_attribute(vector_size)
@@ -1592,7 +1586,7 @@ void CodeGen_C::compile(const LoweredFunc &f) {
 // for this file without needing to know the specific function names;
 // if HALIDE_GET_STANDARD_ARGV_FUNCTION is defined before this file is
 // included, an inline function with that name is provided that return
-// a function pointer to the _argv() entry point (similarly, 
+// a function pointer to the _argv() entry point (similarly,
 // HALIDE_GET_STANDARD_METADATA_FUNCTION -> _metadata() entry point).
 #ifdef HALIDE_GET_STANDARD_ARGV_FUNCTION
 inline int (*HALIDE_GET_STANDARD_ARGV_FUNCTION())(void**) {
@@ -1764,9 +1758,7 @@ void CodeGen_C::visit(const Mul *op) {
 void CodeGen_C::visit(const Div *op) {
     int bits;
     if (is_const_power_of_two_integer(op->b, &bits)) {
-        ostringstream oss;
-        oss << print_expr(op->a) << " >> " << bits;
-        print_assignment(op->type, oss.str());
+        visit_binop(op->type, op->a, make_const(op->a.type(), bits), ">>");
     } else if (op->type.is_int()) {
         print_expr(lower_euclidean_div(op->a, op->b));
     } else {
@@ -1777,9 +1769,7 @@ void CodeGen_C::visit(const Div *op) {
 void CodeGen_C::visit(const Mod *op) {
     int bits;
     if (is_const_power_of_two_integer(op->b, &bits)) {
-        ostringstream oss;
-        oss << print_expr(op->a) << " & " << ((1 << bits)-1);
-        print_assignment(op->type, oss.str());
+        visit_binop(op->type, op->a, make_const(op->a.type(), (1 << bits)-1), "&");
     } else if (op->type.is_int()) {
         print_expr(lower_euclidean_mod(op->a, op->b));
     } else {
@@ -1907,11 +1897,7 @@ void CodeGen_C::visit(const FloatImm *op) {
 
 void CodeGen_C::visit(const Call *op) {
 
-    internal_assert(op->call_type == Call::Extern ||
-                    op->call_type == Call::ExternCPlusPlus ||
-                    op->call_type == Call::PureExtern ||
-                    op->call_type == Call::Intrinsic ||
-                    op->call_type == Call::PureIntrinsic)
+    internal_assert(op->is_extern() || op->is_intrinsic())
         << "Can only codegen extern calls and intrinsics\n";
 
     ostringstream rhs;
@@ -2151,8 +2137,7 @@ void CodeGen_C::visit(const Call *op) {
         user_error << "Indeterminate expression occurred during constant-folding.\n";
     } else if (op->is_intrinsic(Call::size_of_halide_buffer_t)) {
         rhs << "(sizeof(halide_buffer_t))";
-    } else if (op->call_type == Call::Intrinsic ||
-               op->call_type == Call::PureIntrinsic) {
+    } else if (op->is_intrinsic()) {
         // TODO: other intrinsics
         internal_error << "Unhandled intrinsic in C backend: " << op->name << '\n';
     } else {
@@ -2489,7 +2474,7 @@ void CodeGen_C::visit(const Allocate *op) {
         Allocation alloc;
         alloc.type = op->type;
         allocations.push(op->name, alloc);
-        heap_allocations.push(op->name, 0);
+        heap_allocations.push(op->name);
         stream << op_type << "*" << op_name << " = (" << print_expr(op->new_expr) << ");\n";
     } else {
         constant_size = op->constant_allocation_size();
@@ -2567,7 +2552,7 @@ void CodeGen_C::visit(const Allocate *op) {
                    << " *)halide_malloc(_ucon, sizeof("
                    << op_type
                    << ")*" << size_id << ");\n";
-            heap_allocations.push(op->name, 0);
+            heap_allocations.push(op->name);
         }
     }
 

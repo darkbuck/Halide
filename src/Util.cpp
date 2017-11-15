@@ -295,6 +295,15 @@ namespace {
 // should be valid and writable in all versions of Windows that
 // we support for compilation purposes.
 std::string get_windows_tmp_dir() {
+    // Allow overriding of the tmpdir on Windows via an env var;
+    // some Windows configs can (apparently) lock down AppData/Local/Temp
+    // via policy, making various things break. (Note that this is intended
+    // to be a short-lived workaround; we would prefer to be able to avoid
+    // requiring this sort of band-aid if possible.)
+    std::string tmp_dir = get_env_variable("HL_WINDOWS_TMP_DIR");
+    if (!tmp_dir.empty()) {
+        return tmp_dir;
+    }
     char local_app_data_path[MAX_PATH];
     DWORD ret = SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, local_app_data_path);
     internal_assert(ret == 0) << "Unable to get Local AppData folder.";
@@ -338,7 +347,7 @@ std::string dir_make_temp() {
     #ifdef _WIN32
     std::string tmp_dir = get_windows_tmp_dir();
     // There's no direct API to do this in Windows;
-    // our clunky-but-adequate approach here is to use 
+    // our clunky-but-adequate approach here is to use
     // CoCreateGuid() to create a probably-unique name.
     // Add a limit on the number of tries just in case.
     for (int tries = 0; tries < 100; ++tries) {
@@ -356,7 +365,7 @@ std::string dir_make_temp() {
              << std::setw(2);
         for (int i = 0; i < 8; i++) {
             name << (int)guid.Data4[i];
-        }       
+        }
         std::string dir = tmp_dir + name.str();
         BOOL result = CreateDirectoryA(dir.c_str(), nullptr);
         if (result) {

@@ -9,14 +9,14 @@
 extern "C" {
 // Returns the address of the global halide_profiler state
 WEAK halide_profiler_state *halide_profiler_get_state() {
-    static halide_profiler_state s;
+    static halide_profiler_state s = {{{0}}, 1, 0, 0, 0, 0, NULL, false};
     return &s;
 }
 }
 
 namespace Halide { namespace Runtime { namespace Internal {
 
-__attribute__((constructor)) 
+__attribute__((constructor))
 WEAK void initialize_profiler_state() {
     halide_profiler_state *s = halide_profiler_get_state();
     memset(s, 0, sizeof(halide_profiler_state));

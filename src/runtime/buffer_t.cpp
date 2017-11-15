@@ -154,8 +154,9 @@ halide_buffer_t *_halide_buffer_crop(void *user_context,
         dst->dim[i].extent = extent[i];
         offset += (min[i] - src->dim[i].min) * src->dim[i].stride;
     }
-    offset *= src->type.bytes();
-    dst->host += offset;
+    if (dst->host) {
+        dst->host += offset * src->type.bytes();
+    }
     dst->device_interface = 0;
     dst->device = 0;
     if (src->device_interface) {
@@ -164,13 +165,14 @@ halide_buffer_t *_halide_buffer_crop(void *user_context,
     return dst;
 }
 
+
 // Called on return from an extern stage where the output buffer was a
 // crop of some other larger buffer. This happens for extern stages
 // with distinct store_at/compute_at levels. Each call to the stage
 // only fills in part of the buffer.
 HALIDE_BUFFER_HELPER_ATTRS
-void _halide_buffer_retire_crop(void *user_context,
-                                void *obj) {
+void _halide_buffer_retire_crop_after_extern_stage(void *user_context,
+                                                   void *obj) {
     halide_buffer_t **buffers = (halide_buffer_t **)obj;
     halide_buffer_t *crop = buffers[0];
     halide_buffer_t *parent = buffers[1];
@@ -195,17 +197,24 @@ void _halide_buffer_retire_crop(void *user_context,
     if (crop->host_dirty()) {
         parent->set_host_dirty();
     }
-
 }
 
 HALIDE_BUFFER_HELPER_ATTRS
-void _halide_buffer_retire_crops(void *user_context,
-                                 void *obj) {
+void _halide_buffer_retire_crops_after_extern_stage(void *user_context,
+                                                    void *obj) {
     halide_buffer_t **buffers = (halide_buffer_t **)obj;
     while (*buffers) {
-        _halide_buffer_retire_crop(user_context, buffers);
+        _halide_buffer_retire_crop_after_extern_stage(user_context, buffers);
         buffers += 2;
     }
+}
+
+HALIDE_BUFFER_HELPER_ATTRS
+halide_buffer_t *_halide_buffer_set_bounds(halide_buffer_t *buf,
+                                           int dim, int min, int extent) {
+    buf->dim[dim].min = min;
+    buf->dim[dim].extent = extent;
+    return buf;
 }
 
 }

@@ -7,6 +7,7 @@
 
 #include "IR.h"
 #include "Closure.h"
+#include "ModulusRemainder.h"
 
 namespace Halide {
 namespace Internal {
@@ -59,6 +60,9 @@ struct DeviceArgument {
     bool read;
     bool write;
 
+    /** Alignment information for integer parameters. */
+    ModulusRemainder alignment;
+
     DeviceArgument() :
         is_buffer(false),
         dimensions(0),
@@ -86,6 +90,8 @@ struct DeviceArgument {
  * produce a vector of DeviceArgument objects. */
 class HostClosure : public Closure {
 public:
+    HostClosure(Stmt s, const std::string &loop_variable = "");
+
     /** Get a description of the captured arguments. */
     std::vector<DeviceArgument> arguments();
 

@@ -22,7 +22,7 @@ namespace Internal {
  * own function (e.g. because it's the body of a parallel for loop. */
 class Closure : public IRVisitor {
 protected:
-    Scope<int> ignore_names;
+    Scope<> ignore;
 
     using IRVisitor::visit;
 
@@ -61,8 +61,16 @@ protected:
                           bool read, bool written, Halide::Buffer<> image);
 
 public:
-    /** Tell the closure to ignore references to the given name */
-    void ignore(const std::string &);
+    Closure() {}
+
+    /** Traverse a statement and find all references to external
+     * symbols.
+     *
+     * When the closure encounters a read or write to 'foo', it
+     * assumes that the host pointer is found in the symbol table as
+     * 'foo.host', and any buffer_t pointer is found under
+     * 'foo.buffer'. */
+    Closure(Stmt s, const std::string &loop_variable = "");
 
     /** External variables referenced. */
     std::map<std::string, Type> vars;

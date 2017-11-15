@@ -4,6 +4,13 @@
 namespace Halide {
 namespace Internal {
 
+HostClosure::HostClosure(Stmt s, const std::string &loop_variable) {
+    if (!loop_variable.empty()) {
+        ignore.push(loop_variable);
+    }
+    s.accept(this);
+}
+
 std::vector<DeviceArgument> HostClosure::arguments() {
     std::vector<DeviceArgument> res;
     for (const auto &v : vars) {
@@ -56,11 +63,9 @@ void HostClosure::visit(const Call *op) {
 
         // The Func's name and the associated .buffer are mentioned in the
         // argument lists, but don't treat them as free variables.
-        ignore_names.push(bufname, 0);
-        ignore_names.push(bufname + ".buffer", 0);
+        ScopedBinding<> p1(ignore, bufname);
+        ScopedBinding<> p2(ignore, bufname + ".buffer");
         Internal::Closure::visit(op);
-        ignore_names.pop(bufname + ".buffer");
-        ignore_names.pop(bufname);
     } else {
         Internal::Closure::visit(op);
     }
@@ -69,9 +74,8 @@ void HostClosure::visit(const Call *op) {
 void HostClosure::visit(const For *loop) {
     if (CodeGen_GPU_Dev::is_gpu_var(loop->name)) {
         // The size of the threads and blocks is not part of the closure
-        ignore_names.push(loop->name, 0);
+        ScopedBinding<> p(ignore, loop->name);
         loop->body.accept(this);
-        ignore_names.pop(loop->name);
     } else {
         Internal::Closure::visit(loop);
     }

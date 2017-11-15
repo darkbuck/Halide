@@ -11,6 +11,8 @@
 using namespace Halide;
 using namespace Halide::ConciseCasts;
 
+namespace {
+
 // This tests that we can correctly generate all the simd ops
 using std::vector;
 using std::string;
@@ -219,7 +221,7 @@ struct Test {
             bool found_it = false;
 
             std::ostringstream msg;
-            msg << op << " did not generate. Instead we got:\n";
+            msg << op << " did not generate for target=" << target.to_string() << ". Instead we got:\n";
 
             string line;
             while (getline(asm_file, line)) {
@@ -2091,6 +2093,8 @@ check("v*.w += vrmpy(v*.b,v*.b)", hvx_width, i32_1 + i32(i8_1)*i8_1 + i32(i8_2)*
         return success;
     }
 };
+
+}  // namespace
 
 int main(int argc, char **argv) {
     Test test;
