@@ -352,15 +352,15 @@ std::string Stage::dump_argument_list() const {
 
 namespace {
 
-class SubstituteSelfReference : public IRMutator {
-    using IRMutator::visit;
+class SubstituteSelfReference : public IRMutator2 {
+    using IRMutator2::visit;
 
     const string func;
     const Function substitute;
     const vector<Var> new_args;
 
-    void visit(const Call *c) {
-        IRMutator::visit(c);
+    Expr visit(const Call *c) override {
+        Expr expr = IRMutator2::visit(c);
         c = expr.as<Call>();
         internal_assert(c);
 
@@ -372,6 +372,7 @@ class SubstituteSelfReference : public IRMutator {
             args.insert(args.end(), new_args.begin(), new_args.end());
             expr = Call::make(substitute, args, c->value_index);
         }
+        return expr;
     }
 public:
     SubstituteSelfReference(const string &func, const Function &substitute,
@@ -1994,12 +1995,7 @@ Func &Func::bound(Var var, Expr min, Expr extent) {
     extent = cast<int32_t>(extent);
 
     invalidate_cache();
-    bool found = false;
-    for (size_t i = 0; i < func.args().size(); i++) {
-        if (var.name() == func.args()[i]) {
-            found = true;
-        }
-    }
+    bool found = func.is_pure_arg(var.name());
     user_assert(found)
         << "Can't bound variable " << var.name()
         << " of function " << name()
@@ -2013,12 +2009,7 @@ Func &Func::bound(Var var, Expr min, Expr extent) {
 
 Func &Func::estimate(Var var, Expr min, Expr extent) {
     invalidate_cache();
-    bool found = false;
-    for (size_t i = 0; i < func.args().size(); i++) {
-        if (var.name() == func.args()[i]) {
-            found = true;
-        }
-    }
+    bool found = func.is_pure_arg(var.name());
     user_assert(found)
         << "Can't provide an estimate on variable " << var.name()
         << " of function " << name()
@@ -2048,12 +2039,7 @@ Func &Func::align_bounds(Var var, Expr modulus, Expr remainder) {
 
     invalidate_cache();
 
-    bool found = false;
-    for (size_t i = 0; i < func.args().size(); i++) {
-        if (var.name() == func.args()[i]) {
-            found = true;
-        }
-    }
+    bool found = func.is_pure_arg(var.name());
     user_assert(found)
         << "Can't align bounds of variable " << var.name()
         << " of function " << name()
@@ -2369,9 +2355,11 @@ Func &Func::fold_storage(Var dim, Expr factor, bool fold_forward) {
 Func &Func::compute_at(LoopLevel loop_level) {
     invalidate_cache();
     func.schedule().compute_level() = loop_level;
-    if (func.schedule().store_level().is_inline()) {
-        func.schedule().store_level() = loop_level;
-    }
+    // We want to set store_level = compute_level iff store_level is inlined,
+    // but we can't do that here, since the value in store_level could
+    // be mutated at any time prior to lowering. Instead, we check at
+    // the start of lowering (via Function::lock_loop_levels() method) and
+    // do the compute_level -> store_level propagation then.
     return *this;
 }
 
@@ -2848,7 +2836,7 @@ OutputImageParam Func::output_buffer() const {
     user_assert(func.output_buffers().size() == 1)
         << "Can't call Func::output_buffer on Func \"" << name()
         << "\" because it returns a Tuple.\n";
-    return OutputImageParam(func.output_buffers()[0], Argument::OutputBuffer);
+    return OutputImageParam(func.output_buffers()[0], Argument::OutputBuffer, *this);
 }
 
 vector<OutputImageParam> Func::output_buffers() const {
@@ -2857,7 +2845,7 @@ vector<OutputImageParam> Func::output_buffers() const {
 
     vector<OutputImageParam> bufs(func.output_buffers().size());
     for (size_t i = 0; i < bufs.size(); i++) {
-        bufs[i] = OutputImageParam(func.output_buffers()[i], Argument::OutputBuffer);
+        bufs[i] = OutputImageParam(func.output_buffers()[i], Argument::OutputBuffer, *this);
     }
     return bufs;
 }
@@ -2993,7 +2981,7 @@ void Func::set_custom_print(void (*cust_print)(void *, const char *)) {
     pipeline().set_custom_print(cust_print);
 }
 
-void Func::add_custom_lowering_pass(IRMutator *pass, void (*deleter)(IRMutator *)) {
+void Func::add_custom_lowering_pass(IRMutator2 *pass, void (*deleter)(IRMutator2 *)) {
     pipeline().add_custom_lowering_pass(pass, deleter);
 }
 

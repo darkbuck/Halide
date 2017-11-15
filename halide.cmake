@@ -219,6 +219,8 @@ function(halide_library_from_generator BASENAME)
       list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.bc")
     elseif ("${OUTPUT}" STREQUAL "stmt")
       list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.stmt")
+    elseif ("${OUTPUT}" STREQUAL "schedule")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.schedule")
     elseif ("${OUTPUT}" STREQUAL "html")
       list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.html")
     endif()
@@ -312,7 +314,6 @@ endfunction()
 # Set the C++ options necessary for using libHalide.
 function(_halide_set_cxx_options TARGET)
   set_target_properties("${TARGET}" PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
-  target_compile_definitions("${TARGET}" PRIVATE "-DHalide_${HALIDE_LIBRARY_TYPE}")
   if (MSVC)
     target_compile_definitions("${TARGET}" PUBLIC "-D_CRT_SECURE_NO_WARNINGS" "-D_SCL_SECURE_NO_WARNINGS")
     target_compile_options("${TARGET}" PRIVATE "/GR-")
@@ -557,6 +558,15 @@ function(_halide_add_exec_generator_target EXEC_TARGET)
   set(multiValueArgs OUTPUTS GENERATOR_ARGS)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
+  set(EXTRA_OUTPUTS_COMMENT )
+  foreach(OUTPUT ${args_OUTPUTS})
+    if((${OUTPUT} MATCHES "^.*\\.h$") OR (${OUTPUT} MATCHES "^.*${CMAKE_STATIC_LIBRARY_SUFFIX}$"))
+      # Ignore
+    else()
+      set(EXTRA_OUTPUTS_COMMENT "${EXTRA_OUTPUTS_COMMENT}\nEmitting extra Halide output: ${OUTPUT}")
+    endif()
+  endforeach()
+
   add_custom_target(${EXEC_TARGET} DEPENDS ${args_OUTPUTS})
 
   # As of CMake 3.x, add_custom_command() recognizes executable target names in its COMMAND.
@@ -564,6 +574,7 @@ function(_halide_add_exec_generator_target EXEC_TARGET)
     OUTPUT ${args_OUTPUTS}
     DEPENDS ${args_GENERATOR_BINARY}
     COMMAND ${args_GENERATOR_BINARY} ${args_GENERATOR_ARGS}
+    COMMENT "${EXTRA_OUTPUTS_COMMENT}"
   )
   foreach(OUT ${args_OUTPUTS})
     set_source_files_properties(${OUT} PROPERTIES GENERATED TRUE)
@@ -607,7 +618,7 @@ if("${HALIDE_SYSTEM_LIBS}" STREQUAL "")
   if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/halide_config.cmake")
     include("${CMAKE_CURRENT_LIST_DIR}/halide_config.cmake")
   else()
-    message(FATAL_ERROR "HALIDE_SYSTEM_LIBS is not set and we could not find halide_config.cmake")
+    message(WARNING "HALIDE_SYSTEM_LIBS is not set and we could not find halide_config.cmake")
   endif()
 endif()
 

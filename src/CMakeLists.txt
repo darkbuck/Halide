@@ -10,6 +10,8 @@ endif()
 
 set(RUNTIME_CPP
   aarch64_cpu_features
+  alignment_128
+  alignment_32
   android_clock
   android_host_cpu_count
   android_io
@@ -251,6 +253,7 @@ set(HEADER_FILES
   BoundaryConditions.h
   Bounds.h
   BoundsInference.h
+  BoundSmallAllocations.h
   Buffer.h
   CSE.h
   CanonicalizeGPUVars.h
@@ -279,6 +282,7 @@ set(HEADER_FILES
   Deinterleave.h
   DeviceArgument.h
   DeviceInterface.h
+  Dimension.h
   EarlyFree.h
   Elf.h
   EliminateBoolVectors.h
@@ -407,6 +411,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   BoundaryConditions.cpp
   Bounds.cpp
   BoundsInference.cpp
+  BoundSmallAllocations.cpp
   Buffer.cpp
   Closure.cpp
   CodeGen_ARM.cpp
@@ -435,6 +440,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   Deinterleave.cpp
   DeviceArgument.cpp
   DeviceInterface.cpp
+  Dimension.cpp
   EarlyFree.cpp
   Elf.cpp
   EliminateBoolVectors.cpp
