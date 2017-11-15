@@ -26,6 +26,7 @@ int main(int argc, char **argv) {
         memory_to_dma_from[i] = (uint8_t)rand();
     }
 
+    Halide::Runtime::Buffer<uint8_t> input_validation(memory_to_dma_from, width, height);
     Halide::Runtime::Buffer<uint8_t> input(nullptr, width, height);
 
     // TODO: We shouldn't need to allocate a host buffer here, but the
@@ -56,7 +57,7 @@ int main(int argc, char **argv) {
 
     // Validate that the algorithm did what we expect.
     output.for_each_element([&](int x, int y) {
-        uint8_t correct = input(x, y) * 2;
+        uint8_t correct = input_validation(x, y) * 2;
         if (correct != output(x, y)) {
             printf("Mismatch at %d %d: %d != %d\n", x, y, correct, output(x, y));
             abort();
