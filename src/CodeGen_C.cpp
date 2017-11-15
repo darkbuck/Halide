@@ -2441,7 +2441,7 @@ void CodeGen_C::visit(const Allocate *op) {
         Allocation alloc;
         alloc.type = op->type;
         allocations.push(op->name, alloc);
-        heap_allocations.push(op->name, 0);
+        heap_allocations.push(op->name);
         stream << op_type << "*" << op_name << " = (" << print_expr(op->new_expr) << ");\n";
     } else {
         constant_size = op->constant_allocation_size();
@@ -2519,7 +2519,7 @@ void CodeGen_C::visit(const Allocate *op) {
                    << " *)halide_malloc(_ucon, sizeof("
                    << op_type
                    << ")*" << size_id << ");\n";
-            heap_allocations.push(op->name, 0);
+            heap_allocations.push(op->name);
         }
     }
 
