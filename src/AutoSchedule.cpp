@@ -3498,6 +3498,7 @@ void Partitioner::generate_group_cpu_schedule(
             if (can_prove(tile_size == 1)) {
                 outer_dims.push_back(v);
             } else {
+                debug(0) << "\tf name: " << f_handle.name() << ", VAR: " << var << ", tile size: " << tile_size << "\n";
                 pair<VarOrRVar, VarOrRVar> tile_vars =
                     split_dim(g, f_handle, g.output.stage_num, def, true, v,
                               tile_size, "_i", "_o", stg_estimates, sched);
@@ -3665,7 +3666,7 @@ void Partitioner::generate_group_cpu_schedule(
             }
         }
 
-        //if (is_subgroup) {
+        if (is_subgroup) {
             // Reorder the dimensions for better spatial locality. If we only have
             // one dimension (excluding __outermost), there is nothing to reorder.
             if (dims.size() > 2) {
@@ -3678,15 +3679,51 @@ void Partitioner::generate_group_cpu_schedule(
 
             vectorize_stage(g, mem_handle, mem.stage_num, mem_def, mem.func, false,
                             t, mem_rvars, mem_estimates, sched);
-        //}
+        }
     }
 }
 
 void Partitioner::generate_cpu_schedule(const Target &t, AutoSchedule &sched) {
     // Grab the group bounds early as they rely on the dimensions of the group
     // outputs which will be altered by modifying schedules.
+
+    // TODO(psuriana): WE PROBABLY NEED TO RECOMPUTE THE LOOP BOUNDS OR THE
+    // STORAGE BOUNDS SINCE WE NOW HAVE SUBTILING
     map<FStage, map<FStage, DimBounds>> loop_bounds = group_loop_bounds();
     map<FStage, map<string, Box>> storage_bounds = group_storage_bounds();
+
+    // TODO(psuriana): We need to compute the loop bounds and storage bounds
+    // for each subgroup members within a group
+    for (const auto &g : groups) {
+        for (const auto &sg : g.second.subgroups) {
+
+        }
+    }
+
+    debug(0) << "\n\nLOOP BOUNDS:\n";
+    for (const auto &iter : loop_bounds) {
+        debug(0) << "Stage: " << iter.first << "\n";
+        for (const auto &it : iter.second) {
+            debug(0) << "\tstage: " << it.first << "\n";
+            debug(0) << "\tbounds:\n";
+            for (const auto &dim_it : it.second) {
+                debug(0) << "\t\t" << dim_it.first << " -> min: " << dim_it.second.min << ", max: " << dim_it.second.max << "\n";
+            }
+            debug(0) << "\n";
+        }
+        debug(0) << "\n";
+    }
+    debug(0) << "\n";
+
+    debug(0) << "\n\nSTORAGE BOUNDS:\n";
+    for (const auto &iter : storage_bounds) {
+        debug(0) << "Stage: " << iter.first << "\n";
+        for (const auto &it : iter.second) {
+            debug(0) << "\t" << it.first << " -> " << it.second << "\n";
+        }
+        debug(0) << "\n";
+    }
+    debug(0) << "\n";
 
     set<string> inlines;
     // Mark all functions that are inlined.
@@ -3711,13 +3748,13 @@ void Partitioner::generate_cpu_schedule(const Target &t, AutoSchedule &sched) {
                                     g.first, false, sched);
         // TODO(psuriana): How do you generate schedule for the subgroups
         // Generate schedule for the subgroups.
-        for (const auto &sg : g.second.subgroups) {
+        /*for (const auto &sg : g.second.subgroups) {
             // TODO(psuriana): which loop or storage bounds should we use? based
             // on the group output or the subgroup?
             generate_group_cpu_schedule(sg, t, get_element(loop_bounds, g.first),
                                         get_element(storage_bounds, g.first), inlines,
                                         g.first, true, sched);
-        }
+        }*/
     }
 }
 
