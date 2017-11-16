@@ -220,6 +220,108 @@ WEAK int halide_hexagon_dma_unprepare(void *user_context, struct halide_buffer_t
     return halide_error_code_success;
 }
 
+WEAK int halide_hexagon_dma_buffer_copy(void *user_context, struct halide_buffer_t *src,
+                                        const struct halide_device_interface_t *dst_device_interface,
+                                        struct halide_buffer_t *dst) {
+    // We only handle copies to hexagon_dma or to host
+    // TODO: does device to device via DMA make sense?
+    halide_assert(user_context, dst_device_interface == NULL ||
+                  dst_device_interface == &hexagon_dma_device_interface);
+
+    if (src->device_dirty() &&
+        src->device_interface != &hexagon_dma_device_interface) {
+        halide_assert(user_context, dst_device_interface == &hexagon_dma_device_interface);
+        // If the source is not hexagon_dma or host memory, ask the source
+        // device interface to copy to dst host memory first.
+        int err = src->device_interface->impl->buffer_copy(user_context, src, NULL, dst);
+        if (err) {
+            return err;
+        }
+        // Now just copy from src to host
+        src = dst;
+    }
+
+    bool from_host = !src->device_dirty() && src->host != NULL;
+    bool to_host = !dst_device_interface;
+
+    halide_assert(user_context, from_host || src->device);
+    halide_assert(user_context, to_host || dst->device);
+
+    // For now only copy device to host.
+    // TODO: Figure out which other paths can be supported.
+    halide_assert(user_context, !from_host && to_host);
+
+    debug(user_context)
+        << "Hexagon: halide_hexagon_dma_buffer_copy (user_context: " << user_context
+        << ", src: " << src << ", dst: " << dst << ")\n";
+
+    dma_device_handle *dev = (dma_device_handle *)src->device;
+
+    debug(user_context) << "Hexagon dev handle: buffer: " << dev->buffer << " dev offset (" << dev->offset_x << ", " << dev->offset_y << ") frame_width: " << dev->frame_width << " frame_height: " << dev->frame_height << " frame_stride: " << dev->frame_stride << " desc_addr: " << dev->desc_addr << "\n";
+
+#if 0 // Seems useful, but this flattens the mins
+    device_copy c = make_buffer_copy(src, from_host, dst, to_host);
+#endif
+
+    t_StDmaWrapper_RoiAlignInfo stWalkSize = {dst->dim[0].extent, dst->dim[1].extent};
+    int nRet = nDmaWrapper_GetRecommendedWalkSize(eDmaFmt_RawData, false, &stWalkSize);
+    int roi_stride = dst->dim[1].stride; // nDmaWrapper_GetRecommendedIntermBufStride(eDmaFmt_RawData, &stWalkSize, false);
+    int roi_width = stWalkSize.u16W;
+    int roi_height = stWalkSize.u16H;
+    // DMA driver Expect the Stride to be 256 Byte Aligned
+    halide_assert(user_context, (roi_stride % 256) == 0);
+
+    // This assert fails. The entire desc_addr concept needs to be removed
+    // as the state can likely only exist per call.
+    //    halide_assert(user_context, dev->desc_addr == 0);
+    dev->desc_addr = desc_pool_get();
+
+    t_StDmaWrapper_DmaTransferSetup stDmaTransferParm;
+    stDmaTransferParm.eFmt = eDmaFmt_RawData;
+    stDmaTransferParm.u16FrameW = dev->frame_width;
+    stDmaTransferParm.u16FrameH = dev->frame_height;
+    stDmaTransferParm.u16FrameStride = dev->frame_stride;
+    stDmaTransferParm.u16RoiW = roi_width;
+    stDmaTransferParm.u16RoiH = roi_height;
+    stDmaTransferParm.u16RoiStride = roi_stride;
+    stDmaTransferParm.bUse16BitPaddingInL2 = false;
+    stDmaTransferParm.pDescBuf = dev->desc_addr;
+
+    stDmaTransferParm.pTcmDataBuf = reinterpret_cast<void *>(dst->host);
+    stDmaTransferParm.pFrameBuf = dev->buffer;
+    stDmaTransferParm.eTransferType = eDmaWrapper_DdrToL2;
+
+    stDmaTransferParm.u16RoiX = dev->offset_x + dst->dim[0].min;
+    stDmaTransferParm.u16RoiY = dev->offset_y + dst->dim[1].min;
+    
+    debug(user_context) << "Hexagon: " << dev->dma_engine << " transfer: " << stDmaTransferParm.pDescBuf << "\n" ;
+    nRet = nDmaWrapper_DmaTransferSetup(dev->dma_engine, &stDmaTransferParm);
+    if (nRet != QURT_EOK) {
+        debug(user_context) << "Hexagon: DMA Transfer Error: " << nRet << "\n"; 
+        return halide_error_code_device_buffer_copy_failed; 
+    }
+
+    debug(user_context) << "Hexagon: " << dev->dma_engine << " move\n" ;
+
+    nRet = nDmaWrapper_Move(dev->dma_engine);
+    if (nRet != QURT_EOK) {
+        debug(user_context) << "Hexagon: nDmaWrapper_Move error: " << nRet << "\n";
+        return halide_error_code_device_buffer_copy_failed;
+    }
+    nRet = nDmaWrapper_Wait(dev->dma_engine);
+    if (nRet != QURT_EOK) {
+        debug(user_context) << "Hexagon: nDmaWrapper_Wait error: " << nRet << "\n";
+        return halide_error_code_device_buffer_copy_failed;
+    }
+    nRet = nDmaWrapper_FinishFrame(dev->dma_engine);
+    if (nRet != QURT_EOK) {
+        debug(user_context) << "Hexagon: nDmaWrapper_FinishFrame error: " << nRet << "\n";
+        return halide_error_code_device_buffer_copy_failed;
+    }
+    
+    return halide_error_code_success;
+}
+
 WEAK int halide_hexagon_dma_copy_to_device(void *user_context, halide_buffer_t* buf) {
     int err = halide_hexagon_dma_device_malloc(user_context, buf);
     if (err) {
@@ -247,6 +349,9 @@ WEAK int halide_hexagon_dma_copy_to_host(void *user_context, struct halide_buffe
     // DMA driver Expect the Stride to be 256 Byte Aligned
     halide_assert(user_context,(buf->dim[1].stride== roi_stride));
 
+    // This assert fails. The entire desc_addr concept needs to be removed
+    // as the state can likely only exist per call.
+    //    halide_assert(user_context, dev->desc_addr == 0);
     dev->desc_addr = desc_pool_get();
 
     t_StDmaWrapper_DmaTransferSetup stDmaTransferParm;
@@ -270,7 +375,7 @@ WEAK int halide_hexagon_dma_copy_to_host(void *user_context, struct halide_buffe
     debug(user_context) << "Hexagon:" << dev->dma_engine << "transfer" << stDmaTransferParm.pDescBuf << "\n" ;
     nRet = nDmaWrapper_DmaTransferSetup(dev->dma_engine, &stDmaTransferParm);
     if (nRet != QURT_EOK) {
-        debug(user_context) << "Hexagon: DMA Tranfer Error" << "\n"; 
+        debug(user_context) << "Hexagon: DMA Transfer Error" << "\n"; 
         return halide_error_code_copy_to_host_failed; 
     }
 
@@ -278,7 +383,7 @@ WEAK int halide_hexagon_dma_copy_to_host(void *user_context, struct halide_buffe
 
     nRet = nDmaWrapper_Move(dev->dma_engine);
     if (nRet != QURT_EOK) {
-        debug(user_context) << "Hexagon: DMA Tranfer Error" << "\n";
+        debug(user_context) << "Hexagon: DMA Transfer Error" << "\n";
         return halide_error_code_copy_to_host_failed;
     }
     
@@ -324,6 +429,12 @@ WEAK int halide_hexagon_dma_device_sync(void *user_context, struct halide_buffer
     halide_assert(user_context, dev->dma_engine);
     int err = nDmaWrapper_Wait(dev->dma_engine);
     desc_pool_put(dev->desc_addr);
+
+    // This likely needs to be here, but the entire desc_addr concept
+    // needs to be removed as the state can likely only exist per
+    // call.
+    // dev->desc_addr = 0;
+    
     if (err != 0) {
         error(user_context) << "dma_wait failed (" << err << ")\n";
         return halide_error_code_device_sync_failed;
@@ -397,7 +508,7 @@ WEAK halide_device_interface_impl_t hexagon_dma_device_interface_impl = {
     halide_hexagon_dma_copy_to_device,
     halide_hexagon_dma_device_and_host_malloc,
     halide_hexagon_dma_device_and_host_free,
-    halide_default_buffer_copy,
+    halide_hexagon_dma_buffer_copy,
     halide_hexagon_dma_device_crop,
     halide_hexagon_dma_device_release_crop,
     halide_hexagon_dma_device_wrap_native,
