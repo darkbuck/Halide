@@ -41,6 +41,9 @@ protected:
                                          std::vector<Type> arg_types,
                                          bool broadcast_scalar_word = false);
 
+    /** Define wrappers for the HVX intrinsics with the proper types. */
+    void define_hvx_intrinsics();
+
     using CodeGen_Posix::visit;
 
     /** Nodes for which we want to emit specific hexagon intrinsics */

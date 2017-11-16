@@ -246,6 +246,14 @@ void CodeGen_Hexagon::compile_func(const LoweredFunc &f,
 void CodeGen_Hexagon::init_module() {
     CodeGen_Posix::init_module();
 
+    // If we have either HVX 64 or HVX 128, define our wrappers for
+    // HVX instructions.
+    if (target.features_any_of({Halide::Target::HVX_64, Halide::Target::HVX_128})) {
+        define_hvx_intrinsics();
+    }
+}
+
+void CodeGen_Hexagon::define_hvx_intrinsics() {
     bool is_128B = target.has_feature(Halide::Target::HVX_128);
 
     Type i8 = Int(8);
