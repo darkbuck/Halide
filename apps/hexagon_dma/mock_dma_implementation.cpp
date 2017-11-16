@@ -92,17 +92,25 @@ int32 nDmaWrapper_Move(t_DmaWrapper_DmaEngineHandle handle) {
         while (desc != NULL) {
             unsigned char* host_addr = reinterpret_cast<unsigned char *>(desc->stWord1.SrcFrmBaseAddr);
             unsigned char* dest_addr = reinterpret_cast<unsigned char *>(desc->stWord1.DstFrmBaseAddr);
+ 
+// Helpful debug code.
+#if 0
+            printf("Processing descriptor %p -- host_addr: %p dest_addr: %p ROI: (X: %u, Y: %u, W: %u, H: %u) SrcRoiStride: %u, DstRoiStride %u, FrmWidth %u.\n",
+                   desc, host_addr, dest_addr, desc->stWord0.RoiX, desc->stWord0.RoiY, desc->stWord1.RoiW, desc->stWord1.RoiH,
+                   desc->stWord1.SrcRoiStride, desc->stWord1.DstRoiStride, desc->stWord0.FrmWidth);
+#endif
+
             int x = desc->stWord0.RoiX;
             int y = desc->stWord0.RoiY;
             int w = desc->stWord1.RoiW;
             int h = desc->stWord1.RoiH;
-            for (int xii=0;xii<h;xii++) {
-                for (int yii=0;yii<w;yii++) {
-                    int xin = xii*desc->stWord1.DstRoiStride;
-                    int yin = yii;
-                    int RoiOffset = x+y*desc->stWord1.SrcRoiStride;
-                    int xout = xii*desc->stWord0.FrmWidth;
-                    int yout = yii;
+            for (int yii=0;yii<h;yii++) {
+              for (int xii=0;xii<w;xii++) {
+                    int yin = yii * desc->stWord1.DstRoiStride;
+                    int xin = xii;
+                    int RoiOffset = x + y * desc->stWord1.SrcRoiStride;
+                    int xout = xii;
+                    int yout = yii * desc->stWord0.FrmWidth;
                     dest_addr[yin+xin] = host_addr[RoiOffset + yout + xout];
                 }
             }
