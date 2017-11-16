@@ -1,3 +1,6 @@
+# Ensure that make with no arguments makes the right thing
+all:
+
 include ../support/Makefile.inc
 
 # This app requires a separate toolchain to be built from the Android NDK,
@@ -32,7 +35,7 @@ $(BIN)/%/pipeline.o: $(BIN)/pipeline
 	@mkdir -p $(@D)
 	$^ -g dma_pipeline -o $(BIN)/$* -e o,h -f pipeline target=$*-hexagon_dma
 
-$(BIN)/process-%: process.cpp $(BIN)/%/pipeline.o
+$(BIN)/process-%: process.cpp $(BIN)/%/pipeline.o mock_dma_implementation.cpp
 	$(CXX-$*) $(CXXFLAGS) $(CXXFLAGS-$*) -I $(BIN)/$* -Wall -O3 process.cpp mock_dma_implementation.cpp $(BIN)/$*/pipeline.o -o $(BIN)/process-$* $(LDFLAGS-$*)
 
 run-host: $(BIN)/process-host
