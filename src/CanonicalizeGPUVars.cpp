@@ -70,7 +70,9 @@ class CountGPUBlocksThreads : public IRVisitor {
 
 public:
     CountGPUBlocksThreads(const string &p) : prefix(p) {}
-    int nblocks = 0, nthreads = 0, nlanes = 0;
+    int nblocks = 0;
+    int nthreads = 0;
+    int nlanes = 0;
 };
 
 class CanonicalizeGPUVars : public IRMutator2 {

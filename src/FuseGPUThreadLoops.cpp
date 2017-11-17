@@ -632,6 +632,7 @@ class ExtractRegisterAllocations : public IRMutator {
             has_lane_loop = true;
         } else {
             if (op->for_type == ForType::GPUThread) {
+                has_thread_loop = true;
                 loop_var = op->name;
             }
 
@@ -741,6 +742,7 @@ public:
     }
 
     bool has_lane_loop = false;
+    bool has_thread_loop = false;
 };
 
 class FuseGPUThreadLoopsSingleKernel : public IRMutator2 {
@@ -772,8 +774,11 @@ class FuseGPUThreadLoopsSingleKernel : public IRMutator2 {
 
             debug(3) << "Extracted register-level allocations:\n" << body << "\n\n";
 
-            InjectThreadBarriers i;
-            body = i.mutate(body);
+            if (register_allocs.has_thread_loop) {
+                // If there's no loop over threads, everything is already synchronous.
+                InjectThreadBarriers i;
+                body = i.mutate(body);
+            }
 
             debug(3) << "Injected synchronization:\n" << body << "\n\n";
 

@@ -6,10 +6,10 @@ int main(int argc, char **argv) {
     Target t = get_jit_target_from_environment();
 
     if (!t.features_any_of({Target::CUDACapability30,
-                    Target::CUDACapability32,
-                    Target::CUDACapability35,
-                    Target::CUDACapability50,
-                    Target::CUDACapability61})) {
+                            Target::CUDACapability32,
+                            Target::CUDACapability35,
+                            Target::CUDACapability50,
+                            Target::CUDACapability61})) {
         printf("This test requires cuda enabled with cuda capability 3.0 or greater\n");
         return 0;
     }
@@ -54,19 +54,18 @@ int main(int argc, char **argv) {
 
         Var xi, yi, yii;
 
-        // You may notice a redundant split below. We want to use a
-        // serial for loop for the loop over y inside this kernel, but
-        // there still needs to be a thread loop to compute_at to get
-        // warp-level storage (TODO: Add store_in, so that the storage
-        // memory space isn't implicitly defined by the
-        // storage/compute level).
         c.tile(x, y, xi, yi, 32, 32, TailStrategy::RoundUp)
             .gpu_blocks(x, y)
-            .split(yi, yi, yii, 32)
-            .gpu_threads(yi)
             .gpu_lanes(xi);
-        a.in(c).compute_at(c, yi).gpu_lanes(x);
-        b.in(c).compute_at(c, yi).gpu_lanes(y);
+        // We're going to be computing 'a' and 'b' at block level, but
+        // we want them in register, not shared, so we explicitly call
+        // store_in.
+        a.in(c).compute_at(c, x)
+            .gpu_lanes(x)
+            .store_in(MemoryType::Register);
+        b.in(c).compute_at(c, x)
+            .gpu_lanes(y)
+            .store_in(MemoryType::Register);
 
         Buffer<float> out = c.realize(32, 32);
         for (int y = 0; y < out.height(); y++) {
@@ -279,7 +278,6 @@ int main(int argc, char **argv) {
 
         Var xi, yi;
         s4.gpu_tile(x, y, xi, yi, 64, 1, TailStrategy::RoundUp).vectorize(xi, 2).gpu_lanes(xi);
-        s3.in(s4).compute_at(s4, xi).unroll(x);
         s3.compute_at(s4, yi).split(x, x, xi, 32, TailStrategy::RoundUp).gpu_lanes(xi).unroll(x);
         s2.compute_at(s4, yi).split(x, x, xi, 32, TailStrategy::RoundUp).gpu_lanes(xi).unroll(x);
         s1.compute_at(s4, yi).split(x, x, xi, 32, TailStrategy::RoundUp).gpu_lanes(xi).unroll(x);
@@ -319,7 +317,6 @@ int main(int argc, char **argv) {
 
         Var xi, yi;
         s4.gpu_tile(x, y, xi, yi, 8, 16, TailStrategy::RoundUp).vectorize(xi, 2).gpu_lanes(xi);
-        s3.in(s4).compute_at(s4, xi).unroll(x);
         s3.compute_at(s4, yi).split(x, x, xi, 4, TailStrategy::RoundUp).gpu_lanes(xi).unroll(x);
         s2.compute_at(s4, yi).split(x, x, xi, 4, TailStrategy::RoundUp).gpu_lanes(xi).unroll(x);
         s1.compute_at(s4, yi).split(x, x, xi, 4, TailStrategy::RoundUp).gpu_lanes(xi).unroll(x);

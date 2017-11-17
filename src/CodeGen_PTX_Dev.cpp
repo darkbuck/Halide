@@ -40,7 +40,7 @@ CodeGen_PTX_Dev::CodeGen_PTX_Dev(Target host) : CodeGen_LLVM(host) {
 
 CodeGen_PTX_Dev::~CodeGen_PTX_Dev() {
     // This is required as destroying the context before the module
-    // results in a crash. Really, reponsibility for destruction
+    // results in a crash. Really, responsibility for destruction
     // should be entirely in the parent class.
     // TODO: Figure out how to better manage the context -- e.g. allow using
     // same one as the host.
@@ -238,7 +238,7 @@ void CodeGen_PTX_Dev::visit(const AssertStmt *op) {
 
 void CodeGen_PTX_Dev::visit(const Load *op) {
 
-    // Do align 4-wide 32-bit loads as a single i128 load.
+    // Do aligned 4-wide 32-bit loads as a single i128 load.
     const Ramp *r = op->index.as<Ramp>();
     // TODO: lanes >= 4, not lanes == 4
     if (is_one(op->predicate) && r && is_one(r->stride) && r->lanes == 4 && op->type.bits() == 32) {
@@ -258,8 +258,7 @@ void CodeGen_PTX_Dev::visit(const Load *op) {
 
 void CodeGen_PTX_Dev::visit(const Store *op) {
 
-    // Do align 4-wide 32-bit loads as a single i128 load.
-
+    // Do aligned 4-wide 32-bit stores as a single i128 store.
     const Ramp *r = op->index.as<Ramp>();
     // TODO: lanes >= 4, not lanes == 4
     if (is_one(op->predicate) && r && is_one(r->stride) && r->lanes == 4 && op->value.type().bits() == 32) {

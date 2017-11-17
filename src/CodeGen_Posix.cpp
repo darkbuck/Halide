@@ -96,6 +96,9 @@ CodeGen_Posix::Allocation CodeGen_Posix::create_allocation(const std::string &na
                    (memory_type != MemoryType::Stack &&
                     memory_type != MemoryType::Register &&
                     !can_allocation_fit_on_stack(stack_bytes))) {
+            // We should put the allocation on the heap if it's
+            // explicitly placed on the heap, or if it's not
+            // explicitly placed on the stack/register and it's large.
             stack_bytes = 0;
             llvm_size = codegen(Expr(constant_bytes));
         }

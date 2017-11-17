@@ -2021,7 +2021,8 @@ public:
 
     /** Set the type of memory this Func should be stored in. Controls
      * whether allocations go on the stack or the heap on the CPU, and
-     * in global vs shared vs local on the GPU. */
+     * in global vs shared vs local on the GPU. See the documentation
+     * on MemoryType for more detail. */
     EXPORT Func &store_in(MemoryType memory_type);
 
     /** Trace all loads from this Func by emitting calls to
