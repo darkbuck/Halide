@@ -1912,21 +1912,21 @@ EXPORT Expr saturating_cast(Type t, Expr e);
  * within the argument expression while returning the argument as its result.
  * Can be used to ensure stricter floating-point semantics but does not by itself
  * affect lower-level code generation. Mostly provided for debugging. */
-inline Expr no_fp_simplify(Expr e) {
+inline Expr no_float_simplify(Expr e) {
     Type t = e.type();
-    return Internal::Call::make(t, Internal::Call::no_fp_simplify,
+    return Internal::Call::make(t, Internal::Call::no_float_simplify,
                                 {std::move(e)}, Internal::Call::PureIntrinsic);
 }
 
 /** Makes a best effort attempt to preserve IEEE floating-point semantics
- * in evaluating an expression. Equivalent to no_fp_simplify plus
- * turning on the StrictFP target flag within a certain scope.
+ * in evaluating an expression. Equivalent to no_float_simplify plus
+ * turning on the StrictFloat target flag within a certain scope.
  * May not be implemented for all backends. (E.g. it is difficult to do
  * this for C++ code generation as it depends on the compielr flags used to
  * compile the generated code. */
-inline Expr strict_fp(Expr e) {
+inline Expr strict_float(Expr e) {
     Type t = e.type();
-    return Internal::Call::make(t, Internal::Call::strict_fp,
+    return Internal::Call::make(t, Internal::Call::strict_float,
                                 {std::move(e)}, Internal::Call::PureIntrinsic);
 }
 

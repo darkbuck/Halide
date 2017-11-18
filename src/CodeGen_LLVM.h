@@ -127,6 +127,8 @@ protected:
     llvm::IRBuilder<llvm::ConstantFolder, llvm::IRBuilderDefaultInserter> *builder;
     llvm::Value *value;
     llvm::MDNode *very_likely_branch;
+    llvm::MDNode *default_fp_math_md;
+    llvm::MDNode *strict_fp_math_md;
     std::vector<LoweredArgument> current_function_args;
     //@}
 
@@ -458,7 +460,7 @@ private:
     llvm::BasicBlock *destructor_block;
 
     /** Turn off all unsade math flags in scopes while this is set. */
-    bool strict_fp;
+    bool strict_float;
 
     /** Embed an instance of halide_filter_metadata_t in the code, using
      * the given name (by convention, this should be ${FUNCTIONNAME}_metadata)

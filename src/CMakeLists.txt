@@ -365,7 +365,7 @@ set(HEADER_FILES
   StmtToHtml.h
   StorageFlattening.h
   StorageFolding.h
-  StrictifyFP.h
+  StrictifyFloat.h
   Substitute.h
   Target.h
   ThreadPool.h
@@ -514,7 +514,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   StmtToHtml.cpp
   StorageFlattening.cpp
   StorageFolding.cpp
-  StrictifyFP.cpp
+  StrictifyFloat.cpp
   Substitute.cpp
   Target.cpp
   Tracing.cpp

@@ -391,15 +391,15 @@ void get_target_options(const llvm::Module &module, llvm::TargetOptions &options
     get_md_string(module.getModuleFlag("halide_mcpu"), mcpu);
     get_md_string(module.getModuleFlag("halide_mattrs"), mattrs);
 
-    bool strict_fp = false;
-    get_md_bool(module.getModuleFlag("halide_strict_fp"), strict_fp);
+    bool allow_strict_float = false;
+    get_md_bool(module.getModuleFlag("halide_allow_strict_float"), allow_strict_float);
 
     options = llvm::TargetOptions();
     #if LLVM_VERSION < 50
-    options.LessPreciseFPMADOption = !strict_fp;
+    options.LessPreciseFPMADOption = !strict_float;
     #endif
-    options.AllowFPOpFusion = strict_fp ? llvm::FPOpFusion::Strict : llvm::FPOpFusion::Fast;
-    options.UnsafeFPMath = !strict_fp;
+    options.AllowFPOpFusion = allow_strict_float ? llvm::FPOpFusion::Strict : llvm::FPOpFusion::Fast;
+    options.UnsafeFPMath = !allow_strict_float;
 
     #if LLVM_VERSION < 40
     // Turn off approximate reciprocals for division. It's too
@@ -408,9 +408,9 @@ void get_target_options(const llvm::Module &module, llvm::TargetOptions &options
     options.Reciprocals.setDefaults("all", false, 0);
     #endif
 
-    options.NoInfsFPMath = !strict_fp;
-    options.NoNaNsFPMath = !strict_fp;
-    options.HonorSignDependentRoundingFPMathOption = !strict_fp;
+    options.NoInfsFPMath = !allow_strict_float;
+    options.NoNaNsFPMath = !allow_strict_float;
+    options.HonorSignDependentRoundingFPMathOption = !allow_strict_float;
     options.NoZerosInBSS = false;
     options.GuaranteedTailCallOpt = false;
     options.StackAlignmentOverride = 0;
