@@ -66,11 +66,27 @@ public:
     }
 };
 
+template<>
+class SmallStack<void> {
+    // A stack of voids. Voids are all the same, so just record how many voids are in the stack
+    int counter = 0;
+public:
+    void pop() {
+        counter--;
+    }
+    void push() {
+        counter++;
+    }
+    bool empty() const {
+        return counter == 0;
+    }
+};
+
 /** A common pattern when traversing Halide IR is that you need to
  * keep track of stuff when you find a Let or a LetStmt, and that it
  * should hide previous values with the same name until you leave the
  * Let or LetStmt nodes This class helps with that. */
-template<typename T>
+template<typename T = void>
 class Scope {
 private:
     std::map<std::string, SmallStack<T>> table;
@@ -101,7 +117,9 @@ public:
     }
 
     /** Retrieve the value referred to by a name */
-    T get(const std::string &name) const {
+    template<typename T2 = T,
+             typename = typename std::enable_if<!std::is_same<T2, void>::value>::type>
+    T2 get(const std::string &name) const {
         typename std::map<std::string, SmallStack<T>>::const_iterator iter = table.find(name);
         if (iter == table.end() || iter->second.empty()) {
             if (containing_scope) {
@@ -114,7 +132,9 @@ public:
     }
 
     /** Return a reference to an entry. Does not consider the containing scope. */
-    T &ref(const std::string &name) {
+    template<typename T2 = T,
+             typename = typename std::enable_if<!std::is_same<T2, void>::value>::type>
+    T2 &ref(const std::string &name) {
         typename std::map<std::string, SmallStack<T>>::iterator iter = table.find(name);
         if (iter == table.end() || iter->second.empty()) {
             internal_error << "Name not in Scope: " << name << "\n";
@@ -138,8 +158,16 @@ public:
     /** Add a new (name, value) pair to the current scope. Hide old
      * values that have this name until we pop this name.
      */
-    void push(const std::string &name, const T &value) {
+    template<typename T2 = T,
+             typename = typename std::enable_if<!std::is_same<T2, void>::value>::type>
+    void push(const std::string &name, const T2 &value) {
         table[name].push(value);
+    }
+
+    template<typename T2 = T,
+             typename = typename std::enable_if<std::is_same<T2, void>::value>::type>
+    void push(const std::string &name) {
+        table[name].push();
     }
 
     /** A name goes out of scope. Restore whatever its old value
@@ -256,7 +284,7 @@ std::ostream &operator<<(std::ostream &stream, const Scope<T>& s) {
  * - the lifetime of this helper object
  * The "Scoped" in this class name refers to the latter, as it temporarily binds
  * a name within the scope of this helper's lifetime. */
-template<typename T>
+template<typename T = void>
 struct ScopedBinding {
     Scope<T> *scope;
     std::string name;
@@ -274,6 +302,18 @@ struct ScopedBinding {
         if (scope) {
             scope->pop(name);
         }
+    }
+};
+
+template<>
+struct ScopedBinding<void> {
+    Scope<> &scope;
+    std::string name;
+    ScopedBinding(Scope<> &scope, const std::string &name) : scope(scope), name(name) {
+        scope.push(name);
+    }
+    ~ScopedBinding() {
+        scope.pop(name);
     }
 };
 

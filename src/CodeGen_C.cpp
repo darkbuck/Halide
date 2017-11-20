@@ -2370,6 +2370,9 @@ void CodeGen_C::visit(const ProducerConsumer *op) {
 }
 
 void CodeGen_C::visit(const For *op) {
+    string id_min = print_expr(op->min);
+    string id_extent = print_expr(op->extent);
+
     if (op->for_type == ForType::Parallel) {
         do_indent();
         stream << "#pragma omp parallel for\n";
@@ -2377,9 +2380,6 @@ void CodeGen_C::visit(const For *op) {
         internal_assert(op->for_type == ForType::Serial)
             << "Can only emit serial or parallel for loops to C\n";
     }
-
-    string id_min = print_expr(op->min);
-    string id_extent = print_expr(op->extent);
 
     do_indent();
     stream << "for (int "
@@ -2437,7 +2437,7 @@ void CodeGen_C::visit(const Allocate *op) {
         Allocation alloc;
         alloc.type = op->type;
         allocations.push(op->name, alloc);
-        heap_allocations.push(op->name, 0);
+        heap_allocations.push(op->name);
         stream << op_type << "*" << op_name << " = (" << print_expr(op->new_expr) << ");\n";
     } else {
         constant_size = op->constant_allocation_size();
@@ -2517,7 +2517,7 @@ void CodeGen_C::visit(const Allocate *op) {
                    << " *)halide_malloc(_ucon, sizeof("
                    << op_type
                    << ")*" << size_id << ");\n";
-            heap_allocations.push(op->name, 0);
+            heap_allocations.push(op->name);
         }
     }
 
