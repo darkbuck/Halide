@@ -9,6 +9,32 @@
 #include "Substitute.h"
 #include "LICM.h"
 
+// In CUDA, allocations stored in registers and shared across lanes
+// look like private per-lane allocations, even though communication
+// across lanes is possible. So while we model then as allocations
+// outside the loop over lanes, we need to codegen them as allocations
+// inside the loop over lanes. So the lanes collectively share
+// responsibility for storing the allocation. We will stripe the
+// storage across the lanes (think RAID 0). This is basically the
+// opposite of RewriteAccessToVectorAlloc in Vectorize.cpp.
+//
+// If there were no constraints, we could just arbitrarily slice
+// things up, e.g. on a per-element basis (stride one), but we have
+// the added wrinkle that while threads can load from anywhere, they
+// can only store into their own stripe, so we need to analyze the
+// existing stores in order to figure out a striping that corresponds
+// to the stores taking place. In fact, a common pattern is having
+// lanes responsible for an adjacent pair of values, which gives us a
+// stride of two.
+//
+// This lowering pass determines a good stride for each allocation,
+// then moves the allocation inside the loop over lanes. Loads and
+// stores have their indices rewritten to reflect the striping, and
+// loads from outside a lane's own stripe become warp shuffle
+// intrinsics. Finally, warp shuffles must be hoisted outside of
+// conditionals, because they return undefined values if either the
+// source or destination lanes are inactive.
+
 namespace Halide {
 namespace Internal {
 
@@ -88,8 +114,9 @@ class SubstituteInGPUVars : public IRMutator2 {
     }
 };
 
-// Determine a good way to stripe each allocations over warps by
-// analyzing all uses.
+
+// Determine a good striping stride for an allocation, by inspecting
+// loads and stores.
 class DetermineAllocStride : public IRVisitor {
 
     using IRVisitor::visit;
@@ -106,7 +133,8 @@ class DetermineAllocStride : public IRVisitor {
 
     Scope<Interval> bounds;
 
-    // Get the derivative of an integer expression w.r.t the warp lane
+    // Get the derivative of an integer expression w.r.t the warp
+    // lane. Returns an undefined Expr if the result is non-trivial.
     Expr warp_stride(Expr e) {
         if (is_const(e)) {
             return 0;
@@ -179,7 +207,7 @@ class DetermineAllocStride : public IRVisitor {
     }
 
     void visit(const IfThenElse *op) {
-        // When things drop down to a single thread, we have different constraints.
+        // When things drop down to a single thread, we have different constraints, so notice that.
         if (equal(op->condition, Variable::make(Int(32), lane_var) < 1)) {
             bool old_single_thread = single_thread;
             single_thread = true;
@@ -244,6 +272,7 @@ public:
         dependent_vars.push(lane_var, 1);
     }
 
+    // A version of can_prove which exploits the constant bounds we've been tracking
     bool can_prove(const Expr &e) {
         return is_one(simplify(e, true, bounds));
     }
@@ -261,6 +290,8 @@ public:
 
             internal_assert(stride.defined());
 
+            // Check the striping pattern of this store corresponds to
+            // any already discovered on previous stores.
             bool this_ok = (s.defined() &&
                             (can_prove(stride == s) &&
                              can_prove(reduce_expr(e / stride - var, warp_size, bounds) == 0)));
@@ -274,8 +305,6 @@ public:
             // We can handle any access pattern for loads, but it's
             // better if the stride matches up because then it's just
             // a register access, not a warp shuffle.
-            //
-            // TODO: Can't do loads across different thread_id.{yz} without a sync
             Expr s = warp_stride(e);
             if (!stride.defined()) {
                 stride = s;
@@ -284,6 +313,7 @@ public:
 
         if (stride.defined()) {
             for (Expr e : single_stores) {
+                // If only thread zero was active for the store, that makes the proof simpler.
                 Expr simpler = substitute(lane_var, 0, e);
                 bool this_ok = can_prove(reduce_expr(simpler / stride, warp_size, bounds) == 0);
                 if (!this_ok) {
@@ -296,7 +326,7 @@ public:
         if (!ok) fail(bad);
 
         if (!stride.defined()) {
-            // Only accessed via broadcasts and a single store.
+            // This allocation must only accessed via single-threaded stores.
             stride = 1;
         }
 
@@ -304,7 +334,9 @@ public:
     }
 };
 
-// TODO: There should be a separate visitor for the stuff inside the loop and the locating of the loops. Avoid all this_lane.defined()
+// Move allocations outside the loop over lanes into the loop over
+// lanes (using the striping described above), and rewrites
+// stores/loads to them as cuda register shuffle intrinsics.
 class LowerWarpShuffles : public IRMutator2 {
     using IRMutator2::visit;
 
@@ -439,7 +471,20 @@ class LowerWarpShuffles : public IRMutator2 {
             Expr stride = allocation_info.get(op->name).stride;
             internal_assert(stride.defined() && warp_size.defined());
 
-            // Reduce the index to an index in my own stripe. We have already validated the legality of this.
+            // Reduce the index to an index in my own stripe. We have
+            // already validated the legality of this in
+            // DetermineAllocStride. We split the flat index into into
+            // a three-dimensional index using warp_size and
+            // stride. The innermost dimension is at most the stride,
+            // and is in the index within one contiguous chunk stored
+            // by a lane. The middle dimension corresponds to
+            // lanes. It's the one we're striping across, so it should
+            // be eliminated. The outermost dimension is whatever bits
+            // are left over. If everything is a power of two, you can
+            // think of this as erasing some of the bits in the middle
+            // of the index and shifting the high bits down to cover
+            // them. Reassembling the result into a flat address gives
+            // the expression below.
             Expr in_warp_idx = simplify((idx / (warp_size * stride)) * stride + reduce_expr(idx, stride, bounds), true, bounds);
             return Store::make(op->name, value, in_warp_idx, op->param, op->predicate);
         } else {
@@ -534,12 +579,19 @@ class LowerWarpShuffles : public IRMutator2 {
             Expr equiv = select(cond, up, down);
             shuffled = simplify(equiv, true, bounds);
         } else {
+            // The format of the mask is a pain. The high bits tell
+            // you how large the a warp is for this instruction
+            // (i.e. is it a shuffle within groups of 8, or a shuffle
+            // within groups of 16?). The low bits serve as a clamp on
+            // the max value pulled from. We don't use that, but it
+            // could hypothetically be used for boundary conditions.
             Expr mask = simplify(((31 & ~(warp_size - 1)) << 8) | 31);
             // The idx variant can do a general gather. Use it for all other cases.
             shuffled = Call::make(shuffle_type, "llvm.nvvm.shfl.idx" + intrin_suffix,
                                 {base_val, lane, mask}, Call::PureExtern);
         }
-        // TODO: butterfly, clamp don't need to use the general gather
+        // TODO: There are other forms, like butterfly and clamp, that
+        // don't need to use the general gather
 
         if (shuffled.type() != type) {
             user_assert(shuffled.type().bits() > type.bits());
@@ -557,7 +609,7 @@ class LowerWarpShuffles : public IRMutator2 {
             // Break the index into lane and stripe components
             Expr lane = simplify(reduce_expr(idx / stride, warp_size, bounds), true, bounds);
             idx = simplify((idx / (warp_size * stride)) * stride + reduce_expr(idx, stride, bounds), true, bounds);
-            // We don't want the idx to depend on the lane var
+            // We don't want the idx to depend on the lane var, so try to eliminate it
             idx = simplify(solve_expression(idx, this_lane_name).result, true, bounds);
             return make_warp_load(op->type, op->name, idx, lane);
         } else {
@@ -589,9 +641,6 @@ class HoistWarpShufflesFromSingleIfStmt : public IRMutator2 {
     Expr visit(const Call *op) override {
         // If it was written outside this if clause but read inside of
         // it, we need to hoist it.
-        //
-        // TODO: What if it is written to both inside *and* outside of
-        // this if clause. Is that possible?
         if (starts_with(op->name, "llvm.nvvm.shfl.") &&
             !expr_uses_vars(op, stored_to)) {
             string name = unique_name('t');
