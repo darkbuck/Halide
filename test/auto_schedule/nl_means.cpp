@@ -159,9 +159,9 @@ double run_test(bool auto_schedule) {
 
     // Benchmark the schedule
     Buffer<float> out(img.width(), img.height(), img.channels());
-    /*double t = benchmark(3, 10, [&]() {
+    double t = benchmark(3, 10, [&]() {
         p.realize(out);
-    });*/
+    });
 
     p.realize(out);
     out.copy_to_host();
@@ -171,7 +171,7 @@ double run_test(bool auto_schedule) {
 
 int main(int argc, char **argv) {
     run_test(false);
-    /*double auto_time = run_test(true);
+    double auto_time = run_test(true);
 
     std::cout << "======================" << std::endl;
     std::cout << "Manual time: " << manual_time << "ms" << std::endl;
@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
         (auto_time > manual_time * 3.5)) {
         printf("Auto-scheduler is much much slower than it should be.\n");
         return -1;
-    }*/
+    }
 
     printf("Success!\n");
     return 0;

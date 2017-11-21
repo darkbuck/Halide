@@ -2144,11 +2144,11 @@ void Partitioner::group_recurse() {
         fixpoint = true;
         vector<pair<string, string>> cand = get_grouping_candidate(groups, outputs, Partitioner::Level::FastMem);
 
-        debug(0) << "\n============================" << '\n';
-        debug(0) << "Current grouping candidates:" << '\n';
-        debug(0) << "============================" << '\n';
+        debug(3) << "\n============================" << '\n';
+        debug(3) << "Current grouping candidates:" << '\n';
+        debug(3) << "============================" << '\n';
         for (size_t i = 0; i < cand.size(); ++i) {
-            debug(0) << "{" << cand[i].first << ", " << cand[i].second << "}" << '\n';
+            debug(3) << "{" << cand[i].first << ", " << cand[i].second << "}" << '\n';
         }
 
         vector<pair<GroupingChoice, GroupConfig>> best;
@@ -2156,7 +2156,7 @@ void Partitioner::group_recurse() {
 
         std::tie(best, best_subgroups) = choose_candidate_grouping_recurse(cand);
 
-        debug(0) << "\n*********************\nBEST:\n";
+        /*debug(0) << "\n*********************\nBEST:\n";
         for (const auto &iter : best) {
             debug(0) << iter.first;
             debug(0) << "tile size: ";
@@ -2176,7 +2176,7 @@ void Partitioner::group_recurse() {
             }
             debug(0) << "\n";
         }
-        debug(0) << "\n";
+        debug(0) << "\n";*/
 
         internal_assert(best.size() == best_subgroups.size());
         if (best.empty()) {
@@ -2185,8 +2185,8 @@ void Partitioner::group_recurse() {
             fixpoint = false;
         }
 
-        debug(0) << "\nBEFORE:";
-        disp_grouping();
+        /*debug(0) << "\nBEFORE:";
+        disp_grouping();*/
 
         // The following code makes the assumption that all the stages of a function
         // will be in the same group. 'choose_candidate_grouping' ensures that the
@@ -2248,8 +2248,8 @@ void Partitioner::group_recurse() {
             }
         }
 
-        debug(0) << "\n\nAFTER";
-        disp_grouping();
+        /*debug(0) << "\n\nAFTER";
+        disp_grouping();*/
 
         if (debug::debug_level() >= 3) {
             disp_pipeline_costs();
@@ -2649,12 +2649,12 @@ void Partitioner::merge_groups(const GroupingChoice &choice, const GroupConfig &
 Partitioner::GroupConfig Partitioner::evaluate_choice(const GroupingChoice &choice,
                                                       Partitioner::Level level,
                                                       const map<string, Expr> &tile_bounds) {
-    debug(0) << "\nEVALUATE CHOICE FOR " << choice;
+    /*debug(0) << "\nEVALUATE CHOICE FOR " << choice;
     debug(0) << "Tile bounds: ";
     for (const auto &iter : tile_bounds) {
         debug(0) << "[" << iter.first << ": " << iter.second << "], ";
     }
-    debug(0) << "\n";
+    debug(0) << "\n";*/
 
     // Create a group that reflects the grouping choice and evaluate the cost
     // of the group.
@@ -2744,10 +2744,10 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
     // to compute the region cost
     // TODO(psuriana): Should we recurse if the cost is undefined?
     if (group_analysis.cost.defined()) {
-        debug(0) << "\n\n*********************\nRecurse partitioning into subgroup, output: " << group.output << "\n";
+        /*debug(0) << "\n\n*********************\nRecurse partitioning into subgroup, output: " << group.output << "\n";
         debug(0) << group;
 
-        disp_pipeline_graph();
+        disp_pipeline_graph();*/
 
         /*debug(0) << "\n***BEFORE CLEAR BOUNDS:\n";
         for (const auto &iter : pipeline_bounds) {
@@ -2880,7 +2880,7 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             merge_regions(part.pipeline_bounds, regions);
         }
 
-        debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
+        /*debug(0) << "\n***AFTER CLEAR BOUNDS:\n";
         for (const auto &iter : part.pipeline_bounds) {
             debug(0) << "\t" << iter.first << " -> " << iter.second << "\n";
         }
@@ -2893,18 +2893,18 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
             }
             debug(0) << "(" << iter->first << ", " <<  iter->second << ")";
         }
-        debug(0) << "}" << '\n';
+        debug(0) << "}" << '\n';*/
 
         part.initialize_groups();
 
-        debug(0) << "\n\n***INITIAL SUBGROUP:\n";
+        /*debug(0) << "\n\n***INITIAL SUBGROUP:\n";
         part.disp_grouping();
-        debug(0) << "\n\n***RECURSE SUBGROUP:\n";
+        debug(0) << "\n\n***RECURSE SUBGROUP:\n";*/
 
         part.group(Partitioner::Level::FastMem, best_tile_config);
 
-        part.disp_grouping();
-        part.disp_pipeline_costs();
+        /*part.disp_grouping();
+        part.disp_pipeline_costs();*/
 
 
         // The computation size depends on the tile, however, the memory cost
@@ -2925,9 +2925,9 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         internal_assert(memory_cost.defined());
         memory_cost = simplify(memory_cost);
 
-        debug(0) << "TOTAL memory cost: " << memory_cost << "\n";
+        /*debug(0) << "TOTAL memory cost: " << memory_cost << "\n";
         debug(0) << "NO SUBGROUP COST: " << group_analysis << "\n";
-        debug(0) << "**********************\n\n";
+        debug(0) << "**********************\n\n";*/
         group_analysis.cost.memory = memory_cost;
 
         for (const auto &iter : part.groups) {
@@ -2935,12 +2935,12 @@ Partitioner::evaluate_choice_recurse(const GroupingChoice &choice) {
         }
     }
 
-    debug(0) << "\nRECURSE SUBGROUPS:\n";
+    /*debug(0) << "\nRECURSE SUBGROUPS:\n";
     for (size_t i = 0; i < subgroups.size(); ++i) {
         debug(0) << "Subgroup " << i << "\n";
         debug(0) << subgroups[i] << "\n";
     }
-    debug(0) << "\n";
+    debug(0) << "\n";*/
 
     return {GroupConfig(best_tile_config, group_analysis), subgroups};
 }
@@ -3001,7 +3001,7 @@ Expr Partitioner::estimate_benefit(
     }
     new_group_analysis.simplify();
 
-    debug(0) << "\tnew group analysis: " << new_group_analysis << "\n";
+    //debug(0) << "\tnew group analysis: " << new_group_analysis << "\n";
 
     GroupAnalysis old_group_analysis(Cost(0, 0), Int(64).max());
     for (const auto &g : old_groups) {
@@ -3021,7 +3021,7 @@ Expr Partitioner::estimate_benefit(
     }
     old_group_analysis.simplify();
 
-    debug(0) << "\told group analysis: " << old_group_analysis << "\n";
+    //debug(0) << "\told group analysis: " << old_group_analysis << "\n";
 
     return estimate_benefit(old_group_analysis, new_group_analysis,
                             no_redundant_work, ensure_parallelism);
@@ -3569,10 +3569,10 @@ void Partitioner::generate_group_cpu_schedule(
     string out_f_name = g.output.func.name();
     Function g_out = g.output.func;
 
-    debug(0) << "\n================\n";
-    debug(0) << "Scheduling group:\n";
-    debug(0) << "================\n";
-    debug(0) << g;
+    debug(3) << "\n================\n";
+    debug(3) << "Scheduling group:\n";
+    debug(3) << "================\n";
+    debug(3) << g;
 
     // Get the definition corresponding to the stage
     Definition def = get_stage_definition(g_out, g.output.stage_num);
@@ -3826,7 +3826,7 @@ void Partitioner::generate_group_cpu_schedule(
     }
 
     for (const Group &sub : g.subgroups) {
-        debug(0) << "\n\nSUBGROUP:\n" << sub << "\n";
+        //debug(0) << "\n\nSUBGROUP:\n" << sub << "\n";
         VarOrRVar subtile_inner_var("", false);
 
         // TODO(psuriana): sometimes the initial def and updates are in separate subgroup,
@@ -3975,8 +3975,6 @@ void Partitioner::generate_group_cpu_schedule(
             }
         }
 
-        debug(0) << "here 1\n";
-
         for (const FStage &mem : sub.members) {
             // Skip member stages that have been inlined or stage that is the
             // output stage of the group
@@ -4072,7 +4070,7 @@ void Partitioner::generate_cpu_schedule(const Target &t, AutoSchedule &sched) {
     map<FStage, map<FStage, DimBounds>> loop_bounds = group_loop_bounds();
     map<FStage, map<string, Box>> storage_bounds = group_storage_bounds();
 
-    debug(0) << "\n\nLOOP BOUNDS:\n";
+    /*debug(0) << "\n\nLOOP BOUNDS:\n";
     for (const auto &iter : loop_bounds) {
         debug(0) << "Stage: " << iter.first << "\n";
         for (const auto &it : iter.second) {
@@ -4095,7 +4093,7 @@ void Partitioner::generate_cpu_schedule(const Target &t, AutoSchedule &sched) {
         }
         debug(0) << "\n";
     }
-    debug(0) << "\n";
+    debug(0) << "\n";*/
 
     set<string> inlines;
     // Mark all functions that are inlined.
@@ -4648,14 +4646,14 @@ string generate_schedules(const vector<Function> &outputs, const Target &target,
     //part.group(Partitioner::Level::FastMem, {});
     part.group_recurse();
 
-    debug(0) << "\n\n*************************************************\n";
+    /*debug(0) << "\n\n*************************************************\n";
     debug(0) << "FINAL RESULT:\n";
     debug(0) << "*************************************************\n";
     //if (debug::debug_level() >= 3) {
         part.disp_pipeline_costs();
         part.disp_grouping();
         part.disp_pipeline_graph();
-    //}
+    //}*/
 
     debug(0) << "Initializing AutoSchedule...\n";
     AutoSchedule sched(env, full_order);

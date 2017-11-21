@@ -319,7 +319,7 @@ double run_test(bool auto_schedule) {
 
 int main(int argc, char **argv) {
     run_test(false);
-    /*double auto_time = run_test(true);
+    double auto_time = run_test(true);
 
     std::cout << "======================" << std::endl;
     std::cout << "Manual time: " << manual_time << "ms" << std::endl;
@@ -332,6 +332,6 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    printf("Success!\n");*/
+    printf("Success!\n");
     return 0;
 }
