@@ -3641,7 +3641,7 @@ void Partitioner::generate_group_cpu_schedule(
     }
     for (const Group &sub : g.subgroups) {
         if (sub.output == g.output) {
-            for (const auto &iter : g.tile_sizes) {
+            for (const auto &iter : sub.tile_sizes) {
                 internal_assert(out_tiles.count(iter.first));
                 out_tiles[iter.first].push_back(iter.second);
             }
@@ -3685,6 +3685,7 @@ void Partitioner::generate_group_cpu_schedule(
                     split_dim(g, f_handle, g.output.stage_num, def, true, v,
                               tile_size, "_i", "_o", stg_estimates, sched);
 
+                bool split_subtile = false;
                 if (iter->second.size() > 1) {
                     const Expr &subtile_size = iter->second[1];
 
@@ -3694,6 +3695,7 @@ void Partitioner::generate_group_cpu_schedule(
                         pair<VarOrRVar, VarOrRVar> subtile_vars =
                             split_dim(g, f_handle, g.output.stage_num, def, true, v_sub,
                                       subtile_size, "_i", "_o", stg_estimates, sched);
+                        split_subtile = true;
 
                         // TODO(psuriana): what is the order of tile and subtile vars?
                         inner_dims.push_back(subtile_vars.first);
@@ -3711,7 +3713,9 @@ void Partitioner::generate_group_cpu_schedule(
                             tile_inner_var = subtile_vars.second;
                         }
                     }
-                } else {
+                }
+
+                if (!split_subtile) {
                     inner_dims.push_back(tile_vars.first);
                     outer_dims.push_back(tile_vars.second);
 
@@ -3822,127 +3826,165 @@ void Partitioner::generate_group_cpu_schedule(
     }
 
     for (const Group &sub : g.subgroups) {
-        // 'dims' will get modified since we are going to apply the schedules
-        // (e.g. tiling, reordering, etc.)
-        Definition sub_def = get_stage_definition(sub.output.func, sub.output.stage_num);
-        Stage sub_handle = Stage(Func(sub.output.func));
-
-        map<string, Expr> sub_estimates =
-            bounds_to_estimates(get_element(group_loop_bounds, sub.output));
-
-        vector<Dim> &sub_dims = sub_def.schedule().dims();
-
-        set<string> sub_rvars;
-        for (int d = 0; d < (int)sub_dims.size() - 1; d++) {
-            if (sub_dims[d].is_rvar()) {
-                sub_rvars.insert(get_base_name(sub_dims[d].var));
-            }
-        }
-
-        vector<string> sub_dim_vars(sub_dims.size() - 1);
-        for (int d = 0; d < (int)sub_dims.size() - 1; d++) {
-            sub_dim_vars[d] = get_base_name(sub_dims[d].var);
-        }
-
-        if (sub_dims.size() > 2) {
-            map<string, Expr> sub_strides =
-                analyze_spatial_locality(sub.output, group_storage_bounds, inlines);
-            if (!sub_strides.empty()) {
-                reorder_dims(sub_handle, sub.output.stage_num, sub_def, sub_strides, sched);
-            }
-        }
-
-        // Perform subtiling on the subroup output
+        debug(0) << "\n\nSUBGROUP:\n" << sub << "\n";
         VarOrRVar subtile_inner_var("", false);
 
-        // TODO(psuriana): should probably also apply the subtiling here?
-        vector<VarOrRVar> sub_outer_dims;
-        vector<VarOrRVar> sub_inner_dims;
+        // TODO(psuriana): sometimes the initial def and updates are in separate subgroup,
+        // should they be in the same subgroup???
 
-        debug(0) << "**GET HERE 1\n";
+        if (sub.output.func.name() != g_out.name()) {
+            // 'dims' will get modified since we are going to apply the schedules
+            // (e.g. tiling, reordering, etc.)
+            Definition sub_def = get_stage_definition(sub.output.func, sub.output.stage_num);
+            Stage sub_handle = (sub.output.stage_num > 0) ? Func(sub.output.func).update(sub.output.stage_num - 1) : Stage(Func(sub.output.func));
 
-        for (const auto &var : sub_dim_vars) {
-            bool is_rvar = (sub_rvars.find(var) != sub_rvars.end());
-            VarOrRVar v(var, is_rvar);
+            map<string, Expr> sub_estimates = bounds_to_estimates(get_element(group_loop_bounds, sub.output));
 
-            const auto &iter = sub.tile_sizes.find(var);
+            vector<Dim> &sub_dims = sub_def.schedule().dims();
 
-            // TODO(psuriana): we should probably do the check whether the
-            // dimension size is bigger than the tile size when we compute
-            // candidate for tiling instead of here.
-            if ((iter != sub.tile_sizes.end()) &&
-                get_element(stg_estimates, var).defined() &&
-                can_prove(get_element(stg_estimates, var) > iter->second)) {
+            set<string> sub_rvars;
+            for (int d = 0; d < (int)sub_dims.size() - 1; d++) {
+                if (sub_dims[d].is_rvar()) {
+                    sub_rvars.insert(get_base_name(sub_dims[d].var));
+                }
+            }
 
-                // The outermost group tile size
-                const Expr &tile_size = iter->second;
-                if (can_prove(tile_size == 1)) {
-                    // TODO(osuriana): what does tile size equal to 1 mean
-                    // for the outer tile and the subtile?
-                    sub_outer_dims.push_back(v);
-                    if (subtile_inner_var.name() == "") {
-                        subtile_inner_var = v;
+            vector<string> sub_dim_vars(sub_dims.size() - 1);
+            for (int d = 0; d < (int)sub_dims.size() - 1; d++) {
+                sub_dim_vars[d] = get_base_name(sub_dims[d].var);
+            }
+
+            if (sub_dims.size() > 2) {
+                map<string, Expr> sub_strides =
+                    analyze_spatial_locality(sub.output, group_storage_bounds, inlines);
+                if (!sub_strides.empty()) {
+                    reorder_dims(sub_handle, sub.output.stage_num, sub_def, sub_strides, sched);
+                }
+            }
+
+            // Perform subtiling on the subroup output
+
+            // TODO(psuriana): should probably also apply the subtiling here?
+            vector<VarOrRVar> sub_outer_dims;
+            vector<VarOrRVar> sub_inner_dims;
+
+            for (const auto &var : sub_dim_vars) {
+                bool is_rvar = (sub_rvars.find(var) != sub_rvars.end());
+                VarOrRVar v(var, is_rvar);
+
+                const auto &iter = sub.tile_sizes.find(var);
+
+                // TODO(psuriana): we should probably do the check whether the
+                // dimension size is bigger than the tile size when we compute
+                // candidate for tiling instead of here.
+                if ((iter != sub.tile_sizes.end()) &&
+                    get_element(sub_estimates, var).defined() &&
+                    can_prove(get_element(sub_estimates, var) > iter->second)) {
+
+                    // The outermost group tile size
+                    const Expr &tile_size = iter->second;
+                    if (can_prove(tile_size == 1)) {
+                        // TODO(osuriana): what does tile size equal to 1 mean
+                        // for the outer tile and the subtile?
+                        sub_outer_dims.push_back(v);
+                        if (subtile_inner_var.name() == "") {
+                            subtile_inner_var = v;
+                        }
+                    } else {
+                        pair<VarOrRVar, VarOrRVar> tile_vars =
+                            split_dim(sub, sub_handle, sub.output.stage_num, sub_def, true, v,
+                                      tile_size, "_i", "_o", stg_estimates, sched);
+
+                        sub_inner_dims.push_back(tile_vars.first);
+                        sub_outer_dims.push_back(tile_vars.second);
+
+                        if (is_rvar) {
+                            sub_rvars.erase(var);
+                            sub_rvars.insert(tile_vars.first.name());
+                            sub_rvars.insert(tile_vars.second.name());
+                        }
+
+                        if (subtile_inner_var.name() == "") {
+                            subtile_inner_var = tile_vars.second;
+                        }
                     }
                 } else {
-                    pair<VarOrRVar, VarOrRVar> tile_vars =
-                        split_dim(sub, sub_handle, sub.output.stage_num, sub_def, true, v,
-                                  tile_size, "_i", "_o", stg_estimates, sched);
-
-                    sub_inner_dims.push_back(tile_vars.first);
-                    sub_outer_dims.push_back(tile_vars.second);
-
-                    if (is_rvar) {
-                        sub_rvars.erase(var);
-                        sub_rvars.insert(tile_vars.first.name());
-                        sub_rvars.insert(tile_vars.second.name());
-                    }
-
-                    if (subtile_inner_var.name() == "") {
-                        subtile_inner_var = tile_vars.second;
-                    }
+                    // THis dimension is not tiled.
+                    // TODO(psuriana): how do you decide which one is the
+                    // inner dimension and which one is the outer dim?
+                    sub_inner_dims.push_back(v);
                 }
-            } else {
-                // THis dimension is not tiled.
-                // TODO(psuriana): how do you decide which one is the
-                // inner dimension and which one is the outer dim?
-                sub_inner_dims.push_back(v);
-            }
-        }
-        debug(0) << "**GET HERE 2\n";
-
-        // Reorder the tile dimensions
-        if (!sub_outer_dims.empty()) {
-            vector<VarOrRVar> ordering;
-            for (const auto &v : sub_inner_dims) {
-                ordering.push_back(v);
-            }
-            for (const auto &v : sub_outer_dims) {
-                ordering.push_back(v);
             }
 
-            set<string> var_list;
-            string var_order = ordering[0].name();
-            for (size_t o = 1; o < ordering.size(); o++) {
-                var_order += ", " + ordering[o].name();
-                var_list.insert(ordering[o].name());
+            // Reorder the tile dimensions
+            if (!sub_outer_dims.empty()) {
+                vector<VarOrRVar> ordering;
+                for (const auto &v : sub_inner_dims) {
+                    ordering.push_back(v);
+                }
+                for (const auto &v : sub_outer_dims) {
+                    ordering.push_back(v);
+                }
+
+                set<string> var_list;
+                string var_order = ordering[0].name();
+                for (size_t o = 1; o < ordering.size(); o++) {
+                    var_order += ", " + ordering[o].name();
+                    var_list.insert(ordering[o].name());
+                }
+
+                if (sub_dims != ordering) {
+                    sub_handle.reorder(ordering);
+                    sched.push_schedule(sub_handle.name(), sub.output.stage_num,
+                                        "reorder(" + var_order + ")", var_list);
+                }
             }
 
-            if (dims != ordering) {
-                sub_handle.reorder(ordering);
+            if (!outer_dims.empty()) {
+                // For the subgroup output, both compute_at and store_at are
+                // at the same loop level
+                if (tile_inner_var.is_rvar) {
+                    Func(sub.output.func).compute_at(Func(g_out), tile_inner_var.rvar);
+                    //Func(sub.output.func).store_at(Func(g_out), tile_inner_var.rvar);
+                } else {
+                    Func(sub.output.func).compute_at(Func(g_out), tile_inner_var.var);
+                    //Func(sub.output.func).store_at(Func(g_out), tile_inner_var.var);
+                }
+                string sanitized_f_name = get_sanitized_name(g_out.name());
                 sched.push_schedule(sub_handle.name(), sub.output.stage_num,
-                                    "reorder(" + var_order + ")", var_list);
+                                    "compute_at(" + sanitized_f_name + ", " + tile_inner_var.name() + ")",
+                                    {sanitized_f_name, tile_inner_var.name()});
+            } else {
+                // TODO(psuriana): not sure if we will ever reach this point in
+                // the first place
+                user_warning << "Degenerate tiling. No dimensions are tiled" << '\n';
+                user_warning << "Computing \"" <<  sub.output.func.name() << "\" at root" << '\n';
+                Func(sub.output.func).compute_root();
+                sched.push_schedule(sub_handle.name(), sub.output.stage_num, "compute_root()", {});
+            }
+
+            vectorize_stage(sub, sub_handle, sub.output.stage_num, sub_def, sub.output.func,
+                            false, t, sub_rvars, sub_estimates, sched);
+
+        } else {
+            int tile_inner_index = dims.size() - outer_dims.size() - 1;
+            if (!outer_dims.empty()) {
+                string var_name = get_base_name(dims[tile_inner_index].var);
+                bool is_rvar = (rvars.find(var_name) != rvars.end());
+                subtile_inner_var = VarOrRVar(var_name, is_rvar);
             }
         }
+
+        debug(0) << "here 1\n";
 
         for (const FStage &mem : sub.members) {
             // Skip member stages that have been inlined or stage that is the
             // output stage of the group
             if ((g.inlined.find(mem.func.name()) != g.inlined.end()) ||
-                (mem.func.name() == g_out.name())) {
+                (mem.func.name() == g_out.name()) ||
+                (sub.output.func.name() == mem.func.name())) {
                 continue;
             }
-
-            bool is_subgroup_out = (sub.output.func.name() == mem.func.name());
 
             // Get the definition corresponding to the stage
             Definition mem_def = get_stage_definition(mem.func, mem.stage_num);
@@ -3965,27 +4007,35 @@ void Partitioner::generate_group_cpu_schedule(
             if (mem.stage_num > 0) {
                 mem_handle = Func(mem.func).update(mem.stage_num - 1);
             } else {
-                if (!outer_dims.empty()) {
-                    Function f_compute_at = is_subgroup_out ? g_out : sub.output.func;
+                if (!tile_inner_var.name().empty()) {
                     Function f_store_at = g_out;
 
                     if (tile_inner_var.is_rvar) {
-                        Func(mem.func).compute_at(Func(f_compute_at), tile_inner_var.rvar);
                         Func(mem.func).store_at(Func(f_store_at), tile_inner_var.rvar);
                     } else {
-                        Func(mem.func).compute_at(Func(f_compute_at), tile_inner_var.var);
                         Func(mem.func).store_at(Func(f_store_at), tile_inner_var.var);
                     }
-                    string sanitized_f_compute_at = get_sanitized_name(f_compute_at.name());
-                    sched.push_schedule(mem_handle.name(), mem.stage_num,
-                                        "compute_at(" + sanitized_f_compute_at + ", " + tile_inner_var.name() + ")",
-                                        {sanitized_f_compute_at, tile_inner_var.name()});
-
                     string sanitized_f_store_at = get_sanitized_name(f_store_at.name());
                     sched.push_schedule(mem_handle.name(), mem.stage_num,
                                         "store_at(" + sanitized_f_store_at + ", " + tile_inner_var.name() + ")",
                                         {sanitized_f_store_at, tile_inner_var.name()});
-                } else {
+                }
+
+                if (!subtile_inner_var.name().empty()) {
+                    Function f_compute_at = sub.output.func;
+
+                    if (subtile_inner_var.is_rvar) {
+                        Func(mem.func).compute_at(Func(f_compute_at), subtile_inner_var.rvar);
+                    } else {
+                        Func(mem.func).compute_at(Func(f_compute_at), subtile_inner_var.var);
+                    }
+                    string sanitized_f_compute_at = get_sanitized_name(f_compute_at.name());
+                    sched.push_schedule(mem_handle.name(), mem.stage_num,
+                                        "compute_at(" + sanitized_f_compute_at + ", " + subtile_inner_var.name() + ")",
+                                        {sanitized_f_compute_at, subtile_inner_var.name()});
+                }
+
+                else {
                     // TODO(psuriana): not sure if we will ever reach this point in
                     // the first place
                     user_warning << "Degenerate tiling. No dimensions are tiled" << '\n';
@@ -3997,7 +4047,7 @@ void Partitioner::generate_group_cpu_schedule(
 
             // Reorder the dimensions for better spatial locality. If we only have
             // one dimension (excluding __outermost), there is nothing to reorder.
-            if (!is_subgroup_out && mem_dims.size() > 2) {
+            if (mem_dims.size() > 2) {
                 map<string, Expr> mem_strides =
                     analyze_spatial_locality(mem, group_storage_bounds, inlines);
                 if (!mem_strides.empty()) {
@@ -4005,7 +4055,7 @@ void Partitioner::generate_group_cpu_schedule(
                 }
             }
 
-            vectorize_stage(g, mem_handle, mem.stage_num, mem_def, mem.func, false,
+            vectorize_stage(sub, mem_handle, mem.stage_num, mem_def, mem.func, false,
                             t, mem_rvars, mem_estimates, sched);
         }
     }
