@@ -170,7 +170,6 @@ class GenerateProducerBody : public NoOpCollapsingMutator {
 public:
     GenerateProducerBody(const string &f, const vector<Expr> &s, map<string, string> &a) :
         func(f), sema(s), cloned_acquires(a) {
-        internal_assert(!sema.empty()) << "No semaphores to release for " << f << "\n";
     }
 };
 
@@ -296,8 +295,6 @@ class ForkAsyncProducers : public IRMutator {
             // Make a semaphore per consume node
             CountConsumeNodes consumes(op->name);
             body.accept(&consumes);
-
-            internal_assert(consumes.count > 0) << "Forking " << op->name << " no consume nodes for " << op->name << " in " << body << "\n";
 
             vector<string> sema_names;
             vector<Expr> sema_vars;
