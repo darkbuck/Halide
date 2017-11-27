@@ -92,7 +92,7 @@ class GenerateProducerBody : public NoOpCollapsingMutator {
     void visit(const ProducerConsumer *op) {
         if (op->name == func && op->is_producer) {
             // Add post-synchronization
-            internal_assert(!sema.empty()) << "Duplicate produce node!\n";
+            internal_assert(!sema.empty()) << "Duplicate produce node: " << op->name << "\n";
             Stmt body = op->body;
             while (!sema.empty()) {
                 Expr release = Call::make(Int(32), "halide_semaphore_release", {sema.back(), 1}, Call::Extern);
@@ -117,6 +117,15 @@ class GenerateProducerBody : public NoOpCollapsingMutator {
 
     void visit(const Provide *) {
         stmt = Evaluate::make(0);
+    }
+
+    void visit(const Store *op) {
+        if (starts_with(op->name, func + ".folding_semaphore.") && ends_with(op->name, ".head")) {
+            // This is a counter associated with the producer side of a storage-folding semaphore. Keep it.
+            stmt = op;
+        } else {
+            stmt = Evaluate::make(0);
+        }
     }
 
     void visit(const AssertStmt *) {
@@ -160,7 +169,9 @@ class GenerateProducerBody : public NoOpCollapsingMutator {
 
 public:
     GenerateProducerBody(const string &f, const vector<Expr> &s, map<string, string> &a) :
-        func(f), sema(s), cloned_acquires(a) {}
+        func(f), sema(s), cloned_acquires(a) {
+        internal_assert(!sema.empty()) << "No semaphores to release for " << f << "\n";
+    }
 };
 
 class GenerateConsumerBody : public NoOpCollapsingMutator {
@@ -179,6 +190,23 @@ class GenerateConsumerBody : public NoOpCollapsingMutator {
                 stmt = Acquire::make(sema.back(), 1, op);
                 sema.pop_back();
             }
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+    void visit(const Allocate *op) {
+        // Don't want to keep the producer's storage-folding tracker - it's dead code on the consumer side
+        if (starts_with(op->name, func + ".folding_semaphore.") && ends_with(op->name, ".head")) {
+            stmt = mutate(op->body);
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+    void visit(const Store *op) {
+        if (starts_with(op->name, func + ".folding_semaphore.") && ends_with(op->name, ".head")) {
+            stmt = Evaluate::make(0);
         } else {
             IRMutator::visit(op);
         }
@@ -268,6 +296,8 @@ class ForkAsyncProducers : public IRMutator {
             // Make a semaphore per consume node
             CountConsumeNodes consumes(op->name);
             body.accept(&consumes);
+
+            internal_assert(consumes.count > 0) << "Forking " << op->name << " no consume nodes for " << op->name << " in " << body << "\n";
 
             vector<string> sema_names;
             vector<Expr> sema_vars;

@@ -23,6 +23,7 @@ int64_t next_power_of_two(int64_t x) {
 using std::string;
 using std::vector;
 using std::map;
+using std::pair;
 
 // Count the number of producers of a particular func.
 class CountProducers : public IRVisitor {
@@ -106,11 +107,13 @@ class FoldStorageOfFunction : public IRMutator {
                 Expr no_wraparound = mins[dim] + extents[dim] <= factor;
 
                 Expr valid_min = old_min;
-                if (!dynamic_footprint.empty()) {
+                if (false && !dynamic_footprint.empty()) {
                     // If the footprint is being tracked dynamically, it's
                     // not enough to just check we don't overlap a
                     // fold. We also need to check the min against the
                     // valid min.
+
+                    // TODO: dynamic footprint is no longer the min, and may be tracked separately on producer and consumer sides (head vs tail)
                     valid_min =
                         Load::make(Int(32), dynamic_footprint, 0, Buffer<>(), Parameter(), const_true());
                     Expr check = (old_min >= valid_min &&
@@ -152,8 +155,10 @@ public:
 // Inject dynamic folding checks against a tracked live range.
 class InjectFoldingCheck : public IRMutator {
     Function func;
-    string footprint, loop_var;
+    string head, tail, loop_var;
+    Expr sema_var;
     int dim;
+    bool in_produce;
     const StorageDim &storage_dim;
     using IRMutator::visit;
 
@@ -163,12 +168,13 @@ class InjectFoldingCheck : public IRMutator {
             if (op->is_producer) {
                 if (func.has_extern_definition()) {
                     // We'll update the valid min at the buffer_crop call.
+                    in_produce = true;
                     body = mutate(op->body);
                 } else {
                     // Update valid range based on bounds written to.
                     Box b = box_provided(body, func.name());
                     Expr old_leading_edge =
-                        Load::make(Int(32), footprint, 0, Buffer<>(), Parameter(), const_true());
+                        Load::make(Int(32), head, 0, Buffer<>(), Parameter(), const_true());
 
                     internal_assert(!b.empty());
 
@@ -185,9 +191,7 @@ class InjectFoldingCheck : public IRMutator {
                     Expr new_leading_edge_var = Variable::make(Int(32), new_leading_edge_var_name);
 
                     Stmt update_leading_edge =
-                        Store::make(footprint, new_leading_edge_var, 0, Parameter(), const_true());
-
-                    // TODO: Check is stricter for async
+                        Store::make(head, new_leading_edge_var, 0, Parameter(), const_true());
 
                     // Check the region being written to in this
                     // iteration lies within the range of coordinates
@@ -218,33 +222,75 @@ class InjectFoldingCheck : public IRMutator {
                         AssertStmt::make(extent <= storage_dim.fold_factor, fold_too_small_error);
 
                     Stmt checks = Block::make({check_extent, check_in_valid_range, update_leading_edge});
-                    checks = LetStmt::make(new_leading_edge_var_name, new_leading_edge, checks);
-                    body = Block::make(checks, body);
+                    if (func.schedule().async()) {
+                        Expr to_acquire;
+                        if (storage_dim.fold_forward) {
+                            to_acquire = new_leading_edge_var - old_leading_edge;
+                        } else {
+                            to_acquire = old_leading_edge - new_leading_edge_var;
+                        }
+                        body = Block::make(checks, body);
+                        body = Acquire::make(sema_var, to_acquire, body);
+                        body = LetStmt::make(new_leading_edge_var_name, new_leading_edge, body);
+                    } else {
+                        checks = LetStmt::make(new_leading_edge_var_name, new_leading_edge, checks);
+                        body = Block::make(checks, body);
+                    }
                 }
-            } else {
 
+            } else {
                 // Check the accessed range against the valid range.
                 Box b = box_required(body, func.name());
-
-                if (!b.empty()) {
+                if (b.empty()) {
+                    // Must be used in an extern call (TODO:
+                    // assert this, TODO: What if it's used in an
+                    // extern call and native Halide). We'll
+                    // update the valid min at the buffer_crop
+                    // call.
+                    in_produce = false;
+                    body = mutate(op->body);
+                } else {
                     Expr leading_edge =
-                        Load::make(Int(32), footprint, 0, Buffer<>(), Parameter(), const_true());
+                        Load::make(Int(32), tail, 0, Buffer<>(), Parameter(), const_true());
 
-                    // TODO: Check is stricter for async?
-
-                    Expr check;
-                    if (storage_dim.fold_forward) {
-                        check = (b[dim].min > leading_edge - storage_dim.fold_factor && b[dim].max <= leading_edge);
+                    if (func.schedule().async()) {
+                        Expr new_leading_edge;
+                        if (storage_dim.fold_forward) {
+                            new_leading_edge = b[dim].min - 1 + storage_dim.fold_factor;
+                        } else {
+                            new_leading_edge = b[dim].max + 1 - storage_dim.fold_factor;
+                        }
+                        string new_leading_edge_name = unique_name('t');
+                        Expr new_leading_edge_var = Variable::make(Int(32), new_leading_edge_name);
+                        Expr to_release;
+                        if (storage_dim.fold_forward) {
+                            to_release = new_leading_edge_var - leading_edge;
+                        } else {
+                            to_release = leading_edge - new_leading_edge_var;
+                        }
+                        Expr release_producer =
+                            Call::make(Int(32), "halide_semaphore_release", {sema_var, to_release}, Call::Extern);
+                        // The consumer is going to get its own forked copy of the footprint, so it needs to update it too.
+                        Stmt update_leading_edge = Store::make(tail, new_leading_edge_var, 0, Parameter(), const_true());
+                        update_leading_edge = Block::make(Evaluate::make(release_producer), update_leading_edge);
+                        update_leading_edge = LetStmt::make(new_leading_edge_name, new_leading_edge, update_leading_edge);
+                        body = Block::make(update_leading_edge, body);
                     } else {
-                        check = (b[dim].max < leading_edge + storage_dim.fold_factor && b[dim].min >= leading_edge);
+                        Expr check;
+                        if (storage_dim.fold_forward) {
+                            check = (b[dim].min > leading_edge - storage_dim.fold_factor && b[dim].max <= leading_edge);
+                        } else {
+                            check = (b[dim].max < leading_edge + storage_dim.fold_factor && b[dim].min >= leading_edge);
+                        }
+                        Expr bad_fold_error = Call::make(Int(32), "halide_error_bad_fold",
+                                                         {func.name(), storage_dim.var, loop_var},
+                                                         Call::Extern);
+                        body = Block::make(AssertStmt::make(check, bad_fold_error), body);
                     }
-                    Expr bad_fold_error = Call::make(Int(32), "halide_error_bad_fold",
-                                                     {func.name(), storage_dim.var, loop_var},
-                                                     Call::Extern);
-                    body = Block::make(AssertStmt::make(check, bad_fold_error), body);
-
                 }
             }
+
+
             stmt = ProducerConsumer::make(op->name, op->is_producer, body);
         } else {
             IRMutator::visit(op);
@@ -252,33 +298,79 @@ class InjectFoldingCheck : public IRMutator {
     }
 
     void visit(const LetStmt *op) {
-        if (func.has_extern_definition() &&
-            starts_with(op->name, func.name() + ".") &&
+        if (starts_with(op->name, func.name() + ".") &&
             ends_with(op->name, ".tmp_buffer")) {
 
             Stmt body = op->body;
             Expr buf = Variable::make(type_of<halide_buffer_t *>(), op->name);
-            Expr leading_edge;
-            if (storage_dim.fold_forward) {
-                leading_edge =
-                    Call::make(Int(32), Call::buffer_get_max, {buf, dim}, Call::Extern);
+
+            if (in_produce) {
+                // We're taking a crop of the buffer to act as an output
+                // to an extern stage. Update the valid min or max
+                // coordinate accordingly.
+
+                Expr leading_edge;
+                if (storage_dim.fold_forward) {
+                    leading_edge =
+                        Call::make(Int(32), Call::buffer_get_max, {buf, dim}, Call::Extern);
+                } else {
+                    leading_edge =
+                        Call::make(Int(32), Call::buffer_get_min, {buf, dim}, Call::Extern);
+                }
+
+                Stmt update_leading_edge =
+                    Store::make(head, leading_edge, 0, Parameter(), const_true());
+                body = Block::make(update_leading_edge, body);
+
+                // We don't need to make sure the min is moving
+                // monotonically, because we can't do sliding window on
+                // extern stages, so we don't have to worry about whether
+                // we're preserving valid values from previous loop
+                // iterations.
+
+                if (func.schedule().async()) {
+                    Expr old_leading_edge =
+                        Load::make(Int(32), head, 0, Buffer<>(), Parameter(), const_true());
+                    Expr to_acquire;
+                    if (storage_dim.fold_forward) {
+                        to_acquire = leading_edge - old_leading_edge;
+                    } else {
+                        to_acquire = old_leading_edge - leading_edge;
+                    }
+                    body = Acquire::make(sema_var, to_acquire, body);
+                }
             } else {
-                leading_edge =
-                    Call::make(Int(32), Call::buffer_get_min, {buf, dim}, Call::Extern);
+                // We're taking a crop of the buffer to act as an input
+                // to an extern stage. Update the valid min or max
+                // coordinate accordingly.
+
+                Expr leading_edge;
+                if (storage_dim.fold_forward) {
+                    leading_edge =
+                        Call::make(Int(32), Call::buffer_get_min, {buf, dim}, Call::Extern) - 1 + storage_dim.fold_factor;
+                } else {
+                    leading_edge =
+                        Call::make(Int(32), Call::buffer_get_max, {buf, dim}, Call::Extern) + 1 - storage_dim.fold_factor;
+                }
+
+                Stmt update_leading_edge =
+                    Store::make(tail, leading_edge, 0, Parameter(), const_true());
+                body = Block::make(update_leading_edge, body);
+
+                if (func.schedule().async()) {
+                    Expr old_leading_edge =
+                        Load::make(Int(32), tail, 0, Buffer<>(), Parameter(), const_true());
+                    Expr to_release;
+                    if (storage_dim.fold_forward) {
+                        to_release = leading_edge - old_leading_edge;
+                    } else {
+                        to_release = old_leading_edge - leading_edge;
+                    }
+                    Expr release_producer =
+                        Call::make(Int(32), "halide_semaphore_release", {sema_var, to_release}, Call::Extern);
+                    body = Block::make(Evaluate::make(release_producer), body);
+                }
             }
-
-            // We're taking a crop of the buffer to act as an output
-            // to an extern stage. Update the valid min or max
-            // coordinate accordingly.
-            Stmt update_leading_edge =
-                Store::make(footprint, leading_edge, 0, Parameter(), const_true());
-            body = Block::make(update_leading_edge, body);
-
-            // We don't need to make sure the min is moving
-            // monotonically, because we can't do sliding window on
-            // extern stages, so we don't have to worry about whether
-            // we're preserving valid values from previous loop
-            // iterations.
 
             stmt = LetStmt::make(op->name, op->value, body);
         } else {
@@ -289,11 +381,14 @@ class InjectFoldingCheck : public IRMutator {
 
 public:
     InjectFoldingCheck(Function func,
-                       string footprint, string loop_var,
+                       string head, string tail,
+                       string loop_var, Expr sema_var,
                        int dim, const StorageDim &storage_dim)
         : func(func),
-          footprint(footprint), loop_var(loop_var),
-          dim(dim), storage_dim(storage_dim) {}
+          head(head), tail(tail), loop_var(loop_var), sema_var(sema_var),
+          dim(dim), storage_dim(storage_dim) {
+
+    }
 };
 
 struct Semaphore {
@@ -339,6 +434,7 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
         Expr loop_var = Variable::make(Int(32), op->name);
         Expr loop_min = Variable::make(Int(32), op->name + ".loop_min");
         Expr loop_max = Variable::make(Int(32), op->name + ".loop_max");
+
         string dynamic_footprint;
 
         // Try each dimension in turn from outermost in
@@ -347,10 +443,19 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
             Expr min = simplify(box[dim].min);
             Expr max = simplify(box[dim].max);
 
-            Expr min_provided = simplify(provided[dim].min);
-            Expr max_provided = simplify(provided[dim].max);
-            Expr min_required = simplify(required[dim].min);
-            Expr max_required = simplify(required[dim].max);
+            Expr min_provided, max_provided, min_required, max_required;
+            if (func.schedule().async() && !explicit_only) {
+                if (!provided.empty()) {
+                    min_provided = simplify(provided[dim].min);
+                    max_provided = simplify(provided[dim].max);
+                }
+                if (!required.empty()) {
+                    min_required = simplify(required[dim].min);
+                    max_required = simplify(required[dim].max);
+                }
+            }
+            string sema_name = func.name() + ".folding_semaphore." + unique_name('_');
+            Expr sema_var = Variable::make(type_of<halide_semaphore_t *>(), sema_name);
 
             const StorageDim &storage_dim = func.schedule().storage_dims()[dim];
 
@@ -386,12 +491,17 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                     // in the circular buffer.
                     can_fold_forwards &= (is_monotonic(max_provided, op->name) == Monotonic::Increasing);
                     can_fold_backwards &= (is_monotonic(min_provided, op->name) == Monotonic::Decreasing);
+                    // We need to be able to analyze the required footprint to know how much to release
+                    can_fold_forwards &= min_required.defined();
+                    can_fold_backwards &= max_required.defined();
                 }
             }
 
-            if (!can_fold_forwards && !can_fold_backwards &&
-                explicit_factor.defined()) {
-                if (!func.schedule().async()) {
+            // Uncomment to pretend that static analysis always fails (for testing)
+            // can_fold_forwards = can_fold_backwards = false;
+
+            if (!can_fold_forwards && !can_fold_backwards) {
+                if (explicit_factor.defined()) {
                     // If we didn't find a monotonic dimension, and we
                     // have an explicit fold factor, we need to
                     // dynamically check that the min/max do in fact
@@ -399,167 +509,207 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                     // some stack space to store the valid footprint,
                     // update it outside produce nodes, and check it
                     // outside consume nodes.
-                    dynamic_footprint = func.name() + "." + op->name + ".footprint";
+                    string head, tail;
+                    if (func.schedule().async()) {
+                        // If we're async, we need to keep a separate
+                        // counter for the producer and consumer. They
+                        // are coupled by a semaphore. The counter
+                        // represents the max index the producer may
+                        // write to. The invariant is that the
+                        // semaphore count is the difference between
+                        // the counters. So...
+                        //
+                        // when folding forwards,  semaphore == head - tail
+                        // when folding backwards, semaphore == tail - head
+                        //
+                        // We'll initialize to head = tail, and
+                        // semaphore = 0. Every time the producer or
+                        // consumer wants to move the counter, it must
+                        // also acquire or release the semaphore to
+                        // prevent them from diverging too far.
+                        dynamic_footprint = func.name() + ".folding_semaphore." + op->name + unique_name('_');
+                        head = dynamic_footprint + ".head";
+                        tail = dynamic_footprint + ".tail";
+                    } else {
+                        dynamic_footprint = func.name() + "." + op->name + unique_name('_') + ".head";
+                        head = tail = dynamic_footprint;
+                    }
 
                     body = InjectFoldingCheck(func,
-                                              dynamic_footprint,
+                                              head, tail,
                                               op->name,
+                                              sema_var,
                                               dim,
                                               storage_dim).mutate(body);
-                }
 
-                if (storage_dim.fold_forward) {
-                    can_fold_forwards = true;
+                    if (storage_dim.fold_forward) {
+                        can_fold_forwards = true;
+                    } else {
+                        can_fold_backwards = true;
+                    }
                 } else {
-                    can_fold_backwards = true;
+                    // Can't do much with this dimension
+                    debug(3) << "Not folding because loop min or max not monotonic in the loop variable\n"
+                             << "min = " << min << "\n"
+                             << "max = " << max << "\n";
+                    continue;
                 }
             }
 
             // The min or max has to be monotonic with the loop
             // variable, and should depend on the loop variable.
-            if (can_fold_forwards || can_fold_backwards) {
-                Expr extent = simplify(max - min + 1);
-                Expr factor;
-                if (explicit_factor.defined()) {
-                    if (dynamic_footprint.empty() && !func.schedule().async()) {
-                        // We were able to prove monotonicity
-                        // statically, but we may need a runtime
-                        // assertion for maximum extent. In many cases
-                        // it will simplify away. For async schedules
-                        // it gets dynamically tracked anyway.
-                        Expr error = Call::make(Int(32), "halide_error_fold_factor_too_small",
-                                                {func.name(), storage_dim.var, explicit_factor, op->name, extent},
-                                                Call::Extern);
-                        body = Block::make(AssertStmt::make(extent <= explicit_factor, error), body);
-                    }
-                    factor = explicit_factor;
-                } else {
-                    // The max of the extent over all values of the loop variable must be a constant
-                    Scope<Interval> scope;
-                    scope.push(op->name, Interval(loop_min, loop_max));
-                    Expr max_extent = find_constant_bound(extent, Direction::Upper, scope);
-                    scope.pop(op->name);
+            internal_assert(can_fold_forwards || can_fold_backwards);
 
-                    const int max_fold = 1024;
-                    const int64_t *const_max_extent = as_const_int(max_extent);
-                    if (const_max_extent && *const_max_extent <= max_fold) {
-                        factor = static_cast<int>(next_power_of_two(*const_max_extent));
-                    } else {
-                        debug(3) << "Not folding because extent not bounded by a constant not greater than " << max_fold << "\n"
-                                 << "extent = " << extent << "\n"
-                                 << "max extent = " << max_extent << "\n";
-                    }
+            Expr extent = simplify(max - min + 1);
+            Expr factor;
+            if (explicit_factor.defined()) {
+                if (dynamic_footprint.empty() && !func.schedule().async()) {
+                    // We were able to prove monotonicity
+                    // statically, but we may need a runtime
+                    // assertion for maximum extent. In many cases
+                    // it will simplify away. For async schedules
+                    // it gets dynamically tracked anyway.
+                    Expr error = Call::make(Int(32), "halide_error_fold_factor_too_small",
+                                            {func.name(), storage_dim.var, explicit_factor, op->name, extent},
+                                            Call::Extern);
+                    body = Block::make(AssertStmt::make(extent <= explicit_factor, error), body);
                 }
-
-                if (factor.defined()) {
-                    debug(3) << "Proceeding with factor " << factor << "\n";
-
-                    Fold fold = {(int)i - 1, factor};
-                    dims_folded.push_back(fold);
-                    body = FoldStorageOfFunction(func.name(), (int)i - 1, factor, dynamic_footprint).mutate(body);
-
-                    // If the producer is async, it can run ahead by some amount controlled by a semaphore.
-                    if (func.schedule().async()) {
-                        Semaphore sema;
-                        sema.name = func.name() + ".folding_semaphore." + unique_name('_');
-                        sema.var = Variable::make(type_of<halide_semaphore_t *>(), sema.name);
-                        sema.init = factor;
-
-                        Expr to_acquire, to_release;
-                        if (can_fold_forwards) {
-                            Expr max_provided_prev = substitute(op->name, loop_var - 1, max_provided);
-                            Expr min_required_next = substitute(op->name, loop_var + 1, min_required);
-                            to_acquire = max_provided - max_provided_prev; // This is the first time we use these entries
-                            to_release = min_required_next - min_required; // This is the last time we use these entries
-                        } else {
-                            internal_assert(can_fold_backwards);
-                            Expr min_provided_prev = substitute(op->name, loop_var - 1, min_provided);
-                            Expr max_required_next = substitute(op->name, loop_var + 1, max_required);
-                            to_acquire = min_provided_prev - min_provided; // This is the first time we use these entries
-                            to_release = max_required - max_required_next; // This is the last time we use these entries
-                        }
-
-                        // Logically we acquire the entire extent on
-                        // the first iteration:
-
-                        // to_acquire = select(loop_var > loop_min, to_acquire, extent);
-
-                        // However it's simpler to implement this by
-                        // just reducing the initial value on the
-                        // semaphore by the difference, as long as it
-                        // doesn't lift any inner names out of scope.
-
-                        Expr fudge = simplify(substitute(op->name, loop_min, extent - to_acquire));
-                        if (is_const(fudge) && can_prove(fudge <= sema.init)) {
-                            sema.init -= fudge;
-                        } else {
-                            to_acquire = select(loop_var > loop_min, likely(to_acquire), extent);
-                        }
-
-                        // We may need dynamic assertions that a
-                        // positive amount of the semaphore is
-                        // acquired/released, and that the semaphore
-                        // is initialized to a positive value. If we
-                        // are able to prove it, these checks will
-                        // simplify away.
-
-                        string to_release_name = unique_name('t');
-                        Expr to_release_var = Variable::make(Int(32), to_release_name);
-                        string to_acquire_name = unique_name('t');
-                        Expr to_acquire_var = Variable::make(Int(32), to_acquire_name);
-
-                        Expr bad_fold_error =
-                            Call::make(Int(32), "halide_error_bad_fold",
-                                       {func.name(), storage_dim.var, op->name},
-                                       Call::Extern);
-
-                        Expr release_producer =
-                            Call::make(Int(32), "halide_semaphore_release", {sema.var, to_release_var}, Call::Extern);
-                        Stmt release = Evaluate::make(release_producer);
-                        Stmt check_release = AssertStmt::make(to_release_var >= 0 && to_release <= factor, bad_fold_error);
-                        release = Block::make(check_release, release);
-                        release = LetStmt::make(to_release_name, to_release, release);
-
-                        Stmt check_acquire = AssertStmt::make(to_acquire_var >= 0 && to_acquire_var <= factor, bad_fold_error);
-
-                        body = Block::make(body, release);
-                        body = Acquire::make(sema.var, to_acquire_var, body);
-                        body = Block::make(check_acquire, body);
-                        body = LetStmt::make(to_acquire_name, to_acquire, body);
-
-                        dims_folded.back().semaphore = sema;
-                    }
-
-                    Expr min_next = substitute(op->name, loop_var + 1, min);
-                    if (can_prove(max < min_next)) {
-                        // There's no overlapping usage between loop
-                        // iterations, so we can continue to search
-                        // for further folding opportunities
-                        // recursively.
-                    } else if (!body.same_as(op->body)) {
-                        stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
-                        if (!dynamic_footprint.empty()) {
-                            Expr init_val;
-                            if (can_fold_forwards) {
-                                init_val = Int(32).min();
-                            } else {
-                                init_val = Int(32).max();
-                            }
-                            Stmt init_min = Store::make(dynamic_footprint, init_val, 0, Parameter(), const_true());
-                            stmt = Block::make(init_min, stmt);
-                            stmt = Allocate::make(dynamic_footprint, Int(32), {}, const_true(), stmt);
-                        }
-                        return;
-                    } else {
-                        stmt = op;
-                        return;
-                    }
-                }
-
+                factor = explicit_factor;
             } else {
-                debug(3) << "Not folding because loop min or max not monotonic in the loop variable\n"
-                         << "min = " << min << "\n"
-                         << "max = " << max << "\n";
+                // The max of the extent over all values of the loop variable must be a constant
+                Scope<Interval> scope;
+                scope.push(op->name, Interval(loop_min, loop_max));
+                Expr max_extent = find_constant_bound(extent, Direction::Upper, scope);
+                scope.pop(op->name);
+
+                const int max_fold = 1024;
+                const int64_t *const_max_extent = as_const_int(max_extent);
+                if (const_max_extent && *const_max_extent <= max_fold) {
+                    factor = static_cast<int>(next_power_of_two(*const_max_extent));
+                } else {
+                    debug(3) << "Not folding because extent not bounded by a constant not greater than " << max_fold << "\n"
+                             << "extent = " << extent << "\n"
+                             << "max extent = " << max_extent << "\n";
+                    // Try the next dimension
+                    continue;
+                }
+            }
+
+            internal_assert(factor.defined());
+
+            debug(3) << "Proceeding with factor " << factor << "\n";
+
+            Fold fold = {(int)i - 1, factor};
+            dims_folded.push_back(fold);
+            {
+                string head;
+                if (!dynamic_footprint.empty()) {
+                    head = dynamic_footprint + ".head";
+                }
+                body = FoldStorageOfFunction(func.name(), (int)i - 1, factor, head).mutate(body);
+            }
+
+            // If the producer is async, it can run ahead by
+            // some amount controlled by a semaphore.
+            if (func.schedule().async()) {
+                Semaphore sema;
+                sema.name = sema_name;
+                sema.var = sema_var;
+                sema.init = 0;
+
+                if (dynamic_footprint.empty()) {
+                    // We are going to do the sem acquires and releases using static analysis of the boxes accessed.
+                    sema.init = factor;
+                    // Do the analysis of how much to acquire and release statically
+                    Expr to_acquire, to_release;
+                    if (can_fold_forwards) {
+                        Expr max_provided_prev = substitute(op->name, loop_var - 1, max_provided);
+                        Expr min_required_next = substitute(op->name, loop_var + 1, min_required);
+                        to_acquire = max_provided - max_provided_prev; // This is the first time we use these entries
+                        to_release = min_required_next - min_required; // This is the last time we use these entries
+                    } else {
+                        internal_assert(can_fold_backwards);
+                        Expr min_provided_prev = substitute(op->name, loop_var - 1, min_provided);
+                        Expr max_required_next = substitute(op->name, loop_var + 1, max_required);
+                        to_acquire = min_provided_prev - min_provided; // This is the first time we use these entries
+                        to_release = max_required - max_required_next; // This is the last time we use these entries
+                    }
+
+                    // Logically we acquire the entire extent on
+                    // the first iteration:
+
+                    // to_acquire = select(loop_var > loop_min, to_acquire, extent);
+
+                    // However it's simpler to implement this by
+                    // just reducing the initial value on the
+                    // semaphore by the difference, as long as it
+                    // doesn't lift any inner names out of scope.
+
+                    Expr fudge = simplify(substitute(op->name, loop_min, extent - to_acquire));
+                    if (is_const(fudge) && can_prove(fudge <= sema.init)) {
+                        sema.init -= fudge;
+                    } else {
+                        to_acquire = select(loop_var > loop_min, likely(to_acquire), extent);
+                    }
+
+                    // We may need dynamic assertions that a positive
+                    // amount of the semaphore is acquired/released,
+                    // and that the semaphore is initialized to a
+                    // positive value. If we are able to prove it,
+                    // these checks will simplify away.
+                    string to_release_name = unique_name('t');
+                    Expr to_release_var = Variable::make(Int(32), to_release_name);
+                    string to_acquire_name = unique_name('t');
+                    Expr to_acquire_var = Variable::make(Int(32), to_acquire_name);
+
+                    Expr bad_fold_error =
+                        Call::make(Int(32), "halide_error_bad_fold",
+                                   {func.name(), storage_dim.var, op->name},
+                                   Call::Extern);
+
+                    Expr release_producer =
+                        Call::make(Int(32), "halide_semaphore_release", {sema.var, to_release_var}, Call::Extern);
+                    Stmt release = Evaluate::make(release_producer);
+                    Stmt check_release = AssertStmt::make(to_release_var >= 0 && to_release <= factor, bad_fold_error);
+                    release = Block::make(check_release, release);
+                    release = LetStmt::make(to_release_name, to_release, release);
+
+                    Stmt check_acquire = AssertStmt::make(to_acquire_var >= 0 && to_acquire_var <= factor, bad_fold_error);
+
+                    body = Block::make(body, release);
+                    body = Acquire::make(sema.var, to_acquire_var, body);
+                    body = Block::make(check_acquire, body);
+                    body = LetStmt::make(to_acquire_name, to_acquire, body);
+                } else {
+                    // We injected runtime tracking and semaphore logic already
+                }
+                dims_folded.back().semaphore = sema;
+            }
+
+            if (!dynamic_footprint.empty()) {
+                if (func.schedule().async()) {
+                    dims_folded.back().head = dynamic_footprint + ".head";
+                    dims_folded.back().tail = dynamic_footprint + ".tail";
+                } else {
+                    dims_folded.back().head = dynamic_footprint;
+                    dims_folded.back().tail.clear();
+                }
+                dims_folded.back().fold_forward = storage_dim.fold_forward;
+            }
+
+            Expr min_next = substitute(op->name, loop_var + 1, min);
+
+            if (can_prove(max < min_next)) {
+                // There's no overlapping usage between loop
+                // iterations, so we can continue to search
+                // for further folding opportunities
+                // recursively.
+            } else if (!body.same_as(op->body)) {
+                stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
+                break;
+            } else {
+                stmt = op;
+                break;
             }
         }
 
@@ -575,6 +725,28 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
         } else {
             stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
         }
+
+        if (func.schedule().async() && !dynamic_footprint.empty() ) {
+            // Step the counters backwards over the entire extent of
+            // the realization, in case we're in an inner loop and are
+            // going to run this loop again with the same
+            // semaphore. Our invariant is that the difference between
+            // the two counters is the semaphore.
+            //
+            // Doing this instead of synchronizing and resetting the
+            // counters and semaphores lets producers advance to the
+            // next scanline while a consumer is still on the last few
+            // pixels of the previous scanline.
+
+            Expr head = Load::make(Int(32), dynamic_footprint + ".head", 0, Buffer<>(), Parameter(), const_true());
+            Expr tail = Load::make(Int(32), dynamic_footprint + ".tail", 0, Buffer<>(), Parameter(), const_true());
+            Expr step = Variable::make(Int(32), func.name() + ".extent." + std::to_string(dims_folded.back().dim)) + dims_folded.back().factor;
+            Stmt reset_head = Store::make(dynamic_footprint + ".head", head - step, 0, Parameter(), const_true());
+            Stmt reset_tail = Store::make(dynamic_footprint + ".tail", tail - step, 0, Parameter(), const_true());
+            stmt = Block::make({stmt, reset_head, reset_tail});
+        }
+
+
     }
 
 public:
@@ -582,6 +754,8 @@ public:
         int dim;
         Expr factor;
         Semaphore semaphore;
+        string head, tail;
+        bool fold_forward;
     };
     vector<Fold> dims_folded;
 
@@ -628,13 +802,28 @@ class StorageFolding : public IRMutator2 {
 
             Stmt stmt = Realize::make(op->name, op->types, bounds, op->condition, body);
 
-            // Each fold may have an associated semaphore that needs initialization
-            for (size_t i = 0; i < folder.dims_folded.size(); i++) {
-                auto sema = folder.dims_folded[i].semaphore;
+            // Each fold may have an associated semaphore that needs initialization, along with some counters
+            for (const auto &fold : folder.dims_folded) {
+                auto sema = fold.semaphore;
                 if (sema.var.defined()) {
                     Expr sema_space = Call::make(type_of<halide_semaphore_t *>(), "halide_make_semaphore",
                                                  {sema.init}, Call::Extern);
                     stmt = LetStmt::make(sema.name, sema_space, stmt);
+                }
+                Expr init;
+                if (fold.fold_forward) {
+                    init = op->bounds[fold.dim].min;
+                } else {
+                    init = op->bounds[fold.dim].min + op->bounds[fold.dim].extent - 1;
+                }
+                if (!fold.head.empty()) {
+                    stmt = Block::make(Store::make(fold.head, init, 0, Parameter(), const_true()), stmt);
+                    stmt = Allocate::make(fold.head, Int(32), {}, const_true(), stmt);
+                }
+                if (!fold.tail.empty()) {
+                    internal_assert(func.schedule().async()) << "Expected a single counter for synchronous folding";
+                    stmt = Block::make(Store::make(fold.tail, init, 0, Parameter(), const_true()), stmt);
+                    stmt = Allocate::make(fold.tail, Int(32), {}, const_true(), stmt);
                 }
             }
 

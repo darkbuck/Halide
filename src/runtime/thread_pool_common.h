@@ -490,12 +490,14 @@ struct halide_semaphore_impl_t {
 };
 
 WEAK int halide_default_semaphore_init(halide_semaphore_t *s, int n) {
+    //print(NULL) << "Init " << s << " " << n << "\n";
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
     sem->value = n;
     return n;
 }
 
 WEAK int halide_default_semaphore_release(halide_semaphore_t *s, int n) {
+    //print(NULL) << "Release " << s << " " << n << "\n";
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
     int new_val = __sync_add_and_fetch(&(sem->value), n);
     if (new_val == n) {
@@ -507,6 +509,7 @@ WEAK int halide_default_semaphore_release(halide_semaphore_t *s, int n) {
 }
 
 WEAK bool halide_default_semaphore_try_acquire(halide_semaphore_t *s, int n) {
+    //print(NULL) << "  Try acquire " << s << " " << n << "\n";
     halide_semaphore_impl_t *sem = (halide_semaphore_impl_t *)s;
     // Decrement and get new value
     int new_val = __sync_add_and_fetch(&(sem->value), -n);
@@ -515,6 +518,7 @@ WEAK bool halide_default_semaphore_try_acquire(halide_semaphore_t *s, int n) {
         __sync_add_and_fetch(&(sem->value), n);
         return false;
     }
+    //print(NULL) << "Acquire " << s << " " << n << "\n";
     return true;
 }
 

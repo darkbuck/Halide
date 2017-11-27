@@ -221,10 +221,12 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator2 {
         DeviceAPI touching_device = DeviceAPI::None;
         for (DeviceAPI d : finder.devices_touched) {
             if (d == DeviceAPI::Host) continue;
+            //if (d == DeviceAPI::Host) continue;
             internal_assert(touching_device == DeviceAPI::None)
                 << "Buffer " << buffer << " was touched on multiple devices within a single leaf Stmt!\n";
             touching_device = d;
         }
+
 
         // Then figure out what to do
         bool needs_device_malloc = (touched_on_device &&
@@ -330,7 +332,7 @@ class InjectBufferCopiesForSingleBuffer : public IRMutator2 {
     // leaf.
 
     Stmt visit(const For *op) override {
-        // All copies happen at the same loop level as the allocation
+        // All copies happen at the same loop level as the allocation (TODO: This prevents hoisting allocations)
         return do_copies(op);
     }
 
