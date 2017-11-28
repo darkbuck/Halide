@@ -161,9 +161,15 @@ string Pipeline::auto_schedule(const Target &target) {
     user_assert(target.arch == Target::X86 || target.arch == Target::ARM ||
                 target.arch == Target::POWERPC || target.arch == Target::MIPS)
         << "Automatic scheduling is currently supported only on these architectures.";
-    // Default machine parameters for generic CPU architecture.
-    MachineParams arch_params(16, 16 * 1024 * 1024, 40);
-    return generate_schedules(contents->outputs, target, arch_params);
+
+    string params = Internal::get_env_variable("HL_MACHINE_PARAMS");
+    if (params.empty()) {
+        // Default machine parameters for generic CPU architecture.
+        MachineParams arch_params(16, 16 * 1024 * 1024, 40);
+        return generate_schedules(contents->outputs, target, arch_params);
+    } else {
+        return generate_schedules(contents->outputs, target, MachineParams(params));
+    }
 }
 
 Func Pipeline::get_func(size_t index) {

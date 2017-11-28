@@ -4646,14 +4646,14 @@ string generate_schedules(const vector<Function> &outputs, const Target &target,
     //part.group(Partitioner::Level::FastMem, {});
     part.group_recurse();
 
-    /*debug(0) << "\n\n*************************************************\n";
+    debug(0) << "\n\n*************************************************\n";
     debug(0) << "FINAL RESULT:\n";
     debug(0) << "*************************************************\n";
     //if (debug::debug_level() >= 3) {
         part.disp_pipeline_costs();
         part.disp_grouping();
         part.disp_pipeline_graph();
-    //}*/
+    //}
 
     debug(0) << "Initializing AutoSchedule...\n";
     AutoSchedule sched(env, full_order);

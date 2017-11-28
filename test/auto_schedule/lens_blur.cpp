@@ -318,7 +318,7 @@ double run_test(bool auto_schedule) {
 }
 
 int main(int argc, char **argv) {
-    run_test(false);
+    double manual_time = run_test(false);
     double auto_time = run_test(true);
 
     std::cout << "======================" << std::endl;
