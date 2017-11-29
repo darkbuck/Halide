@@ -103,11 +103,6 @@ extern void halide_mutex_unlock(struct halide_mutex *mutex);
 extern void halide_mutex_destroy(struct halide_mutex *mutex);
 //@}
 
-// TODO: docs, methods
-struct halide_semaphore_t {
-    uint64_t _private[2];
-};
-
 /** Define halide_do_par_for to replace the default thread pool
  * implementation. halide_shutdown_thread_pool can also be called to
  * release resources used by the default thread pool on platforms
@@ -130,6 +125,11 @@ extern void halide_shutdown_thread_pool();
  * the old do_par_for handler. */
 typedef int (*halide_do_par_for_t)(void *, halide_task_t, int, int, uint8_t*);
 extern halide_do_par_for_t halide_set_custom_do_par_for(halide_do_par_for_t do_par_for);
+
+/** An opaque struct representing a semaphore. Used by the task system for async tasks. */
+struct halide_semaphore_t {
+    uint64_t _private[2];
+};
 
 /** A struct representing a semaphore and a number of items that must
  * be acquired from it. Used in halide_parallel_task_t below. */
@@ -172,8 +172,8 @@ struct halide_parallel_task_t {
     // may be sliced up and the function called multiple times.
     int min, extent;
 
-    // A parallel task provides two pieces of static metadata to
-    // prevent unbounded resource usage or deadlock.
+    // A parallel task provides several pieces of metadata to prevent
+    // unbounded resource usage or deadlock.
 
     // The first is the minimum number of execution contexts (call
     // stacks or threads) necessary for the function to run to
@@ -191,17 +191,16 @@ struct halide_parallel_task_t {
     // Halide pipeline, this may be an underestimate.
     int min_threads;
 
-    // The second piece of static metadata is a flag indicating
-    // whether this task recursively enqueues tasks that acquire
-    // semaphores. It is not safe for a parallel runtime to introduce
-    // a dependency between this task completing and another seemingly
-    // unrelated task completing. For example, if task A spawns some
-    // sub-task A', and finds it temporarily unrunnable, it should not
-    // steal a task B that may block instead, as running B may first
-    // unblock A' and then try to acquire something that A would have
-    // released after returning from A'.  More simply: If you're
-    // recursively inside the task system, don't steal tasks that may
-    // block.
+    // The second piece of metadata is a flag indicating whether this
+    // task recursively enqueues tasks that acquire semaphores. It is
+    // not safe for a parallel runtime to introduce a dependency
+    // between this task completing and another seemingly unrelated
+    // task completing. For example, if task A spawns some sub-task
+    // A', and finds it temporarily unrunnable, it should not steal a
+    // task B that may block instead, as running B may first unblock
+    // A' and then try to acquire something that A would have released
+    // after returning from A'.  More simply: If you're recursively
+    // inside the task system, don't steal tasks that may block.
     //
     // Any call to an extern stage is assumed to be non-blocking. This
     // is actually safe, as there can't be semaphores shared by the

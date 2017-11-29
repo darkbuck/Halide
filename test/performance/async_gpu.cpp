@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
 
         // Stage the copy-back of the GPU result into a host-side
         // double-buffer.
-        gpu.in().copy_to_host().compute_at(cpu, t).store_root();//.fold_storage(t, 2);
+        gpu.in().copy_to_host().compute_at(cpu, t).store_root().fold_storage(t, 2);
 
         if (use_async) {
             gpu.in().async();
