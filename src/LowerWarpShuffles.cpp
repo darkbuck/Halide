@@ -46,6 +46,11 @@ using std::set;
 
 namespace {
 
+// Try to reduce all terms in an affine expression modulo a given
+// modulus, making as many simplifications as possible. Used for
+// eliminating terms from nested affine expressions. This is much more
+// aggressive about eliminating terms than using % and then
+// calling the simplifier.
 Expr reduce_expr_helper(Expr e, Expr modulus) {
     if (is_one(modulus)) {
         return make_zero(e.type());
@@ -70,9 +75,6 @@ Expr reduce_expr_helper(Expr e, Expr modulus) {
     }
 }
 
-// Try to reduce all terms in an affine expression modulo a given
-// modulus, making as many simplifications as possible. Used for
-// eliminating terms from nested affine expressions.
 Expr reduce_expr(Expr e, Expr modulus, const Scope<Interval> &bounds) {
     e = reduce_expr_helper(simplify(e, true, bounds), modulus);
     if (is_one(simplify(e >= 0 && e < modulus, true, bounds))) {
@@ -170,10 +172,8 @@ class DetermineAllocStride : public IRVisitor {
                 return sb;
             }
         } else if (const Let *let = e.as<Let>()) {
-            Expr sv = warp_stride(let->value);
-            if (is_zero(sv)) {
-                return warp_stride(let->body);
-            }
+            ScopedBinding<Expr> bind(dependent_vars, let->name, warp_stride(let->value));
+            return warp_stride(let->body);
         }
         return Expr();
     }
@@ -448,7 +448,10 @@ class LowerWarpShuffles : public IRMutator2 {
     Stmt visit(const IfThenElse *op) override {
         // Consider lane-masking if-then-elses when determining the
         // active bounds of the lane index.
-
+        //
+        // FuseGPULoopNests always injects conditionals of the form
+        // lane < limit_val when portions parts of the kernel to
+        // certain threads, so we just need to match that pattern.
         const LT *lt = op->condition.as<LT>();
         if (lt && equal(lt->a, this_lane) && is_const(lt->b)) {
             Expr condition = mutate(op->condition);
@@ -564,8 +567,8 @@ class LowerWarpShuffles : public IRMutator2 {
                                    {base_val, result[0], 31}, Call::PureExtern);
             shuffled = down;
         } else if (expr_match((this_lane + wild) % wild, lane, result) &&
-            is_const_power_of_two_integer(result[1], &bits) &&
-            bits <= 5) {
+                   is_const_power_of_two_integer(result[1], &bits) &&
+                   bits <= 5) {
             result[0] = simplify(result[0] % result[1], true, bounds);
             // Rotate. Mux a shuffle up and a shuffle down. Uses fewer
             // intermediate registers than using a general gather for
