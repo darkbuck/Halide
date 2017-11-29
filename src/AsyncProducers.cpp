@@ -71,6 +71,17 @@ protected:
         }
     }
 
+    void visit(const Allocate *op) {
+        Stmt body = mutate(op->body);
+        if (is_no_op(body)) {
+            stmt = body;
+        } else {
+            stmt = Allocate::make(op->name, op->type, op->extents,
+                                  op->condition, body,
+                                  op->new_expr, op->free_function);
+        }
+    }
+
     void visit(const IfThenElse *op) {
         Stmt then_case = mutate(op->then_case);
         Stmt else_case = mutate(op->else_case);
@@ -545,7 +556,7 @@ class TightenForkNodes : public IRMutator {
     // This is also a good time to nuke any dangling allocations and lets in the fork children.
     void visit(const Realize *op) {
         Stmt body = mutate(op->body);
-        if (in_fork && !stmt_uses_var(body, op->name)) {
+        if (in_fork && !stmt_uses_var(body, op->name) && !stmt_uses_var(body, op->name + ".buffer")) {
             stmt = body;
         } else {
             stmt = Realize::make(op->name, op->types, op->bounds, op->condition, body);

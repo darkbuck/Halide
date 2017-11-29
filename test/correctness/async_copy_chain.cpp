@@ -64,11 +64,93 @@ int main(int argc, char **argv) {
         make_pipeline(A, B);
 
         A.store_root().compute_at(B, y).fold_storage(y, 2).async();
-        A.in().store_root().compute_at(B, y).fold_storage(y, 2).async().copy_to_host();
-        A.in().in().store_root().compute_at(B, y).fold_storage(y, 2).async().copy_to_host();
+        A.in().store_root().compute_at(B, y).fold_storage(y, 2).copy_to_host().async();
+        A.in().in().store_root().compute_at(B, y).fold_storage(y, 2).copy_to_host().async();
 
         check(B);
     }
+
+    // Two copy stages, each stage nested inside the outermost var of the next
+    {
+        Func A, B;
+        make_pipeline(A, B);
+
+        A.store_root().compute_at(A.in(), Var::outermost()).fold_storage(y, 2).async();
+        A.in().store_root().compute_at(A.in().in(), Var::outermost()).fold_storage(y, 2).copy_to_host().async();
+        A.in().in().store_root().compute_at(B, y).fold_storage(y, 2).copy_to_host().async();
+
+        check(B);
+    }
+
+    if (get_jit_target_from_environment().has_gpu_feature()) {
+        // Two copy stages, to the device and back, flat
+        {
+            Func A, B;
+            make_pipeline(A, B);
+
+            A.store_root().compute_at(B, y).fold_storage(y, 2).async();
+            A.in().store_root().compute_at(B, y).fold_storage(y, 2).copy_to_device().async();
+            A.in().in().store_root().compute_at(B, y).fold_storage(y, 2).copy_to_host().async();
+
+            check(B);
+        }
+
+        // Two copy stages, to the device and back, each stage nested inside the outermost var of the next
+        {
+            Func A, B;
+            make_pipeline(A, B);
+
+            A.store_root().compute_at(A.in(), Var::outermost()).fold_storage(y, 2).async();
+            A.in().store_root().compute_at(A.in().in(), Var::outermost()).fold_storage(y, 2).copy_to_device().async();
+            A.in().in().store_root().compute_at(B, y).fold_storage(y, 2).copy_to_host().async();
+
+            check(B);
+        }
+
+        // The same, but make one of the copy stages non-extern to force a shared host-dev allocation
+        {
+            Func A, B;
+            make_pipeline(A, B);
+
+            A.store_root().compute_at(B, y).fold_storage(y, 2).async();
+            A.in().store_root().compute_at(B, y).fold_storage(y, 2).async();
+            A.in().in().store_root().compute_at(B, y).fold_storage(y, 2).copy_to_host().async();
+
+            check(B);
+        }
+        {
+            Func A, B;
+            make_pipeline(A, B);
+
+            A.store_root().compute_at(A.in(), Var::outermost()).fold_storage(y, 2).async();
+            A.in().store_root().compute_at(A.in().in(), Var::outermost()).fold_storage(y, 2).async();
+            A.in().in().store_root().compute_at(B, y).fold_storage(y, 2).copy_to_host().async();
+
+            check(B);
+        }
+        {
+            Func A, B;
+            make_pipeline(A, B);
+
+            A.store_root().compute_at(B, y).fold_storage(y, 2).async();
+            A.in().store_root().compute_at(B, y).fold_storage(y, 2).copy_to_device().async();
+            A.in().in().store_root().compute_at(B, y).fold_storage(y, 2).async();
+
+            check(B);
+        }
+
+        {
+            Func A, B;
+            make_pipeline(A, B);
+
+            A.store_root().compute_at(A.in(), Var::outermost()).fold_storage(y, 2).async();
+            A.in().store_root().compute_at(A.in().in(), Var::outermost()).fold_storage(y, 2).copy_to_device().async();
+            A.in().in().store_root().compute_at(B, y).fold_storage(y, 2).async();
+
+            check(B);
+        }
+    }
+
 
     printf("Success!\n");
     return 0;
