@@ -400,14 +400,6 @@ void get_target_options(const llvm::Module &module, llvm::TargetOptions &options
     #endif
     options.AllowFPOpFusion = allow_strict_float ? llvm::FPOpFusion::Strict : llvm::FPOpFusion::Fast;
     options.UnsafeFPMath = !allow_strict_float;
-
-    #if LLVM_VERSION < 40
-    // Turn off approximate reciprocals for division. It's too
-    // inaccurate even for us. In LLVM 4.0+ this moved to be a
-    // function attribute.
-    options.Reciprocals.setDefaults("all", false, 0);
-    #endif
-
     options.NoInfsFPMath = !allow_strict_float;
     options.NoNaNsFPMath = !allow_strict_float;
     options.HonorSignDependentRoundingFPMathOption = !allow_strict_float;
@@ -475,11 +467,9 @@ std::unique_ptr<llvm::TargetMachine> make_target_machine(const llvm::Module &mod
 }
 
 void set_function_attributes_for_target(llvm::Function *fn, Target t) {
-    #if LLVM_VERSION >= 40
     // Turn off approximate reciprocals for division. It's too
     // inaccurate even for us.
     fn->addFnAttr("reciprocal-estimates", "none");
-    #endif
 }
 
 }

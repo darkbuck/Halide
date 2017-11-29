@@ -2374,6 +2374,9 @@ void CodeGen_C::visit(const ProducerConsumer *op) {
 }
 
 void CodeGen_C::visit(const For *op) {
+    string id_min = print_expr(op->min);
+    string id_extent = print_expr(op->extent);
+
     if (op->for_type == ForType::Parallel) {
         do_indent();
         stream << "#pragma omp parallel for\n";
@@ -2381,9 +2384,6 @@ void CodeGen_C::visit(const For *op) {
         internal_assert(op->for_type == ForType::Serial)
             << "Can only emit serial or parallel for loops to C\n";
     }
-
-    string id_min = print_expr(op->min);
-    string id_extent = print_expr(op->extent);
 
     do_indent();
     stream << "for (int "
