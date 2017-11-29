@@ -28,6 +28,7 @@ namespace Internal {
  */
 class IRMutator : public IRVisitor {
 public:
+    EXPORT IRMutator();
     EXPORT virtual ~IRMutator();
 
     /** This is the main interface for using a mutator. Also call
@@ -107,6 +108,7 @@ protected:
  */
 class IRMutator2 {
 public:
+    EXPORT IRMutator2();
     EXPORT virtual ~IRMutator2();
 
     /** This is the main interface for using a mutator. Also call
