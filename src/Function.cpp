@@ -902,6 +902,10 @@ void Function::lock_loop_levels() {
     if (schedule.store_level().is_inlined()) {
         schedule.store_level() = schedule.compute_level();
     }
+    contents->init_def.schedule().fuse_level().level.lock();
+    for (Definition &def : contents->updates) {
+        def.schedule().fuse_level().level.lock();
+    }
 }
 
 bool Function::frozen() const {

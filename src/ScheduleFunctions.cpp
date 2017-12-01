@@ -797,7 +797,7 @@ private:
     // of 'func'. If 'loop_name' is a fused group, we should inject it at the
     // fused parent loop of the group.
     bool is_the_right_level(const string &loop_name) {
-        if (loop_name == LoopLevel::root().to_string()) {
+        if (loop_name == LoopLevel::root().lock().to_string()) {
             return true;
         }
 
