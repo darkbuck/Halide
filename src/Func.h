@@ -404,6 +404,12 @@ public:
         return prefetch(image.parameter(), var, offset, strategy);
     }
     // @}
+
+    /** Attempt to get the source file and line where this stage was
+     * defined by parsing the process's own debug symbols. Returns an
+     * empty string if no debug symbols were found or the debug
+     * symbols were not understood. Works on OS X and Linux only. */
+    EXPORT std::string source_location() const;
 };
 
 // For backwards compatibility, keep the ScheduleHandle name.
@@ -1939,7 +1945,7 @@ public:
     EXPORT Func &compute_with(Stage s, VarOrRVar var, AlignStrategy align = AlignStrategy::Auto);
 
     /** Compute all of this function once ahead of time. Reusing
-     * the example in \ref Func::compute_at:
+     * the example in \ref Func::compute_at :
      *
      \code
      Func f, g;
@@ -2169,6 +2175,10 @@ public:
      \endcode
      */
     EXPORT std::vector<Argument> infer_arguments() const;
+
+    /** Get the source location of the pure definition of this
+     * Func. See Stage::source_location() */
+    EXPORT std::string source_location() const;
 };
 
 namespace Internal {

@@ -28,6 +28,7 @@ namespace Internal {
  */
 class IRMutator : public IRVisitor {
 public:
+    EXPORT IRMutator();
     EXPORT virtual ~IRMutator();
 
     /** This is the main interface for using a mutator. Also call
@@ -92,24 +93,6 @@ protected:
 };
 
 
-/**
- * Deprecated for new use: please use IRGraphMutator2 instead.
- * Existing usage of IRGraphMutator will be migrated to IRGraphMutator2 and
- * this class will be removed.
- *
- * A mutator that caches and reapplies previously-done mutations, so
- * that it can handle graphs of IR that have not had CSE done to
- * them. */
-class IRGraphMutator : public IRMutator {
-protected:
-    std::map<Expr, Expr, ExprCompare> expr_replacements;
-    std::map<Stmt, Stmt, Stmt::Compare> stmt_replacements;
-
-public:
-    EXPORT Stmt mutate(const Stmt &s);
-    EXPORT Expr mutate(const Expr &e);
-};
-
 /** A base class for passes over the IR which modify it
  * (e.g. replacing a variable with a value (Substitute.h), or
  * constant-folding).
@@ -123,6 +106,7 @@ public:
  */
 class IRMutator2 {
 public:
+    EXPORT IRMutator2();
     EXPORT virtual ~IRMutator2();
 
     /** This is the main interface for using a mutator. Also call
@@ -132,7 +116,10 @@ public:
     EXPORT virtual Expr mutate(const Expr &expr);
     EXPORT virtual Stmt mutate(const Stmt &stmt);
 
-public:
+protected:
+    // ExprNode<> and StmtNode<> are allowed to call visit (to implement mutate_expr/mutate_stmt())
+    template<typename T> friend struct ExprNode;
+    template<typename T> friend struct StmtNode;
 
     EXPORT virtual Expr visit(const IntImm *);
     EXPORT virtual Expr visit(const UIntImm *);

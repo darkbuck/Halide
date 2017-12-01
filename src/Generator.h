@@ -309,11 +309,6 @@ inline std::string halide_type_to_enum_string(const Type &t) {
     return enum_to_string(get_halide_type_enum_map(), t);
 }
 
-EXPORT extern const std::map<std::string, Halide::LoopLevel> &get_halide_looplevel_enum_map();
-inline std::string halide_looplevel_to_enum_string(const LoopLevel &loop_level){
-    return enum_to_string(get_halide_looplevel_enum_map(), loop_level);
-}
-
 // Convert a Halide Type into a string representation of its C source.
 // e.g., Int(32) -> "Halide::Int(32)"
 EXPORT std::string halide_type_to_c_source(const Type &t);
@@ -387,6 +382,7 @@ public:
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Target)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(MachineParams)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Type)
+    HALIDE_GENERATOR_PARAM_TYPED_SETTER(LoopLevel)
 
 #undef HALIDE_GENERATOR_PARAM_TYPED_SETTER
 
@@ -404,7 +400,6 @@ protected:
     // All GeneratorParams are settable from string.
     virtual void set_from_string(const std::string &value_string) = 0;
 
-    virtual std::string to_string() const = 0;
     virtual std::string call_to_string(const std::string &v) const = 0;
     virtual std::string get_c_type() const = 0;
 
@@ -412,19 +407,13 @@ protected:
         return "";
     }
 
-    virtual std::string get_default_value() const {
-        return to_string();
-    }
-
-    virtual std::string get_template_type() const {
-        return get_c_type();
-    }
-
-    virtual std::string get_template_value() const {
-        return get_default_value();
-    }
+    virtual std::string get_default_value() const = 0;
 
     virtual bool is_synthetic_param() const {
+        return false;
+    }
+
+    virtual bool is_looplevel_param() const {
         return false;
     }
 
@@ -472,6 +461,7 @@ public:
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Target)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(MachineParams)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Type)
+    HALIDE_GENERATOR_PARAM_TYPED_SETTER(LoopLevel)
 
 #undef HALIDE_GENERATOR_PARAM_TYPED_SETTER
 
@@ -482,7 +472,8 @@ private:
     T value_;
 
     template <typename T2, typename std::enable_if<std::is_convertible<T2, T>::value &&
-                                                  !std::is_same<T2, MachineParams>::value>::type * = nullptr>
+                                                  !std::is_same<T2, MachineParams>::value &&
+                                                  !std::is_same<T2, LoopLevel>::value>::type * = nullptr>
     HALIDE_ALWAYS_INLINE void typed_setter_impl(const T2 &value, const char * msg) {
         check_value_writable();
         // Arithmetic types must roundtrip losslessly.
@@ -503,10 +494,16 @@ private:
         fail_wrong_type(msg);
     }
 
-    template <typename T2, typename std::enable_if<std::is_same<T2, MachineParams>::value &&
+    template <typename T2, typename std::enable_if<std::is_same<T, T2>::value &&
                                                    std::is_same<T, MachineParams>::value>::type * = nullptr>
-    HALIDE_ALWAYS_INLINE void typed_setter_impl(const T2 &value, const char *msg) {
+    HALIDE_ALWAYS_INLINE void typed_setter_impl(const MachineParams &value, const char *msg) {
         value_ = value;
+    }
+
+    template <typename T2, typename std::enable_if<std::is_same<T, T2>::value &&
+                                                   std::is_same<T, LoopLevel>::value>::type * = nullptr>
+    HALIDE_ALWAYS_INLINE void typed_setter_impl(const LoopLevel &value, const char *msg) {
+        value_.set(value);
     }
 };
 
@@ -524,7 +521,7 @@ public:
         this->set(Target(new_value_string));
     }
 
-    std::string to_string() const override {
+    std::string get_default_value() const override {
         return this->value().to_string();
     }
 
@@ -548,7 +545,7 @@ public:
         this->set(MachineParams(new_value_string));
     }
 
-    std::string to_string() const override {
+    std::string get_default_value() const override {
         return this->value().to_string();
     }
 
@@ -560,6 +557,56 @@ public:
 
     std::string get_c_type() const override {
         return "MachineParams";
+    }
+};
+
+class GeneratorParam_LoopLevel : public GeneratorParamImpl<LoopLevel> {
+public:
+    GeneratorParam_LoopLevel(const std::string &name, const LoopLevel &value) : GeneratorParamImpl<LoopLevel>(name, value) {}
+
+    void set_from_string(const std::string &new_value_string) override {
+        if (new_value_string == "root") {
+            this->set(LoopLevel::root());
+        } else if (new_value_string == "inlined") {
+            this->set(LoopLevel::inlined());
+        } else {
+            user_error << "Unable to parse " << this->name << ": " << new_value_string;
+        }
+    }
+
+    std::string get_default_value() const override {
+        // This is dodgy but safe in this case: we want to
+        // see what the value of our LoopLevel is *right now*,
+        // so we make a copy and lock the copy so we can inspect it.
+        // (Note that ordinarily this is a bad idea, since LoopLevels
+        // can be mutated later on; however, this method is only
+        // called by the Generator infrastructure, on LoopLevels that
+        // will never be mutated, so this is really just an elaborate way
+        // to avoid runtime assertions.)
+        LoopLevel copy;
+        copy.set(this->value());
+        copy.lock();
+        if (copy.is_inlined()) {
+            return "LoopLevel::inlined()";
+        } else if (copy.is_root()) {
+            return "LoopLevel::root()";
+        } else {
+            internal_error;
+            return "";
+        }
+    }
+
+    std::string call_to_string(const std::string &v) const override {
+        internal_error;
+        return std::string();
+    }
+
+    std::string get_c_type() const override {
+        return "LoopLevel";
+    }
+
+    bool is_looplevel_param() const override {
+        return true;
     }
 };
 
@@ -588,7 +635,7 @@ public:
         this->set(t);
     }
 
-    std::string to_string() const override {
+    std::string get_default_value() const override {
         std::ostringstream oss;
         oss << this->value();
         if (std::is_same<T, float>::value) {
@@ -645,7 +692,7 @@ public:
         this->set(v);
     }
 
-    std::string to_string() const override {
+    std::string get_default_value() const override {
         return this->value() ? "true" : "false";
     }
 
@@ -678,10 +725,6 @@ public:
         auto it = enum_map.find(new_value_string);
         user_assert(it != enum_map.end()) << "Enumeration value not found: " << new_value_string;
         this->set_impl(it->second);
-    }
-
-    std::string to_string() const override {
-        return enum_to_string(enum_map, this->value());
     }
 
     std::string call_to_string(const std::string &v) const override {
@@ -736,14 +779,6 @@ public:
         return "Type";
     }
 
-    std::string get_template_type() const override {
-        return "typename";
-    }
-
-    std::string get_template_value() const override {
-        return halide_type_to_c_type(this->value());
-    }
-
     std::string get_default_value() const override {
         return halide_type_to_c_source(this->value());
     }
@@ -758,6 +793,7 @@ using GeneratorParamImplBase =
     typename select_type<
         cond<std::is_same<T, Target>::value,        GeneratorParam_Target<T>>,
         cond<std::is_same<T, MachineParams>::value, GeneratorParam_MachineParams<T>>,
+        cond<std::is_same<T, LoopLevel>::value,     GeneratorParam_LoopLevel>,
         cond<std::is_same<T, Type>::value,          GeneratorParam_Type<T>>,
         cond<std::is_same<T, bool>::value,          GeneratorParam_Bool<T>>,
         cond<std::is_arithmetic<T>::value,          GeneratorParam_Arithmetic<T>>,
@@ -1309,6 +1345,28 @@ public:
     }
 };
 
+// When forwarding methods to ImageParam, Func, etc., we must take
+// care with the return types: many of the methods return a reference-to-self
+// (e.g., ImageParam&); since we create temporaries for most of these forwards,
+// returning a ref will crater because it refers to a now-defunct section of the
+// stack. Happily, simply removing the reference is solves this, since all of the
+// types in question satisfy the property of copies referring to the same underlying
+// structure (returning references is just an optimization). Since this is verbose
+// and used in several places, we'll use a helper macro:
+#define HALIDE_FORWARD_METHOD(Class, Method)                                \
+    template<typename ...Args>                                              \
+    inline auto Method(Args&&... args) ->                                   \
+        typename std::remove_reference<decltype(std::declval<Class>().Method(std::forward<Args>(args)...))>::type { \
+        return this->template as<Class>().Method(std::forward<Args>(args)...);          \
+    }
+
+#define HALIDE_FORWARD_METHOD_CONST(Class, Method)                          \
+    template<typename ...Args>                                              \
+    inline auto Method(Args&&... args) const ->                             \
+        typename std::remove_reference<decltype(std::declval<Class>().Method(std::forward<Args>(args)...))>::type { \
+        return this->template as<Class>().Method(std::forward<Args>(args)...);          \
+    }
+
 template<typename T>
 class GeneratorInput_Buffer : public GeneratorInputImpl<T, Func> {
 private:
@@ -1331,6 +1389,11 @@ protected:
     }
 
     static_assert(!std::is_array<T>::value, "Input<Buffer<>[]> is not a legal construct.");
+
+    template<typename T2>
+    inline T2 as() const {
+        return (T2) *this;
+    }
 
 public:
     GeneratorInput_Buffer(const std::string &name)
@@ -1392,38 +1455,21 @@ public:
         return ImageParam(this->parameter(), Func(*this));
     }
 
-#define HALIDE_INPUT_FORWARD(method)                                       \
-    template<typename ...Args>                                              \
-    inline auto method(Args&&... args) ->                                   \
-        decltype(std::declval<ImageParam>().method(std::forward<Args>(args)...)) {\
-        return ((ImageParam) *this).method(std::forward<Args>(args)...);          \
-    }
-
-#define HALIDE_INPUT_FORWARD_CONST(method)                                 \
-    template<typename ...Args>                                              \
-    inline auto method(Args&&... args) const ->                             \
-        decltype(std::declval<ImageParam>().method(std::forward<Args>(args)...)) {\
-        return ((ImageParam) *this).method(std::forward<Args>(args)...);          \
-    }
-
     /** Forward methods to the ImageParam. */
     // @{
-    HALIDE_INPUT_FORWARD(dim)
-    HALIDE_INPUT_FORWARD_CONST(dim)
-    HALIDE_INPUT_FORWARD_CONST(host_alignment)
-    HALIDE_INPUT_FORWARD(set_host_alignment)
-    HALIDE_INPUT_FORWARD_CONST(dimensions)
-    HALIDE_INPUT_FORWARD_CONST(left)
-    HALIDE_INPUT_FORWARD_CONST(right)
-    HALIDE_INPUT_FORWARD_CONST(top)
-    HALIDE_INPUT_FORWARD_CONST(bottom)
-    HALIDE_INPUT_FORWARD_CONST(width)
-    HALIDE_INPUT_FORWARD_CONST(height)
-    HALIDE_INPUT_FORWARD_CONST(channels)
+    HALIDE_FORWARD_METHOD(ImageParam, dim)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, dim)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, host_alignment)
+    HALIDE_FORWARD_METHOD(ImageParam, set_host_alignment)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, dimensions)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, left)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, right)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, top)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, bottom)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, width)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, height)
+    HALIDE_FORWARD_METHOD_CONST(ImageParam, channels)
     // }@
-
-#undef HALIDE_INPUT_FORWARD
-#undef HALIDE_INPUT_FORWARD_CONST
 };
 
 
@@ -1437,6 +1483,11 @@ protected:
 
     std::string get_c_type() const override {
         return "Func";
+    }
+
+    template<typename T2>
+    inline T2 as() const {
+        return (T2) *this;
     }
 
 public:
@@ -1512,33 +1563,22 @@ public:
         return Func(*this).in(others);
     }
 
-#define HALIDE_INPUT_FORWARD_CONST(method)                                   \
-    template<typename ...Args>                                               \
-    inline auto method(Args&&... args) const ->                              \
-        decltype(std::declval<Func>().method(std::forward<Args>(args)...)) { \
-        user_assert(this->funcs().size() == 1) << "Use operator[] to access the Func you want"; \
-        return Func(*this).method(std::forward<Args>(args)...);              \
-    }
-
     /** Forward const methods to the underlying Func. (Non-const methods
      * aren't available for Input<Func>.) */
     // @{
-    HALIDE_INPUT_FORWARD_CONST(args)
-    HALIDE_INPUT_FORWARD_CONST(defined)
-    HALIDE_INPUT_FORWARD_CONST(has_update_definition)
-    HALIDE_INPUT_FORWARD_CONST(num_update_definitions)
-    HALIDE_INPUT_FORWARD_CONST(output_types)
-    HALIDE_INPUT_FORWARD_CONST(outputs)
-    HALIDE_INPUT_FORWARD_CONST(rvars)
-    HALIDE_INPUT_FORWARD_CONST(update_args)
-    HALIDE_INPUT_FORWARD_CONST(update_value)
-    HALIDE_INPUT_FORWARD_CONST(update_values)
-    HALIDE_INPUT_FORWARD_CONST(value)
-    HALIDE_INPUT_FORWARD_CONST(values)
+    HALIDE_FORWARD_METHOD_CONST(Func, args)
+    HALIDE_FORWARD_METHOD_CONST(Func, defined)
+    HALIDE_FORWARD_METHOD_CONST(Func, has_update_definition)
+    HALIDE_FORWARD_METHOD_CONST(Func, num_update_definitions)
+    HALIDE_FORWARD_METHOD_CONST(Func, output_types)
+    HALIDE_FORWARD_METHOD_CONST(Func, outputs)
+    HALIDE_FORWARD_METHOD_CONST(Func, rvars)
+    HALIDE_FORWARD_METHOD_CONST(Func, update_args)
+    HALIDE_FORWARD_METHOD_CONST(Func, update_value)
+    HALIDE_FORWARD_METHOD_CONST(Func, update_values)
+    HALIDE_FORWARD_METHOD_CONST(Func, value)
+    HALIDE_FORWARD_METHOD_CONST(Func, values)
     // }@
-
-#undef HALIDE_INPUT_FORWARD
-#undef HALIDE_INPUT_FORWARD_CONST
 };
 
 
@@ -1739,73 +1779,69 @@ namespace Internal {
 
 
 class GeneratorOutputBase : public GIOBase {
+protected:
+    template<typename T2, typename std::enable_if<std::is_same<T2, Func>::value>::type * = nullptr>
+    NO_INLINE T2 as() const {
+        static_assert(std::is_same<T2, Func>::value, "Only Func allowed here");
+        internal_assert(kind() != IOKind::Scalar);
+        internal_assert(exprs_.empty());
+        user_assert(funcs_.size() == 1) << "Use [] to access individual Funcs in Output<Func[]>";
+        return funcs_[0];
+    }
+
 public:
-#define HALIDE_OUTPUT_FORWARD(method)                                       \
-    template<typename ...Args>                                              \
-    inline auto method(Args&&... args) ->                                   \
-        decltype(std::declval<Func>().method(std::forward<Args>(args)...)) {\
-        return get_func_ref().method(std::forward<Args>(args)...);          \
-    }
-
-#define HALIDE_OUTPUT_FORWARD_CONST(method)                                 \
-    template<typename ...Args>                                              \
-    inline auto method(Args&&... args) const ->                             \
-        decltype(std::declval<Func>().method(std::forward<Args>(args)...)) {\
-        return get_func_ref().method(std::forward<Args>(args)...);          \
-    }
-
     /** Forward schedule-related methods to the underlying Func. */
     // @{
-    HALIDE_OUTPUT_FORWARD(align_bounds)
-    HALIDE_OUTPUT_FORWARD(align_storage)
-    HALIDE_OUTPUT_FORWARD_CONST(args)
-    HALIDE_OUTPUT_FORWARD(bound)
-    HALIDE_OUTPUT_FORWARD(bound_extent)
-    HALIDE_OUTPUT_FORWARD(compute_at)
-    HALIDE_OUTPUT_FORWARD(compute_inline)
-    HALIDE_OUTPUT_FORWARD(compute_root)
-    HALIDE_OUTPUT_FORWARD(define_extern)
-    HALIDE_OUTPUT_FORWARD_CONST(defined)
-    HALIDE_OUTPUT_FORWARD(estimate)
-    HALIDE_OUTPUT_FORWARD(fold_storage)
-    HALIDE_OUTPUT_FORWARD(fuse)
-    HALIDE_OUTPUT_FORWARD(glsl)
-    HALIDE_OUTPUT_FORWARD(gpu)
-    HALIDE_OUTPUT_FORWARD(gpu_blocks)
-    HALIDE_OUTPUT_FORWARD(gpu_single_thread)
-    HALIDE_OUTPUT_FORWARD(gpu_threads)
-    HALIDE_OUTPUT_FORWARD(gpu_tile)
-    HALIDE_OUTPUT_FORWARD_CONST(has_update_definition)
-    HALIDE_OUTPUT_FORWARD(hexagon)
-    HALIDE_OUTPUT_FORWARD(in)
-    HALIDE_OUTPUT_FORWARD(memoize)
-    HALIDE_OUTPUT_FORWARD_CONST(num_update_definitions)
-    HALIDE_OUTPUT_FORWARD_CONST(output_types)
-    HALIDE_OUTPUT_FORWARD_CONST(outputs)
-    HALIDE_OUTPUT_FORWARD(parallel)
-    HALIDE_OUTPUT_FORWARD(prefetch)
-    HALIDE_OUTPUT_FORWARD(print_loop_nest)
-    HALIDE_OUTPUT_FORWARD(rename)
-    HALIDE_OUTPUT_FORWARD(reorder)
-    HALIDE_OUTPUT_FORWARD(reorder_storage)
-    HALIDE_OUTPUT_FORWARD_CONST(rvars)
-    HALIDE_OUTPUT_FORWARD(serial)
-    HALIDE_OUTPUT_FORWARD(shader)
-    HALIDE_OUTPUT_FORWARD(specialize)
-    HALIDE_OUTPUT_FORWARD(specialize_fail)
-    HALIDE_OUTPUT_FORWARD(split)
-    HALIDE_OUTPUT_FORWARD(store_at)
-    HALIDE_OUTPUT_FORWARD(store_root)
-    HALIDE_OUTPUT_FORWARD(tile)
-    HALIDE_OUTPUT_FORWARD(trace_stores)
-    HALIDE_OUTPUT_FORWARD(unroll)
-    HALIDE_OUTPUT_FORWARD(update)
-    HALIDE_OUTPUT_FORWARD_CONST(update_args)
-    HALIDE_OUTPUT_FORWARD_CONST(update_value)
-    HALIDE_OUTPUT_FORWARD_CONST(update_values)
-    HALIDE_OUTPUT_FORWARD_CONST(value)
-    HALIDE_OUTPUT_FORWARD_CONST(values)
-    HALIDE_OUTPUT_FORWARD(vectorize)
+    HALIDE_FORWARD_METHOD(Func, align_bounds)
+    HALIDE_FORWARD_METHOD(Func, align_storage)
+    HALIDE_FORWARD_METHOD_CONST(Func, args)
+    HALIDE_FORWARD_METHOD(Func, bound)
+    HALIDE_FORWARD_METHOD(Func, bound_extent)
+    HALIDE_FORWARD_METHOD(Func, compute_at)
+    HALIDE_FORWARD_METHOD(Func, compute_inline)
+    HALIDE_FORWARD_METHOD(Func, compute_root)
+    HALIDE_FORWARD_METHOD(Func, define_extern)
+    HALIDE_FORWARD_METHOD_CONST(Func, defined)
+    HALIDE_FORWARD_METHOD(Func, estimate)
+    HALIDE_FORWARD_METHOD(Func, fold_storage)
+    HALIDE_FORWARD_METHOD(Func, fuse)
+    HALIDE_FORWARD_METHOD(Func, glsl)
+    HALIDE_FORWARD_METHOD(Func, gpu)
+    HALIDE_FORWARD_METHOD(Func, gpu_blocks)
+    HALIDE_FORWARD_METHOD(Func, gpu_single_thread)
+    HALIDE_FORWARD_METHOD(Func, gpu_threads)
+    HALIDE_FORWARD_METHOD(Func, gpu_tile)
+    HALIDE_FORWARD_METHOD_CONST(Func, has_update_definition)
+    HALIDE_FORWARD_METHOD(Func, hexagon)
+    HALIDE_FORWARD_METHOD(Func, in)
+    HALIDE_FORWARD_METHOD(Func, memoize)
+    HALIDE_FORWARD_METHOD_CONST(Func, num_update_definitions)
+    HALIDE_FORWARD_METHOD_CONST(Func, output_types)
+    HALIDE_FORWARD_METHOD_CONST(Func, outputs)
+    HALIDE_FORWARD_METHOD(Func, parallel)
+    HALIDE_FORWARD_METHOD(Func, prefetch)
+    HALIDE_FORWARD_METHOD(Func, print_loop_nest)
+    HALIDE_FORWARD_METHOD(Func, rename)
+    HALIDE_FORWARD_METHOD(Func, reorder)
+    HALIDE_FORWARD_METHOD(Func, reorder_storage)
+    HALIDE_FORWARD_METHOD_CONST(Func, rvars)
+    HALIDE_FORWARD_METHOD(Func, serial)
+    HALIDE_FORWARD_METHOD(Func, shader)
+    HALIDE_FORWARD_METHOD(Func, specialize)
+    HALIDE_FORWARD_METHOD(Func, specialize_fail)
+    HALIDE_FORWARD_METHOD(Func, split)
+    HALIDE_FORWARD_METHOD(Func, store_at)
+    HALIDE_FORWARD_METHOD(Func, store_root)
+    HALIDE_FORWARD_METHOD(Func, tile)
+    HALIDE_FORWARD_METHOD(Func, trace_stores)
+    HALIDE_FORWARD_METHOD(Func, unroll)
+    HALIDE_FORWARD_METHOD(Func, update)
+    HALIDE_FORWARD_METHOD_CONST(Func, update_args)
+    HALIDE_FORWARD_METHOD_CONST(Func, update_value)
+    HALIDE_FORWARD_METHOD_CONST(Func, update_values)
+    HALIDE_FORWARD_METHOD_CONST(Func, value)
+    HALIDE_FORWARD_METHOD_CONST(Func, values)
+    HALIDE_FORWARD_METHOD(Func, vectorize)
     // }@
 
 #undef HALIDE_OUTPUT_FORWARD
@@ -1838,20 +1874,6 @@ protected:
     }
 
     EXPORT void check_value_writable() const override;
-
-    NO_INLINE Func &get_func_ref() {
-        internal_assert(kind() != IOKind::Scalar);
-        internal_assert(exprs_.empty());
-        user_assert(funcs_.size() == 1) << "Use [] to access individual Funcs in Output<Func[]>";
-        return funcs_[0];
-    }
-
-    NO_INLINE const Func &get_func_ref() const {
-        internal_assert(kind() != IOKind::Scalar);
-        internal_assert(exprs_.empty());
-        user_assert(funcs_.size() == 1) << "Use [] to access individual Funcs in Output<Func[]>";
-        return funcs_[0];
-    }
 };
 
 template<typename T>
@@ -2009,6 +2031,11 @@ protected:
         }
     }
 
+    template<typename T2, typename std::enable_if<!std::is_same<T2, Func>::value>::type * = nullptr>
+    NO_INLINE T2 as() const {
+        return (T2) *this;
+    }
+
 public:
 
     // Allow assignment from a Buffer<> to an Output<Buffer<>>;
@@ -2063,38 +2090,21 @@ public:
         return this->funcs_.at(0).output_buffer();
     }
 
-#define HALIDE_OUTPUT_FORWARD(method)                                       \
-    template<typename ...Args>                                              \
-    inline auto method(Args&&... args) ->                                   \
-        decltype(std::declval<OutputImageParam>().method(std::forward<Args>(args)...)) {\
-        return ((OutputImageParam) *this).method(std::forward<Args>(args)...);          \
-    }
-
-#define HALIDE_OUTPUT_FORWARD_CONST(method)                                 \
-    template<typename ...Args>                                              \
-    inline auto method(Args&&... args) const ->                             \
-        decltype(std::declval<OutputImageParam>().method(std::forward<Args>(args)...)) {\
-        return ((OutputImageParam) *this).method(std::forward<Args>(args)...);          \
-    }
-
     /** Forward methods to the OutputImageParam. */
     // @{
-    HALIDE_OUTPUT_FORWARD(dim)
-    HALIDE_OUTPUT_FORWARD_CONST(dim)
-    HALIDE_OUTPUT_FORWARD_CONST(host_alignment)
-    HALIDE_OUTPUT_FORWARD(set_host_alignment)
-    HALIDE_OUTPUT_FORWARD_CONST(dimensions)
-    HALIDE_OUTPUT_FORWARD_CONST(left)
-    HALIDE_OUTPUT_FORWARD_CONST(right)
-    HALIDE_OUTPUT_FORWARD_CONST(top)
-    HALIDE_OUTPUT_FORWARD_CONST(bottom)
-    HALIDE_OUTPUT_FORWARD_CONST(width)
-    HALIDE_OUTPUT_FORWARD_CONST(height)
-    HALIDE_OUTPUT_FORWARD_CONST(channels)
+    HALIDE_FORWARD_METHOD(OutputImageParam, dim)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, dim)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, host_alignment)
+    HALIDE_FORWARD_METHOD(OutputImageParam, set_host_alignment)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, dimensions)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, left)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, right)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, top)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, bottom)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, width)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, height)
+    HALIDE_FORWARD_METHOD_CONST(OutputImageParam, channels)
     // }@
-
-#undef HALIDE_OUTPUT_FORWARD
-#undef HALIDE_OUTPUT_FORWARD_CONST
 };
 
 
@@ -2273,7 +2283,7 @@ public:
         set_from_string_impl<T>(new_value_string);
     }
 
-    std::string to_string() const override {
+    std::string get_default_value() const override {
         internal_error;
         return std::string();
     }
@@ -2488,6 +2498,16 @@ class SimpleGeneratorFactory;
 // if they cannot return a valid Generator, they must assert-fail.
 using GeneratorFactory = std::function<std::unique_ptr<GeneratorBase>(const GeneratorContext&)>;
 
+struct StringOrLoopLevel {
+    std::string string_value;
+    LoopLevel loop_level;
+
+    StringOrLoopLevel() = default;
+    /*not-explicit*/ StringOrLoopLevel(const std::string &s) : string_value(s) {}
+    /*not-explicit*/ StringOrLoopLevel(const LoopLevel &loop_level) : loop_level(loop_level) {}
+};
+using GeneratorParamsMap = std::map<std::string, StringOrLoopLevel>;
+
 class GeneratorBase : public NamesInterface, public GeneratorContext {
 public:
     struct EmitOptions {
@@ -2512,14 +2532,7 @@ public:
 
     EXPORT virtual ~GeneratorBase();
 
-    EXPORT void set_generator_param(const std::string &name, const std::string &value);
-    EXPORT void set_generator_and_schedule_param_values(const std::map<std::string, std::string> &params);
-
-    template<typename T>
-    GeneratorBase &set_generator_param(const std::string &name, const T &value) {
-        find_generator_param_by_name(name).set(value);
-        return *this;
-    }
+    EXPORT void set_generator_and_schedule_param_values(const GeneratorParamsMap &params);
 
     template<typename T>
     GeneratorBase &set_schedule_param(const std::string &name, const T &value) {
@@ -3141,7 +3154,7 @@ public:
 protected:
     EXPORT GeneratorStub(const GeneratorContext &context,
                   GeneratorFactory generator_factory,
-                  const std::map<std::string, std::string> &generator_params,
+                  const GeneratorParamsMap &generator_params,
                   const std::vector<std::vector<Internal::StubInput>> &inputs);
 
     ScheduleParamBase &get_schedule_param(const std::string &n) const {
@@ -3223,6 +3236,7 @@ namespace halide_register_generator {
     namespace halide_register_generator { \
         struct halide_global_ns; \
         namespace GEN_REGISTRY_NAME##_ns { \
+            std::unique_ptr<Halide::Internal::GeneratorBase> factory(const Halide::GeneratorContext& context); \
             std::unique_ptr<Halide::Internal::GeneratorBase> factory(const Halide::GeneratorContext& context) { \
                 return GEN_CLASS_NAME::create(context, #GEN_REGISTRY_NAME, #FULLY_QUALIFIED_STUB_NAME); \
             } \

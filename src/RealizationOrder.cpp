@@ -199,7 +199,7 @@ void collect_fused_pairs(const FusedPair &p,
 void populate_fused_pairs_list(const string &func, const Definition &def,
                                size_t stage_index, map<string, Function> &env) {
     const LoopLevel &fuse_level = def.schedule().fuse_level().level;
-    if (fuse_level.is_inline() || fuse_level.is_root()) {
+    if (fuse_level.is_inlined() || fuse_level.is_root()) {
         // 'func' is not fused with anyone.
         return;
     }

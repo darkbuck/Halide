@@ -825,7 +825,7 @@ private:
 
         const Definition &def = (stage == 0) ? f.definition() : f.update(stage - 1);
         const LoopLevel &fuse_level = def.schedule().fuse_level().level;
-        if (fuse_level.is_inline() || fuse_level.is_root()) {
+        if (fuse_level.is_inlined() || fuse_level.is_root()) {
             // It isn't fused to anyone
             return true;
         } else {
@@ -924,7 +924,7 @@ private:
 
         // Can't schedule extern things inside a vector for loop
         if (func.has_extern_definition() &&
-            func.schedule().compute_level().is_inline() &&
+            func.schedule().compute_level().is_inlined() &&
             for_loop->for_type == ForType::Vectorized &&
             !function_is_already_realized_in_stmt(func, for_loop) &&
             function_is_used_in_stmt(func, for_loop)) {
@@ -981,7 +981,7 @@ private:
     Stmt visit(const Provide *op) override {
         if (op->name != func.name() &&
             !func.is_pure() &&
-            func.schedule().compute_level().is_inline() &&
+            func.schedule().compute_level().is_inlined() &&
             function_is_used_in_stmt(func, op)) {
 
             // Prefix all calls to func in op
@@ -1047,7 +1047,7 @@ Stmt inject_stmt(Stmt root, Stmt injected, const LoopLevel &level) {
     if (!injected.defined()) {
         return root;
     }
-    if (level.is_inline() || level.is_root()) {
+    if (level.is_inlined() || level.is_root()) {
         return Block::make(root, injected);
     }
     InjectStmt injector(injected, level);
@@ -1180,21 +1180,21 @@ public:
     // List of booleans indicating if group[i] is an output
     const vector<bool> &is_output_list;
     bool found_store_level, found_compute_level;
-    const map<string, Function> &env;
     const Target &target;
+    const map<string, Function> &env;
     LoopLevel compute_level;
     LoopLevel store_level;
 
     InjectGroupRealization(const vector<Function> &g, const vector<bool> &o,
-                           const map<string, Function> &env, const Target &t)
+                           const Target &t, const map<string, Function> &env)
             : group(g), is_output_list(o), found_store_level(false),
-              found_compute_level(false), env(env), target(t) {
+              found_compute_level(false), target(t), env(env) {
         internal_assert(!group.empty());
         internal_assert(group.size() == is_output_list.size());
 
         compute_level = group[0].schedule().compute_level();
         store_level = group[0].schedule().store_level();
-        internal_assert(!compute_level.is_inline());
+        internal_assert(!compute_level.is_inlined());
     }
 
 private:
@@ -1302,7 +1302,7 @@ private:
         const map<string, AlignStrategy> &align_strategy = def.schedule().fuse_level().align;
 
         int start_fuse = (int)dims.size();
-        if (!fuse_level.is_inline() && !fuse_level.is_root()) {
+        if (!fuse_level.is_inlined() && !fuse_level.is_root()) {
             if (!skip.find(fuse_level.func())->second) {
                 {
                     const auto &iter = std::find_if(dims.begin(), dims.end(),
@@ -1379,7 +1379,7 @@ private:
         const LoopLevel &fuse_level = def.schedule().fuse_level().level;
 
         size_t start_fuse = dims.size();
-        if (!fuse_level.is_inline() && !fuse_level.is_root()) {
+        if (!fuse_level.is_inlined() && !fuse_level.is_root()) {
             if (!skip.find(fuse_level.func())->second) {
                 const auto &iter = std::find_if(dims.begin(), dims.end(),
                     [&fuse_level](const Dim &d) { return var_name_match(d.var, fuse_level.var().name()); });
@@ -1667,6 +1667,9 @@ private:
             internal_assert(it != env.end()) << "Unable to find Function " << func << " in env (Var = " << var << ")\n";
             loop_level = LoopLevel(it->second, Var(var));
         }
+        // Since we are now in the lowering phase, we expect all LoopLevels to be locked;
+        // thus any new ones we synthesize we must explicitly lock.
+        loop_level.lock();
         Site s = {f->is_parallel() ||
                   f->for_type == ForType::Vectorized,
                   loop_level};
@@ -1718,7 +1721,7 @@ string schedule_to_source(Function f,
                           LoopLevel compute_at) {
     std::ostringstream ss;
     ss << f.name();
-    if (compute_at.is_inline()) {
+    if (compute_at.is_inlined()) {
         ss << ".compute_inline()";
     } else {
         if (!store_at.match(compute_at)) {
@@ -1776,7 +1779,7 @@ class PrintUsesOfFunc : public IRVisitor {
 
     void visit(const For *op) {
         if (ends_with(op->name, Var::outermost().name()) ||
-            ends_with(op->name, LoopLevel::root().to_string())) {
+            ends_with(op->name, LoopLevel::root().lock().to_string())) {
             IRVisitor::visit(op);
         } else {
 
@@ -1839,7 +1842,7 @@ bool validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
             if (arg.is_func()) {
                 Function g(arg.func);
                 if (!g.is_wrapper() &&
-                    g.schedule().compute_level().is_inline()) {
+                    g.schedule().compute_level().is_inlined()) {
                     user_error
                         << "Func " << g.name() << " cannot be scheduled to be computed inline, "
                         << "because it is used in the externally-computed function " << f.name() << "\n";
@@ -1849,7 +1852,7 @@ bool validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
     }
 
     // Emit a warning if only some of the steps have been scheduled.
-    bool any_scheduled = f.definition().schedule().touched();
+    bool any_scheduled = f.has_pure_definition() && f.definition().schedule().touched();
     for (const Definition &r : f.updates()) {
         any_scheduled = any_scheduled || r.schedule().touched();
     }
@@ -1871,7 +1874,9 @@ bool validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
     // If the func is scheduled on the gpu, check that the relevant
     // api is enabled in the target.
     vector<Definition> definitions;
-    definitions.push_back(f.definition());
+    if (f.has_pure_definition()) {
+        definitions.push_back(f.definition());
+    }
     for (const Definition &def : f.updates()) {
         definitions.push_back(def);
     }
@@ -1922,7 +1927,7 @@ bool validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
     // pure function. An inlined Halide Func with multiple stages technically
     // will get lowered into compute_at innermost and thus can be treated
     // similarly as a non-inlined Func.
-    if (store_at.is_inline() && compute_at.is_inline()) {
+    if (store_at.is_inlined() && compute_at.is_inlined()) {
         if (f.is_pure()) {
             validate_schedule_inlined_function(f);
         }
@@ -1996,10 +2001,10 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage_index,
             << func_1.name() << ", so it must not have any specializations.\n";
 
         // Verify that the functions being computed with are not scheduled inline.
-        user_assert(!func_1.schedule().compute_level().is_inline())
+        user_assert(!func_1.schedule().compute_level().is_inlined())
             << "Invalid compute_with: " << p.func_1 << ".s" << p.stage_1
             << " is scheduled inline.\n";
-        user_assert(!func_2.schedule().compute_level().is_inline())
+        user_assert(!func_2.schedule().compute_level().is_inlined())
             << "Invalid compute_with: " << p.func_2 << ".s" << p.stage_2
             << " is scheduled inline.\n";
 
@@ -2214,7 +2219,7 @@ Stmt schedule_functions(const vector<Function> &outputs,
                         const Target &target,
                         bool &any_memoized) {
 
-    string root_var = LoopLevel::root().to_string();
+    string root_var = LoopLevel::root().lock().to_string();
     Stmt s = For::make(root_var, 0, 1, ForType::Serial, DeviceAPI::Host, Evaluate::make(0));
 
     any_memoized = false;
@@ -2256,7 +2261,7 @@ Stmt schedule_functions(const vector<Function> &outputs,
             // There is only one function in the group and there is
             // no loop fusion among its definition
             if (funcs[0].can_be_inlined() &&
-                funcs[0].schedule().compute_level().is_inline()) {
+                funcs[0].schedule().compute_level().is_inlined()) {
                 debug(1) << "Inlining " << funcs[0].name() << '\n';
                 s = inline_function(s, funcs[0]);
             } else {
@@ -2266,7 +2271,7 @@ Stmt schedule_functions(const vector<Function> &outputs,
                 internal_assert(injector.found_store_level && injector.found_compute_level);
             }
         } else {
-            InjectGroupRealization injector(funcs, is_output_list, env, target);
+            InjectGroupRealization injector(funcs, is_output_list, target, env);
             s = injector.mutate(s);
             internal_assert(injector.found_store_level && injector.found_compute_level);
         }

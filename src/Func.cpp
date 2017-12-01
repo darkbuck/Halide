@@ -154,7 +154,7 @@ int Func::num_update_definitions() const {
 }
 
 /** Is this function external? */
-EXPORT bool Func::is_extern() const {
+bool Func::is_extern() const {
     return func.has_extern_definition();
 }
 
@@ -166,7 +166,12 @@ void Func::define_extern(const std::string &function_name,
                          NameMangling mangling,
                          DeviceAPI device_api,
                          bool uses_old_buffer_t) {
-    func.define_extern(function_name, args, types, dimensionality,
+    vector<string> dim_names(dimensionality);
+    // Use _0, _1, _2 etc for the storage dimensions
+    for (int i = 0; i < dimensionality; i++) {
+        dim_names[i] = Var::implicit(i).name();
+    }
+    func.define_extern(function_name, args, types, dim_names,
                        mangling, device_api, uses_old_buffer_t);
 }
 
@@ -1730,7 +1735,7 @@ Stage &Stage::prefetch(const Internal::Parameter &param, VarOrRVar var, Expr off
 }
 
 Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy> &align) {
-    user_assert(!loop_level.is_inline() && !loop_level.is_root())
+    user_assert(!loop_level.is_inlined() && !loop_level.is_root())
         << "Undefined loop level to compute with\n";
     user_assert((loop_level.func() != function.name()) ||
                 (loop_level.stage_index() == (int)stage_index-1))
@@ -1745,7 +1750,7 @@ Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy
             << loop_level.func() << ", so it must not have any specializations.\n";
 
     FuseLoopLevel &fuse_level = original_def.schedule().fuse_level();
-    if (!fuse_level.level.is_inline()) {
+    if (!fuse_level.level.is_inlined()) {
         user_warning << name() << " already has a compute_with at " << fuse_level.level.to_string()
                      << ". Replacing it with a new compute_with at " << loop_level.to_string() << "\n";
     }
@@ -1773,6 +1778,14 @@ Stage &Stage::compute_with(Stage s, VarOrRVar var, const vector<pair<VarOrRVar, 
 
 Stage &Stage::compute_with(Stage s, VarOrRVar var, AlignStrategy align) {
     return compute_with(LoopLevel(s.function, var, s.stage_index), align);
+}
+
+/** Attempt to get the source file and line where this stage was
+ * defined by parsing the process's own debug symbols. Returns an
+ * empty string if no debug symbols were found or the debug
+ * symbols were not understood. Works on OS X and Linux only. */
+std::string Stage::source_location() const {
+    return definition.source_location();
 }
 
 void Func::invalidate_cache() {
@@ -1912,10 +1925,11 @@ Func Func::copy_to_device(DeviceAPI d) {
         << "Expected a single call to another Func with matching "
         << "dimensionality and argument order.\n";
 
-    // We'll preserve the pure vars
-    Expr rhs = value();
-    func.definition().values().clear();
-    func.extern_definition_proxy_expr() = rhs;
+    // Move the RHS value to the proxy slot
+    func.extern_definition_proxy_expr() = value();
+
+    // ... and delete the pure definition
+    func.definition() = Definition();
 
     ExternFuncArgument buffer;
     if (call->call_type == Call::Halide) {
@@ -1929,7 +1943,7 @@ Func Func::copy_to_device(DeviceAPI d) {
 
     ExternFuncArgument device_interface = make_device_interface_call(d);
     func.define_extern("halide_buffer_copy", {buffer, device_interface},
-                       {call->type}, (int)call->args.size(),
+                       {call->type}, func.args(), // Reuse the existing dimension names
                        NameMangling::C, d, false);
     return *this;
 }
@@ -2398,9 +2412,11 @@ Func &Func::fold_storage(Var dim, Expr factor, bool fold_forward) {
 Func &Func::compute_at(LoopLevel loop_level) {
     invalidate_cache();
     func.schedule().compute_level() = loop_level;
-    if (func.schedule().store_level().is_inline()) {
-        func.schedule().store_level() = loop_level;
-    }
+    // We want to set store_level = compute_level iff store_level is inlined,
+    // but we can't do that here, since the value in store_level could
+    // be mutated at any time prior to lowering. Instead, we check at
+    // the start of lowering (via Function::lock_loop_levels() method) and
+    // do the compute_level -> store_level propagation then.
     return *this;
 }
 
@@ -2907,6 +2923,11 @@ Pipeline Func::pipeline() {
 
 vector<Argument> Func::infer_arguments() const {
     return Pipeline(*this).infer_arguments();
+}
+
+std::string Func::source_location() const {
+    user_assert(defined()) << "A Func with no definition has no source_location\n";
+    return func.definition().source_location();
 }
 
 Module Func::compile_to_module(const vector<Argument> &args, const std::string &fn_name, const Target &target) {

@@ -5,6 +5,14 @@
 #include "Schedule.h"
 #include "Var.h"
 
+namespace {
+
+const char * const root_looplevel_name = "__root";
+const char * const inline_looplevel_name = "";
+const char * const undefined_looplevel_name = "__undefined_loop_level_var_name";
+
+}  // namespace
+
 namespace Halide {
 
 namespace Internal {
@@ -21,12 +29,15 @@ struct LoopLevelContents {
     // but cyclical include dependencies make this challenging.
     std::string var_name;
     bool is_rvar;
+    bool locked;
 
     LoopLevelContents(const std::string &func_name,
                       const std::string &var_name,
                       bool is_rvar,
-                      int stage_index)
-    : func_name(func_name), stage_index(stage_index), var_name(var_name), is_rvar(is_rvar) {}
+                      int stage_index,
+                      bool locked)
+    : func_name(func_name), stage_index(stage_index), var_name(var_name),
+      is_rvar(is_rvar), locked(locked) {}
 };
 
 template<>
@@ -42,29 +53,75 @@ EXPORT void destroy<LoopLevelContents>(const LoopLevelContents *p) {
 }  // namespace Internal
 
 LoopLevel::LoopLevel(const std::string &func_name, const std::string &var_name,
-                     bool is_rvar, int stage_index)
-    : contents(new Internal::LoopLevelContents(func_name, var_name, is_rvar, stage_index)) {}
+                     bool is_rvar, int stage_index, bool locked)
+    : contents(new Internal::LoopLevelContents(func_name, var_name, is_rvar, stage_index, locked)) {}
 
-LoopLevel::LoopLevel(Internal::Function f, VarOrRVar v, int stage_index)
-    : LoopLevel(f.name(), v.name(), v.is_rvar, stage_index) {}
+LoopLevel::LoopLevel(const Internal::Function &f, VarOrRVar v, int stage_index)
+    : LoopLevel(f.name(), v.name(), v.is_rvar, stage_index, false) {}
 
-LoopLevel::LoopLevel(Func f, VarOrRVar v, int stage_index)
-    : LoopLevel(f.function().name(), v.name(), v.is_rvar, stage_index) {}
+LoopLevel::LoopLevel(const Func &f, VarOrRVar v, int stage_index)
+    : LoopLevel(f.function().name(), v.name(), v.is_rvar, stage_index, false) {}
 
-void LoopLevel::copy_from(const LoopLevel &other) {
+// Note that even 'undefined' LoopLevels get a LoopLevelContents; this is deliberate,
+// as we want to be able to create an undefined LoopLevel, pass it to another function
+// to use, then mutate it afterwards via 'set()'.
+LoopLevel::LoopLevel() : LoopLevel("", undefined_looplevel_name, false, -1, false) {}
+
+void LoopLevel::check_defined() const {
     internal_assert(defined());
+}
+
+void LoopLevel::check_locked() const {
+    // A LoopLevel can be in one of two states:
+    //   - Unlocked (the default state): An unlocked LoopLevel can be mutated freely (via the set() method),
+    //     but cannot be inspected (calls to func(), var(), is_inlined(), is_root(), etc.
+    //     will assert-fail). This is the only sort of LoopLevel that most user code will ever encounter.
+    //   - Locked: Once a LoopLevel is locked, it can be freely inspected, but no longer mutated.
+    //     Halide locks all LoopLevels during the lowering process to ensure that no user
+    //     code (e.g. custom passes) can interfere with invariants.
+    user_assert(contents->locked)
+        << "Cannot inspect an unlocked LoopLevel: "
+        << contents->func_name << "." << contents->var_name
+        << "\n";
+}
+
+void LoopLevel::check_defined_and_locked() const {
+    check_defined();
+    check_locked();
+}
+
+void LoopLevel::set(const LoopLevel &other) {
+    // Don't check locked(), since we don't care if it's defined() or not
+    user_assert(!contents->locked)
+        << "Cannot call set() on a locked LoopLevel: "
+        << contents->func_name << "." << contents->var_name
+        << "\n";
     contents->func_name = other.contents->func_name;
     contents->stage_index = other.contents->stage_index;
     contents->var_name = other.contents->var_name;
     contents->is_rvar = other.contents->is_rvar;
 }
 
+LoopLevel &LoopLevel::lock() {
+    contents->locked = true;
+
+    // If you have an undefined LoopLevel at the point we're
+    // locking it (i.e., start of lowering), you've done something wrong,
+    // so let's give a more useful error message.
+    user_assert(defined())
+        << "There should be no undefined LoopLevels at the start of lowering. "
+        << "(Did you mean to use LoopLevel::inlined() instead of LoopLevel() ?)";
+
+    return *this;
+}
+
 bool LoopLevel::defined() const {
-    return contents.defined();
+    check_locked();
+    return contents->var_name != undefined_looplevel_name;
 }
 
 std::string LoopLevel::func() const {
-    internal_assert(defined());
+    check_defined_and_locked();
     return contents->func_name;
 }
 
@@ -75,33 +132,35 @@ int LoopLevel::stage_index() const {
 }
 
 VarOrRVar LoopLevel::var() const {
-    internal_assert(defined());
-    internal_assert(!is_inline() && !is_root());
+    check_defined_and_locked();
+    internal_assert(!is_inlined() && !is_root());
     return VarOrRVar(contents->var_name, contents->is_rvar);
 }
 
 /*static*/
 LoopLevel LoopLevel::inlined() {
-    return LoopLevel("", "", false, -1);
+    return LoopLevel("", inline_looplevel_name, false, -1);
 }
 
-bool LoopLevel::is_inline() const {
-    internal_assert(defined());
-    return contents->var_name.empty();
+bool LoopLevel::is_inlined() const {
+    // It's OK to be undefined (just return false).
+    check_locked();
+    return contents->var_name == inline_looplevel_name;
 }
 
 /*static*/
 LoopLevel LoopLevel::root() {
-    return LoopLevel("", "__root", false, -1);
+    return LoopLevel("", root_looplevel_name, false, -1);
 }
 
 bool LoopLevel::is_root() const {
-    internal_assert(defined());
-    return contents->var_name == "__root";
+    // It's OK to be undefined (just return false).
+    check_locked();
+    return contents->var_name == root_looplevel_name;
 }
 
 std::string LoopLevel::to_string() const {
-    internal_assert(defined());
+    check_defined_and_locked();
     if (contents->stage_index == -1) {
         return contents->func_name + "." + contents->var_name;
     } else {
@@ -110,7 +169,7 @@ std::string LoopLevel::to_string() const {
 }
 
 bool LoopLevel::match(const std::string &loop) const {
-    internal_assert(defined());
+    check_defined_and_locked();
     if (contents->stage_index == -1) {
         return Internal::starts_with(loop, contents->func_name + ".") &&
                Internal::ends_with(loop, "." + contents->var_name);
@@ -122,7 +181,8 @@ bool LoopLevel::match(const std::string &loop) const {
 }
 
 bool LoopLevel::match(const LoopLevel &other) const {
-    internal_assert(defined());
+    check_defined_and_locked();
+    other.check_defined_and_locked();
     return (contents->func_name == other.contents->func_name &&
             (contents->var_name == other.contents->var_name ||
              Internal::ends_with(contents->var_name, "." + other.contents->var_name) ||
@@ -131,8 +191,9 @@ bool LoopLevel::match(const LoopLevel &other) const {
 }
 
 bool LoopLevel::operator==(const LoopLevel &other) const {
-    return (defined() == other.defined()) &&
-           (contents->func_name == other.contents->func_name) &&
+    check_defined_and_locked();
+    other.check_defined_and_locked();
+    return (contents->func_name == other.contents->func_name) &&
            (contents->stage_index == other.contents->stage_index) &&
            (contents->var_name == other.contents->var_name);
 }
