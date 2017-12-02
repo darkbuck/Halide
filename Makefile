@@ -1460,6 +1460,7 @@ TEST_APPS=\
 	HelloMatlab \
 	bilateral_grid \
 	blur \
+	camera_pipe \
 	c_backend \
 	conv_layer \
 	fft \
