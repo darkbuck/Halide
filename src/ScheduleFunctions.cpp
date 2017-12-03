@@ -1983,6 +1983,7 @@ bool validate_schedule(Function f, Stmt s, const Target &target, bool is_output,
 void validate_fused_group_schedule_helper(const string &fn, size_t stage_index,
                                           const Definition &def_1,
                                           const map<string, Function> &env) {
+    internal_assert(def_1.defined());
     for (const auto &p : def_1.schedule().fused_pairs()) {
         internal_assert((fn == p.func_1) && (stage_index == p.stage_1));
 
@@ -1994,6 +1995,7 @@ void validate_fused_group_schedule_helper(const string &fn, size_t stage_index,
         const Function &func_2 = iter2->second;
         const Definition &def_2 =
             (p.stage_2 == 0) ? func_2.definition() : func_2.update(p.stage_2-1);
+        internal_assert(def_2.defined());
 
         // f2.compute_with(f1, var) is allowed only if f2 has no specializations.
         user_assert(func_2.definition().specializations().empty())
@@ -2178,6 +2180,9 @@ void validate_fused_groups_schedule(const vector<vector<string>> &fused_groups,
         for (const auto &fn : group) {
             const auto &iter = env.find(fn);
             internal_assert(iter != env.end());
+            if (iter->second.has_extern_definition()) {
+                continue;
+            }
 
             validate_fused_group_schedule_helper(
                 iter->first, 0, iter->second.definition(), env);
@@ -2257,9 +2262,10 @@ Stmt schedule_functions(const vector<Function> &outputs,
         }
 
         if ((funcs.size() == 1) &&
-            (funcs[0].definition().schedule().fused_pairs().size() == 0)) {
-            // There is only one function in the group and there is
-            // no loop fusion among its definition
+            (funcs[0].has_extern_definition() || (funcs[0].definition().schedule().fused_pairs().size() == 0))) {
+            // There is only one function in the group and either there is
+            // no loop fusion among its definition or the function is
+            // an extern function
             if (funcs[0].can_be_inlined() &&
                 funcs[0].schedule().compute_level().is_inlined()) {
                 debug(1) << "Inlining " << funcs[0].name() << '\n';

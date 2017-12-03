@@ -1735,6 +1735,7 @@ Stage &Stage::prefetch(const Internal::Parameter &param, VarOrRVar var, Expr off
 }
 
 Stage &Stage::compute_with(LoopLevel loop_level, const map<string, AlignStrategy> &align) {
+    // TODO(psuriana): need to add assertion to ensure extern func is not fused
     user_assert(!loop_level.is_inlined() && !loop_level.is_root())
         << "Undefined loop level to compute with\n";
     user_assert((loop_level.func() != function.name()) ||

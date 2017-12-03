@@ -198,6 +198,7 @@ void collect_fused_pairs(const FusedPair &p,
 // Populate the 'fused_pairs' list in Schedule of each function stage.
 void populate_fused_pairs_list(const string &func, const Definition &def,
                                size_t stage_index, map<string, Function> &env) {
+    internal_assert(def.defined());
     const LoopLevel &fuse_level = def.schedule().fuse_level().level;
     if (fuse_level.is_inlined() || fuse_level.is_root()) {
         // 'func' is not fused with anyone.
@@ -253,6 +254,10 @@ pair<vector<string>, vector<vector<string>>> realization_order(
     // Populate the fused_pairs list of each function definition (i.e. list of
     // all function definitions that are to be computed with that function).
     for (auto &iter : env) {
+        if (iter.second.has_extern_definition()) {
+            // Extern function should not be fused
+            continue;
+        }
         populate_fused_pairs_list(iter.first, iter.second.definition(), 0, env);
         for (size_t i = 0; i < iter.second.updates().size(); ++i) {
             populate_fused_pairs_list(iter.first, iter.second.updates()[i], i + 1, env);
@@ -289,16 +294,18 @@ pair<vector<string>, vector<vector<string>>> realization_order(
         // definitions as well since compute_with is defined per definition (stage).
         vector<FusedPair> &func_fused_pairs = fused_pairs_graph[caller.first];
         fuse_adjacency_list[caller.first]; // Make sure every Func in 'env' is allocated a slot
-        for (auto &p : caller.second.definition().schedule().fused_pairs()) {
-            validate_fused_pair(caller.first, 0, env, indirect_calls,
-                                p, func_fused_pairs);
-            collect_fused_pairs(p, func_fused_pairs, graph, fuse_adjacency_list);
-        }
-        for (size_t i = 0; i < caller.second.updates().size(); ++i) {
-            for (auto &p : caller.second.updates()[i].schedule().fused_pairs()) {
-                validate_fused_pair(caller.first, i + 1, env, indirect_calls,
+        if (!caller.second.has_extern_definition()) {
+            for (auto &p : caller.second.definition().schedule().fused_pairs()) {
+                validate_fused_pair(caller.first, 0, env, indirect_calls,
                                     p, func_fused_pairs);
                 collect_fused_pairs(p, func_fused_pairs, graph, fuse_adjacency_list);
+            }
+            for (size_t i = 0; i < caller.second.updates().size(); ++i) {
+                for (auto &p : caller.second.updates()[i].schedule().fused_pairs()) {
+                    validate_fused_pair(caller.first, i + 1, env, indirect_calls,
+                                        p, func_fused_pairs);
+                    collect_fused_pairs(p, func_fused_pairs, graph, fuse_adjacency_list);
+                }
             }
         }
     }
